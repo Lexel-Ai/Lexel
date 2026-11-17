@@ -1,0 +1,69 @@
+:root,
+[data-theme="dark"] {
+  --lx-bg: #0f172a;
+  --lx-card: #1b2336;
+  --lx-muted: #272f42;
+  --lx-fg: #f8fafc;
+  --lx-fg-muted: #94a3b8;
+  --lx-border: #334155;
+  --lx-accent: #22c55e;
+  --lx-accent-hover: #16a34a;
+  --lx-on-accent: #052e16;
+  --lx-warn: #f59e0b;
+  --lx-warn-bg: rgba(245, 158, 11, 0.14);
+  --lx-danger: #ef4444;
+  --lx-danger-bg: rgba(239, 68, 68, 0.14);
+  --lx-ring: #ffffff;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --lx-bg: #f8fafc;
+  --lx-card: #ffffff;
+  --lx-muted: #e2e8f0;
+  --lx-fg: #0f172a;
+  --lx-fg-muted: #475569;
+  --lx-border: #cbd5e1;
+  --lx-accent: #15803d;
+  --lx-accent-hover: #166534;
+  --lx-on-accent: #ffffff;
+  --lx-warn: #b45309;
+  --lx-warn-bg: rgba(180, 83, 9, 0.1);
+  --lx-danger: #b91c1c;
+  --lx-danger-bg: rgba(185, 28, 28, 0.1);
+  --lx-ring: #0f172a;
+  color-scheme: light;
+}
+
+.lexel-root {
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  background-color: var(--lx-bg);
+  color: var(--lx-fg);
+}
+
+.lexel-mono {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.lexel-root :is(a[href], button, summary, select, input[type="checkbox"], input[type="radio"]) {
+  cursor: pointer;
+}
+
+.lexel-root :is(a, button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--lx-ring);
+  outline-offset: 2px;
+}
+
+.lexel-root :disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lexel-root *,
+  .lexel-root *::before,
+  .lexel-root *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

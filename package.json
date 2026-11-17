@@ -1,0 +1,17 @@
+{
+  "name": "lexel-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.10.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev:browser": "pnpm --filter lexel-browser dev",
+    "build:browser": "pnpm --filter lexel-ui build && pnpm --filter lexel-browser build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "build": "pnpm -r build"
+  }
+}

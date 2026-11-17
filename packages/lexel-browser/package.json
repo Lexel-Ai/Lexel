@@ -1,0 +1,38 @@
+{
+  "name": "lexel-browser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build -l warn",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "zip:chrome": "TARGET_BROWSER=chrome pnpm build && node scripts/zip.mjs lexel-chrome.zip",
+    "zip:firefox": "TARGET_BROWSER=firefox pnpm build && node scripts/zip.mjs lexel-firefox.zip"
+  },
+  "dependencies": {
+    "@webcomponents/custom-elements": "^1.6.0",
+    "harper.js": "file:../../vendor/harper/packages/harper.js",
+    "lexel-ui": "workspace:*",
+    "lint-framework": "file:../../vendor/harper/packages/lint-framework",
+    "lru-cache": "^11.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.3.0",
+    "@tailwindcss/vite": "^4.1.4",
+    "@types/chrome": "^0.1.27",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "jsdom": "^26.1.0",
+    "rollup-plugin-copy": "^3.5.0",
+    "tailwindcss": "^4.1.4",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0",
+    "vitest": "^3.2.4"
+  }
+}

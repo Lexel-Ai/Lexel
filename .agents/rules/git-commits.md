@@ -93,5 +93,5 @@ Append `!` after type/scope (e.g. `arch(daemon)!:`) and add a `BREAKING CHANGE:`
 
 Whenever a major milestone, feature, fix, or test suite passes:
 1. Run all applicable quality gates in `.agents/rules/quality-gates.md` first.
-2. Output **strictly ONE single ready-to-run bash command block** (`git add ... && git commit -F - << 'EOF' ... EOF`) containing the complete Conventional Commit message and observed verification results.
+2. Output **strictly ONE single-line ready-to-run bash command block** (`git add ... && git commit -m "<type>(<scope>): <summary>" -m "- <detail>" -m "Verification: <results>"`, avoiding multi-line `<< 'EOF'` heredocs so copy-paste never hangs) containing the complete Conventional Commit message and observed verification results.
 3. Never invent test counts, timings, or build passes you did not directly observe. Never output duplicate commit blocks (one markdown preview + one bash block).

@@ -1,0 +1,29 @@
+# Build & Dependencies
+node_modules/
+dist/
+build/
+target/
+*.tsbuildinfo
+packages/lexel-browser/public/wasm/
+
+# Local Data, Models & Secrets
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+*.gguf
+*.bin
+*.safetensors
+
+# Python / ML
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# OS & Editors
+.DS_Store
+Thumbs.db
+*.zip
