@@ -1,0 +1,21 @@
+# <type>(<scope>): <concise imperative summary in 50-72 chars>
+#
+# --- CIRCUMSTANCE GUIDELINES ---
+# * feat:     [Motivation, Architecture, UX/API Impact, Verification]
+# * fix:      [Issue/Incident, Root Cause, Blast Radius, Resolution, Regression Guard]
+# * perf:     [Bottleneck, Optimization, Before vs. After Metrics (latency/RAM)]
+# * sec:      [Threat Model, Defense Layer, Zero-Secret / Privacy Verification]
+# * refactor: [Architectural Goal, Invariant Guarantee (Zero Behavioral Drift)]
+# * sync:     [Upstream Harper SHA, New Rules/Parsers Checked, Build/Test Status]
+# * ml:       [Dataset/Config, Crucible Gate, Held-Out Metric Delta]
+# * BREAKING: Append ! to header & write BREAKING CHANGE: <migration path>
+#
+# --- SCOPES ---
+# core | db | ai | daemon | ls | wasm | cli | ui | browser | vscode | obsidian | desktop | web | ml | rules | sync | deps | repo
+#
+# --- VERIFICATION & EVIDENCE ---
+# - Rust: cargo check / cargo clippy / cargo test (X/X passing)
+# - TS/JS: pnpm -r typecheck / test / build (X/X passing)
+# - Python/ML: uv run pytest (X/X passing)
+#
+# Refs: #XX | Upstream: harper@<sha>

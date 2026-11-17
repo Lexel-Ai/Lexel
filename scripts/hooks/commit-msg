@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+msg_file="${1:?commit message file required}"
+first_line="$(grep -vE '^(#|$)' "$msg_file" | head -n 1 || true)"
+
+if [ -z "$first_line" ]; then
+  echo "ERROR: Empty commit message." >&2
+  exit 1
+fi
+
+# Allow standard Git merge and revert messages.
+if [[ "$first_line" =~ ^(Merge|Revert)\  ]]; then
+  exit 0
+fi
+
+pattern='^(feat|fix|perf|refactor|sec|arch|ml|sync|test|infra|docs|revert)(\([a-z0-9_-]+\))?(!)?: .{3,100}$'
+if [[ ! "$first_line" =~ $pattern ]]; then
+  echo "ERROR: Commit headline must follow Lexel Conventional Commit format:" >&2
+  echo "  <type>(<scope>): <imperative summary>" >&2
+  echo "  Types: feat|fix|perf|refactor|sec|arch|ml|sync|test|infra|docs|revert" >&2
+  echo "  Got:   $first_line" >&2
+  exit 1
+fi
