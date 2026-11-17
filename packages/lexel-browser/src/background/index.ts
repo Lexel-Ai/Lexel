@@ -55,9 +55,10 @@ async function getUserDictionary(): Promise<string[]> {
   return Array.isArray(res.userDictionary) ? (res.userDictionary as string[]) : [];
 }
 
-async function getIgnoredLints(): Promise<string> {
-  const res = await chrome.storage.local.get({ ignoredLints: '{}' });
-  return typeof res.ignoredLints === 'string' ? res.ignoredLints : '{}';
+async function getIgnoredLints(instance: LocalLinter): Promise<string> {
+  const fallback = await instance.exportIgnoredLints();
+  const res = await chrome.storage.local.get({ ignoredLints: fallback });
+  return typeof res.ignoredLints === 'string' ? res.ignoredLints : fallback;
 }
 
 async function getStoredLintConfig(instance: LocalLinter): Promise<LintConfig> {
@@ -76,18 +77,21 @@ async function initLinter(dialectOverride?: Dialect): Promise<void> {
     dialect,
   });
 
+  await instance.setup();
+
   const [ignored, dict, config] = await Promise.all([
-    getIgnoredLints(),
+    getIgnoredLints(instance),
     getUserDictionary(),
     getStoredLintConfig(instance),
   ]);
 
-  await instance.importIgnoredLints(ignored);
+  if (ignored) {
+    await instance.importIgnoredLints(ignored);
+  }
   if (dict.length > 0) {
     await instance.importWords(dict);
   }
   await instance.setLintConfig(config);
-  await instance.setup();
   linter = instance;
 }
 
@@ -419,10 +423,13 @@ chrome.runtime.onMessage.addListener((message: ExtensionRequest, sender, sendRes
       const result = await handleRequest(message, sender);
       sendResponse(result);
     } catch (err) {
-      sendResponse({ ok: false, error: (err as Error).message });
+      const msg = err instanceof Error ? err.message : String(err);
+      sendResponse({ ok: false, error: msg });
     }
   })();
   return true;
 });
 
-void ensureLinter();
+void ensureLinter().catch((err) => {
+  console.error('Lexel linter init error:', err);
+});

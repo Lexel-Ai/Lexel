@@ -95,7 +95,7 @@ export function AiFloatingPill({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [expanded]);
 
-  if (!field || !coords.visible || context.isBlocked) {
+  if (!aiEnabled || !field || !coords.visible || context.isBlocked) {
     return null;
   }
 
@@ -227,6 +227,28 @@ export function AiFloatingPill({
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  const current = await ProtocolClient.getAiSettings();
+                  await chrome.runtime.sendMessage({
+                    kind: 'setAiSettings',
+                    settings: { ...current, enabled: false },
+                  });
+                  setExpanded(false);
+                }}
+                title="Shut down Local AI (keep Harper grammar active)"
+                style={{
+                  padding: '3px 6px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--lx-border)',
+                  backgroundColor: 'var(--lx-muted)',
+                  color: 'var(--lx-fg-muted)',
+                  fontSize: '11px',
+                }}
+              >
+                AI Off
+              </button>
               <button
                 type="button"
                 onClick={handleSendToSidePanel}

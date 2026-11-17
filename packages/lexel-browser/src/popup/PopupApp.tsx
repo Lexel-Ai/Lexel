@@ -140,6 +140,26 @@ export function PopupApp() {
     const next = { ...aiSettings, model };
     setAiSettings(next);
     await chrome.runtime.sendMessage({ kind: 'setAiSettings', settings: next });
+    const health = (await chrome.runtime.sendMessage({ kind: 'aiHealth' })) as LocalAiHealth;
+    setAiHealth(health);
+  }
+
+  async function handleToggleAiEnabled() {
+    if (!aiSettings) return;
+    const next = { ...aiSettings, enabled: !aiSettings.enabled };
+    setAiSettings(next);
+    await chrome.runtime.sendMessage({ kind: 'setAiSettings', settings: next });
+    if (next.enabled) {
+      const health = (await chrome.runtime.sendMessage({ kind: 'aiHealth' })) as LocalAiHealth;
+      setAiHealth(health);
+    } else {
+      setAiHealth({ ok: false, models: [], error: 'Local AI is turned off.' });
+    }
+  }
+
+  async function handleRetryAiHealth() {
+    const health = (await chrome.runtime.sendMessage({ kind: 'aiHealth' })) as LocalAiHealth;
+    setAiHealth(health);
   }
 
   async function handleOpenSidePanel() {
@@ -316,31 +336,87 @@ export function PopupApp() {
             className="rounded-[8px] border p-3 flex flex-col gap-2"
             style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
           >
-            <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-              <span>Local AI Model (Tier 1)</span>
-              <select
-                value={aiSettings?.model ?? 'qwen2.5:1.5b'}
-                onChange={(e) => void handleModelChange(e.target.value)}
-                className="rounded-[6px] border px-2 py-1.5 text-xs lexel-mono"
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium">Local AI Rewrites (Tier 1)</span>
+              <button
+                type="button"
+                onClick={() => void handleToggleAiEnabled()}
+                className="rounded-[6px] border px-2.5 py-1 text-xs font-semibold"
                 style={{
-                  backgroundColor: 'var(--lx-muted)',
+                  backgroundColor: aiSettings?.enabled ? 'var(--lx-accent)' : 'var(--lx-muted)',
                   borderColor: 'var(--lx-border)',
-                  color: 'var(--lx-fg)',
+                  color: aiSettings?.enabled ? 'var(--lx-on-accent)' : 'var(--lx-fg)',
                 }}
               >
-                {modelChoices.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </label>
+                {aiSettings?.enabled ? 'AI: ON' : 'AI: OFF'}
+              </button>
+            </div>
 
-            {aiHealth && !aiHealth.ok && aiSettings?.enabled ? (
-              <p className="text-[11px] m-0 leading-snug" style={{ color: 'var(--lx-warn)' }}>
-                {aiHealth.error}
+            {aiSettings?.enabled ? (
+              <>
+                <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                  <span>Model</span>
+                  <select
+                    value={aiSettings.model}
+                    onChange={(e) => void handleModelChange(e.target.value)}
+                    className="rounded-[6px] border px-2 py-1.5 text-xs lexel-mono"
+                    style={{
+                      backgroundColor: 'var(--lx-muted)',
+                      borderColor: 'var(--lx-border)',
+                      color: 'var(--lx-fg)',
+                    }}
+                  >
+                    {modelChoices.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {aiHealth && !aiHealth.ok ? (
+                  <div className="flex flex-col gap-1.5">
+                    <p className="text-[11px] m-0 leading-snug" style={{ color: 'var(--lx-warn)' }}>
+                      {aiHealth.error}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleRetryAiHealth()}
+                        className="rounded-[6px] border px-2 py-1 text-[11px] font-medium"
+                        style={{
+                          backgroundColor: 'var(--lx-muted)',
+                          borderColor: 'var(--lx-border)',
+                          color: 'var(--lx-fg)',
+                        }}
+                      >
+                        Retry connection
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void navigator.clipboard.writeText(
+                            'OLLAMA_ORIGINS="chrome-extension://*" ollama serve',
+                          )
+                        }
+                        className="rounded-[6px] border px-2 py-1 text-[11px]"
+                        style={{
+                          backgroundColor: 'var(--lx-bg)',
+                          borderColor: 'var(--lx-border)',
+                          color: 'var(--lx-fg-muted)',
+                        }}
+                      >
+                        Copy Ollama cmd
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <p className="text-[11px] m-0" style={{ color: 'var(--lx-fg-muted)' }}>
+                AI is shut down (0 MB LLM RAM). Harper grammar and anti-slop checks stay active.
               </p>
-            ) : null}
+            )}
           </section>
 
           <footer className="flex items-center gap-2 pt-1 mt-auto">

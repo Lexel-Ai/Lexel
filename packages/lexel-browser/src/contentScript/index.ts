@@ -1,5 +1,5 @@
 import '@webcomponents/custom-elements';
-import { isVisible, LintFramework } from 'lint-framework';
+import { getClosestBlockAncestor, isVisible, leafNodes, LintFramework } from 'lint-framework';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { detectSurfaceFromLocation, isSensitiveElement } from '../shared/surfaceDetector';
@@ -180,7 +180,21 @@ function scanFields() {
     if (el.getAttribute('spellcheck') === 'false' && !isLexical && !isQuill && !isWebmail) {
       return;
     }
-    if (isVisible(el)) {
+
+    const seenBlocks = new Set<Element>();
+    for (const leaf of leafNodes(el)) {
+      if (leaf.parentElement?.closest('[contenteditable="false"],[disabled],[readonly]') != null) {
+        continue;
+      }
+      const block = getClosestBlockAncestor(leaf, el);
+      if (!block || seenBlocks.has(block) || !isVisible(block)) {
+        continue;
+      }
+      seenBlocks.add(block);
+      fw.addTarget(block);
+    }
+
+    if (seenBlocks.size === 0 && isVisible(el)) {
       fw.addTarget(el);
     }
   });
@@ -216,6 +230,7 @@ document.addEventListener(
   (event) => {
     if (isEditableElement(event.target)) {
       activeField = makeFieldHandle(event.target);
+      fw.addTarget(event.target);
       renderFloatingPill();
     }
   },
