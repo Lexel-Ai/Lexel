@@ -1,0 +1,15 @@
+[package]
+name = "lexel-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Deterministic Tier 0 Harper + anti-slop scanner, surface catalog, and Tier 2 rewrite gatekeeper for Lexel."
+
+[dependencies]
+aho-corasick.workspace = true
+harper-core = { path = "../../vendor/harper/harper-core" }
+harper-thesaurus = { path = "../../vendor/harper/harper-thesaurus" }
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

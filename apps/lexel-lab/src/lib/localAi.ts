@@ -1,10 +1,19 @@
-import type { AiSettings } from './types';
+import type { AiSettings, DaemonProfile, InstalledModelStatus } from './types';
 
 export interface LocalAiHealth {
   ok: boolean;
   models: string[];
   modelAvailable?: boolean;
   error?: string;
+  source?: 'daemon' | 'direct';
+  daemonConnected?: boolean;
+  daemonAuthRequired?: boolean;
+  runtimeBackend?: string;
+  modelLoaded?: boolean;
+  loadedModel?: string | null;
+  activeProfile?: DaemonProfile;
+  profiles?: DaemonProfile[];
+  installedModels?: InstalledModelStatus[];
 }
 
 function isModelPresent(configured: string, available: string[]): boolean {

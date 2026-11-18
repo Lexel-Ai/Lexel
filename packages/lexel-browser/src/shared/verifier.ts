@@ -1,16 +1,33 @@
 import { SuggestionKind } from 'harper.js';
-import type { GateCheckSummary } from 'lexel-ui';
+import {
+  applySafeFixesForProfile,
+  findSlopMatchesWithConfig,
+  hasSecrets,
+  scanSecretsAndPii,
+  SLOP_SAFE_REPLACEMENTS,
+  type GateCheckSummary,
+  type SafeFixResult,
+  type SecretMatch,
+} from 'lexel-ui';
 import type { UnpackedLint } from 'lint-framework';
 import slopConfig from '../../../../rules/slop_terms.json';
-import { getSurfaceProfile } from './surfaceDetector';
-import type { SurfaceId } from './types';
+import { resolveSurfaceProfile } from './surfaceDetector';
+import type { SurfaceId, SurfaceProfile } from './types';
 
 export const SLOP_TERMS: string[] = slopConfig.slopTerms;
+export { hasSecrets, scanSecretsAndPii, SLOP_SAFE_REPLACEMENTS };
+export type { SafeFixResult, SecretMatch };
 
 export interface UnitBoundMetric {
   raw: string;
   value: number;
   unit: string;
+}
+
+export interface Tier0Options {
+  customSlopTerms?: string[];
+  disabledSlopTerms?: string[];
+  customSurfaces?: SurfaceProfile[];
 }
 
 const UNIT_BOUND_REGEX =
@@ -29,10 +46,6 @@ function stableHash(input: string): string {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString();
-}
-
-function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export function extractUnitBoundMetrics(text: string): UnitBoundMetric[] {
@@ -55,32 +68,35 @@ export function extractCodeAndUrlTokens(text: string): string[] {
   return [...new Set([...backticks, ...urls])];
 }
 
-export function findSlopMatches(text: string): Array<{ term: string; start: number; end: number }> {
-  const hits: Array<{ term: string; start: number; end: number }> = [];
-  for (const term of SLOP_TERMS) {
-    const regex = new RegExp(`\\b${escapeRegExp(term)}\\b`, 'gi');
-    for (const match of text.matchAll(regex)) {
-      if (typeof match.index === 'number') {
-        hits.push({
-          term: match[0],
-          start: match.index,
-          end: match.index + match[0].length,
-        });
-      }
-    }
-  }
-  return hits;
+export function findSlopMatches(
+  text: string,
+  options?: { customTerms?: string[]; disabledTerms?: string[] },
+): Array<{ term: string; start: number; end: number }> {
+  return findSlopMatchesWithConfig(text, SLOP_TERMS, options);
 }
 
 export function scanTier0Diagnostics(
   text: string,
-  surfaceId: SurfaceId,
-): { slopLints: UnpackedLint[]; surfaceLints: UnpackedLint[] } {
-  const profile = getSurfaceProfile(surfaceId);
+  surfaceOrId: SurfaceId | SurfaceProfile,
+  options?: Tier0Options,
+): {
+  slopLints: UnpackedLint[];
+  surfaceLints: UnpackedLint[];
+  secretLints: UnpackedLint[];
+  secrets: SecretMatch[];
+} {
+  const profile =
+    typeof surfaceOrId === 'string'
+      ? resolveSurfaceProfile(surfaceOrId, options?.customSurfaces)
+      : surfaceOrId;
   const slopLints: UnpackedLint[] = [];
   const surfaceLints: UnpackedLint[] = [];
+  const secretLints: UnpackedLint[] = [];
 
-  for (const hit of findSlopMatches(text)) {
+  for (const hit of findSlopMatches(text, {
+    customTerms: options?.customSlopTerms,
+    disabledTerms: options?.disabledSlopTerms,
+  })) {
     slopLints.push({
       span: { start: hit.start, end: hit.end },
       message_html: `Common AI buzzword ("${hit.term}"). Use specific, plain phrasing.`,
@@ -198,7 +214,33 @@ export function scanTier0Diagnostics(
     });
   }
 
-  return { slopLints, surfaceLints };
+  const secrets = scanSecretsAndPii(text);
+  for (const secret of secrets) {
+    secretLints.push({
+      span: { start: secret.start, end: secret.end },
+      message_html: `Sensitive ${secret.label} (${secret.maskedPreview}) detected. Keep secrets out of public drafts and AI prompts.`,
+      problem_text: secret.maskedPreview,
+      lint_kind: 'Miscellaneous',
+      lint_kind_pretty: 'Secrets Guard',
+      suggestions: [],
+      context_hash: stableHash(`secret:${secret.kind}:${secret.start}`),
+      source: text,
+    });
+  }
+
+  return { slopLints, surfaceLints, secretLints, secrets };
+}
+
+export function applySafeDeterministicFixes(
+  text: string,
+  surfaceOrId: SurfaceId | SurfaceProfile,
+  options?: Tier0Options,
+): SafeFixResult {
+  const profile =
+    typeof surfaceOrId === 'string'
+      ? resolveSurfaceProfile(surfaceOrId, options?.customSurfaces)
+      : surfaceOrId;
+  return applySafeFixesForProfile(text, profile, options?.disabledSlopTerms);
 }
 
 export function sanitizeModelOutput(raw: string): string {
@@ -221,11 +263,15 @@ export function verifyAiRewrite(
   source: string,
   candidate: string,
   surfaceId: SurfaceId,
+  options?: Tier0Options,
 ): GateCheckSummary {
-  const profile = getSurfaceProfile(surfaceId);
+  const profile = resolveSurfaceProfile(surfaceId, options?.customSurfaces);
   const warnings: string[] = [];
 
-  const slopHits = findSlopMatches(candidate);
+  const slopHits = findSlopMatches(candidate, {
+    customTerms: options?.customSlopTerms,
+    disabledTerms: options?.disabledSlopTerms,
+  });
   const hasEmDash = !profile.allowEmDashes && /—/.test(candidate);
   const zeroSlop = slopHits.length === 0 && !hasEmDash;
   if (slopHits.length > 0) {
@@ -264,7 +310,7 @@ export function verifyAiRewrite(
     warnings.push(`Dropped code/URL token: ${missingTokens.join(', ')}`);
   }
 
-  const { surfaceLints } = scanTier0Diagnostics(candidate, surfaceId);
+  const { surfaceLints, secrets } = scanTier0Diagnostics(candidate, profile, options);
   const surfaceCompliant = surfaceLints.length === 0 && candidate.length <= profile.maxChars;
   if (!surfaceCompliant) {
     if (candidate.length > profile.maxChars) {
@@ -277,11 +323,17 @@ export function verifyAiRewrite(
     }
   }
 
+  const secretsFree = secrets.length === 0;
+  for (const secret of secrets) {
+    warnings.push(`Sensitive ${secret.label} (${secret.maskedPreview}) detected.`);
+  }
+
   return {
     zeroSlop,
     numbersPreserved,
     tokensPreserved,
     surfaceCompliant,
+    secretsFree,
     warnings,
   };
 }

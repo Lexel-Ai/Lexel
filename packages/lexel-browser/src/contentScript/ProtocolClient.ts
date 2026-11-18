@@ -131,8 +131,7 @@ export default class ProtocolClient {
   }
 
   public static async setAiEnabled(enabled: boolean): Promise<void> {
-    const current = await this.getAiSettings();
-    await send({ kind: 'setAiSettings', settings: { ...current, enabled } });
+    await send({ kind: 'toggleAi', enabled });
   }
 
   public static async getTheme(): Promise<'dark' | 'light'> {
@@ -146,6 +145,7 @@ export default class ProtocolClient {
     surfaceId: SurfaceId;
     subcontext: string | null;
     threadContext?: string;
+    domain?: string;
   }): Promise<{ ok: true; result: RewriteResult } | { ok: false; error: string }> {
     return send({ kind: 'aiRewrite', ...params });
   }
@@ -172,5 +172,20 @@ export default class ProtocolClient {
     subcontext: string | null;
   }): Promise<void> {
     await send({ kind: 'setActiveDraft', draft });
+  }
+
+  public static async toTitleCase(text: string): Promise<string> {
+    const res = await send<{ text: string }>({ kind: 'toTitleCase', text });
+    return res?.text ?? text;
+  }
+
+  public static async fixSafeIssues(
+    text: string,
+    surfaceId: SurfaceId,
+  ): Promise<{ text: string; fixesApplied: number; categories: string[] }> {
+    const res = await send<{
+      result: { text: string; fixesApplied: number; categories: string[] };
+    }>({ kind: 'fixSafeIssues', text, surfaceId });
+    return res?.result ?? { text, fixesApplied: 0, categories: [] };
   }
 }

@@ -9,6 +9,7 @@ import {
 } from 'lexel-ui';
 import React, { useEffect, useState } from 'react';
 import type { LocalAiHealth } from '../shared/localAiClient';
+import { MODEL_MANIFEST_SPECS } from '../shared/models';
 import { getSurfaceProfile, SURFACE_PROFILES } from '../shared/surfaceDetector';
 import type { AiSettings, AiTaskId, RewriteResult, SurfaceId } from '../shared/types';
 import { scanTier0Diagnostics } from '../shared/verifier';
@@ -57,7 +58,9 @@ export function SidePanelApp() {
   }, []);
 
   const profile = getSurfaceProfile(surfaceId);
-  const tier0 = text.trim() ? scanTier0Diagnostics(text, surfaceId) : { slopLints: [], surfaceLints: [] };
+  const tier0 = text.trim()
+    ? scanTier0Diagnostics(text, surfaceId)
+    : { slopLints: [], surfaceLints: [], secretLints: [], secrets: [] };
 
   async function handleRefreshHealth() {
     const health = (await chrome.runtime.sendMessage({ kind: 'aiHealth' })) as LocalAiHealth;
@@ -66,18 +69,36 @@ export function SidePanelApp() {
 
   async function handleEnableAi() {
     if (!aiSettings) return;
-    const next = { ...aiSettings, enabled: true };
-    setAiSettings(next);
-    await chrome.runtime.sendMessage({ kind: 'setAiSettings', settings: next });
-    await handleRefreshHealth();
+    setAiSettings({ ...aiSettings, enabled: true });
+    const res = (await chrome.runtime.sendMessage({
+      kind: 'toggleAi',
+      enabled: true,
+    })) as { health?: LocalAiHealth; activationError?: string | null };
+    if (res.health) {
+      setAiHealth({
+        ...res.health,
+        error: res.activationError ?? res.health.error,
+      });
+    } else {
+      await handleRefreshHealth();
+    }
   }
 
   async function handleModelChange(model: string) {
     if (!aiSettings) return;
-    const next = { ...aiSettings, model };
-    setAiSettings(next);
-    await chrome.runtime.sendMessage({ kind: 'setAiSettings', settings: next });
-    await handleRefreshHealth();
+    const res = (await chrome.runtime.sendMessage({
+      kind: 'setMainModel',
+      model,
+    })) as { health?: LocalAiHealth };
+    const nextAi = (await chrome.runtime.sendMessage({
+      kind: 'getAiSettings',
+    })) as { settings: AiSettings };
+    setAiSettings(nextAi.settings);
+    if (res.health) {
+      setAiHealth(res.health);
+    } else {
+      await handleRefreshHealth();
+    }
   }
 
   async function handleThemeToggle() {
@@ -115,6 +136,10 @@ export function SidePanelApp() {
   async function handleRewrite() {
     if (!text.trim()) {
       setError('Enter or pull text before running a rewrite.');
+      return;
+    }
+    if (tier0.secrets.length > 0) {
+      setError('Secrets Guard blocked AI rewrite because sensitive credentials or PII were detected.');
       return;
     }
     setLoading(true);
@@ -178,9 +203,19 @@ export function SidePanelApp() {
         ? 'Model Missing'
         : 'AI Offline';
 
+  const modelValue =
+    aiSettings?.mainModelTier === 'lexel-0.5b'
+      ? 'lexel-0.5b'
+      : aiSettings?.mainModelTier === 'lexel-1.5b'
+        ? 'lexel-1.5b'
+        : aiSettings?.model ?? 'lexel-1.5b';
+
   return (
     <div data-theme={theme} className="lexel-root min-h-screen p-4 flex flex-col gap-3">
-      <header className="flex items-center justify-between gap-2 pb-2 border-b" style={{ borderColor: 'var(--lx-border)' }}>
+      <header
+        className="flex items-center justify-between gap-2 pb-2 border-b"
+        style={{ borderColor: 'var(--lx-border)' }}
+      >
         <div className="flex items-center gap-2">
           <NibIcon className="w-5 h-5" />
           <h1 className="text-sm font-semibold m-0">Lexel Workbench</h1>
@@ -233,28 +268,6 @@ export function SidePanelApp() {
           }}
         >
           <div className="leading-snug break-words">{aiHealth.error}</div>
-          {aiHealth.models.length > 0 && aiSettings ? (
-            <label className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--lx-fg)' }}>
-              <span>Available model:</span>
-              <select
-                value={aiSettings.model}
-                onChange={(e) => void handleModelChange(e.target.value)}
-                className="rounded-[6px] border px-2 py-1 text-xs lexel-mono"
-                style={{
-                  backgroundColor: 'var(--lx-bg)',
-                  borderColor: 'var(--lx-border)',
-                  color: 'var(--lx-fg)',
-                }}
-              >
-                <option value={aiSettings.model}>{aiSettings.model} (missing)</option>
-                {aiHealth.models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -268,22 +281,20 @@ export function SidePanelApp() {
             >
               Retry connection
             </button>
-            <button
-              type="button"
-              onClick={() =>
-                void navigator.clipboard.writeText(
-                  'OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*" ollama serve',
-                )
-              }
-              className="rounded-[6px] border px-2 py-1 text-[11px]"
-              style={{
-                backgroundColor: 'var(--lx-bg)',
-                borderColor: 'var(--lx-border)',
-                color: 'var(--lx-fg-muted)',
-              }}
-            >
-              Copy Ollama cmd
-            </button>
+            {aiHealth.nativeHostCommand ? (
+              <button
+                type="button"
+                onClick={() => void navigator.clipboard.writeText(aiHealth.nativeHostCommand!)}
+                className="rounded-[6px] border px-2 py-1 text-[11px]"
+                style={{
+                  backgroundColor: 'var(--lx-bg)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg-muted)',
+                }}
+              >
+                Copy host command
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => void chrome.runtime.openOptionsPage()}
@@ -335,7 +346,7 @@ export function SidePanelApp() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
         <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
           <span>Surface</span>
           <select
@@ -373,6 +384,29 @@ export function SidePanelApp() {
                 {t.label}
               </option>
             ))}
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+          <span>Model</span>
+          <select
+            value={modelValue}
+            onChange={(e) => void handleModelChange(e.target.value)}
+            className="rounded-[6px] border px-2 py-1.5 text-xs"
+            style={{
+              backgroundColor: 'var(--lx-card)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          >
+            {MODEL_MANIFEST_SPECS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+            {aiSettings?.mainModelTier === 'custom' ? (
+              <option value={aiSettings.model}>{aiSettings.model}</option>
+            ) : null}
           </select>
         </label>
       </div>
@@ -415,15 +449,21 @@ export function SidePanelApp() {
         </label>
       ) : null}
 
-      {(tier0.slopLints.length > 0 || tier0.surfaceLints.length > 0) ? (
+      {tier0.secretLints.length > 0 || tier0.slopLints.length > 0 || tier0.surfaceLints.length > 0 ? (
         <div
           className="rounded-[8px] border p-2.5 flex flex-col gap-1.5 text-xs"
-          style={{ backgroundColor: 'var(--lx-warn-bg)', borderColor: 'var(--lx-warn)' }}
+          style={{
+            backgroundColor: tier0.secretLints.length > 0 ? 'var(--lx-danger-bg)' : 'var(--lx-warn-bg)',
+            borderColor: tier0.secretLints.length > 0 ? 'var(--lx-danger)' : 'var(--lx-warn)',
+          }}
         >
-          <div className="font-semibold" style={{ color: 'var(--lx-warn)' }}>
-            Tier 0 Checks ({tier0.slopLints.length + tier0.surfaceLints.length})
+          <div
+            className="font-semibold"
+            style={{ color: tier0.secretLints.length > 0 ? 'var(--lx-danger)' : 'var(--lx-warn)' }}
+          >
+            Tier 0 Checks ({tier0.secretLints.length + tier0.slopLints.length + tier0.surfaceLints.length})
           </div>
-          {[...tier0.slopLints, ...tier0.surfaceLints].map((lint, i) => (
+          {[...tier0.secretLints, ...tier0.slopLints, ...tier0.surfaceLints].map((lint, i) => (
             <div key={i} className="text-[11px]" style={{ color: 'var(--lx-fg)' }}>
               <span className="lexel-mono font-medium">[{lint.lint_kind_pretty}]</span>{' '}
               {lint.message_html}
@@ -431,6 +471,53 @@ export function SidePanelApp() {
           ))}
         </div>
       ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={async () => {
+            if (!text.trim()) return;
+            const res = (await chrome.runtime.sendMessage({
+              kind: 'fixSafeIssues',
+              text,
+              surfaceId,
+            })) as { result?: { text: string; fixesApplied: number } };
+            if (res.result && res.result.fixesApplied > 0) {
+              setText(res.result.text);
+              setError(null);
+            } else {
+              setError('No safe deterministic slop, em dash, emoji, or hashtag fixes needed.');
+            }
+          }}
+          className="flex-1 rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
+          style={{
+            backgroundColor: 'var(--lx-card)',
+            borderColor: 'var(--lx-signal)',
+            color: 'var(--lx-signal)',
+          }}
+        >
+          Fix Safe Issues (No AI)
+        </button>
+        <button
+          type="button"
+          onClick={async () => {
+            if (!text.trim()) return;
+            const res = (await chrome.runtime.sendMessage({
+              kind: 'toTitleCase',
+              text,
+            })) as { text?: string };
+            if (res.text) setText(res.text);
+          }}
+          className="rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
+          style={{
+            backgroundColor: 'var(--lx-muted)',
+            borderColor: 'var(--lx-border)',
+            color: 'var(--lx-fg)',
+          }}
+        >
+          Title Case
+        </button>
+      </div>
 
       <button
         type="button"

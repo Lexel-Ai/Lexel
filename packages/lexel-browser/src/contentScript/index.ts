@@ -4,7 +4,7 @@ import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import appCss from '../app.css?inline';
 import { detectSurfaceFromLocation, isSensitiveElement } from '../shared/surfaceDetector';
-import type { AiTaskId, DetectedSurfaceContext, SurfaceId } from '../shared/types';
+import type { AiTaskId, DetectedSurfaceContext, Hotkey, SurfaceId } from '../shared/types';
 import { AiFloatingPill, type ActiveFieldHandle } from './AiFloatingPill';
 import { createGoogleDocsBridgeSync, isGoogleDocsPage } from './googleDocs';
 import { type ActiveLintPopup, LexelLintController } from './LexelLintController';
@@ -16,6 +16,7 @@ let blocklistCache: string[] = [];
 let surfaceOverrideCache: SurfaceId | null = null;
 let themeCache: 'dark' | 'light' = 'dark';
 let aiEnabledCache = true;
+let hotkeyCache: Hotkey = { modifiers: ['Alt'], key: 'l' };
 let activeField: ActiveFieldHandle | null = null;
 let activeLintPopup: ActiveLintPopup | null = null;
 let openSignal = 0;
@@ -258,7 +259,7 @@ function scanFields() {
 
 async function hydrateConfig(initializeSummary = false) {
   try {
-    const [blocklist, override, theme, aiSettings, hoverEnabled, activationKey] =
+    const [blocklist, override, theme, aiSettings, hoverEnabled, activationKey, hotkey] =
       await Promise.all([
         ProtocolClient.getPrivacyBlocklist().catch(() => []),
         ProtocolClient.getSurfaceOverride(window.location.hostname).catch(() => null),
@@ -266,11 +267,13 @@ async function hydrateConfig(initializeSummary = false) {
         ProtocolClient.getAiSettings().catch(() => ({ enabled: true })),
         ProtocolClient.getOpenSuggestionsOnHover().catch(() => true),
         ProtocolClient.getActivationKey().catch(() => 'off' as const),
+        ProtocolClient.getHotkey().catch(() => ({ modifiers: ['Alt'], key: 'l' }) as Hotkey),
       ]);
     blocklistCache = blocklist;
     surfaceOverrideCache = override;
     themeCache = theme;
     aiEnabledCache = aiSettings.enabled;
+    hotkeyCache = hotkey;
     lintController.setOpenSuggestionsOnHover(hoverEnabled);
     lintController.setActivationKey(activationKey);
 
@@ -331,7 +334,16 @@ document.addEventListener(
 );
 
 document.addEventListener('keydown', (event) => {
-  if (event.altKey && event.key.toLowerCase() === 'l' && activeField) {
+  if (!activeField) return;
+  const needCtrl = hotkeyCache.modifiers.includes('Ctrl');
+  const needShift = hotkeyCache.modifiers.includes('Shift');
+  const needAlt = hotkeyCache.modifiers.includes('Alt');
+  if (
+    event.ctrlKey === needCtrl &&
+    event.shiftKey === needShift &&
+    event.altKey === needAlt &&
+    event.key.toLowerCase() === hotkeyCache.key.toLowerCase()
+  ) {
     event.preventDefault();
     openSignal += 1;
     renderOverlays();
@@ -345,6 +357,8 @@ const WATCHED_STORAGE_KEYS = new Set([
   'lexel_privacy_blocklist',
   'openSuggestionsOnHover',
   'activationKey',
+  'hotkey',
+  'defaultEnable',
   'delay',
   'userDictionary',
   'dialect',

@@ -46,6 +46,7 @@ Refs: #XX
 | `revert` | Reversion | Rolling back a faulty commit with explicit link to the reverted SHA |
 
 ### Canonical Lexel Scopes
+Use a single scope when possible (`repo` when spanning crates, UI, and extension), or comma-separated scopes (e.g. `core,ui,browser`) with no spaces inside parentheses. Keep the headline under 72 chars (`scripts/hooks/commit-msg` enforces `<= 100` chars).
 - **Rust Crates:** `core`, `db`, `ai`, `daemon`, `ls`, `wasm`, `cli`
 - **JS/TS Apps & Packages:** `ui`, `browser`, `vscode`, `obsidian`, `desktop`, `web`
 - **Rules, ML & Tooling:** `rules`, `ml`, `sync`, `deps`, `repo`
@@ -93,5 +94,5 @@ Append `!` after type/scope (e.g. `arch(daemon)!:`) and add a `BREAKING CHANGE:`
 
 Whenever a major milestone, feature, fix, or test suite passes:
 1. Run all applicable quality gates in `.agents/rules/quality-gates.md` first.
-2. Output **strictly ONE single-line ready-to-run bash command block** (`git add ... && git commit -m "<type>(<scope>): <summary>" -m "- <detail>" -m "Verification: <results>"`, avoiding multi-line `<< 'EOF'` heredocs so copy-paste never hangs) containing the complete Conventional Commit message and observed verification results.
+2. Output **strictly ONE short single-line ready-to-run bash command block** using `git add . && git commit -m "<type>(<scope>): <summary>"` (with a `<= 72`-char imperative headline and no extra `-m` flags or `<< 'EOF'` heredocs so terminal word-wrapping never breaks copy-paste). Put details and verification pass counts in the prose response above the command block.
 3. Never invent test counts, timings, or build passes you did not directly observe. Never output duplicate commit blocks (one markdown preview + one bash block).

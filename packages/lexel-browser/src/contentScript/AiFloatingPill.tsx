@@ -11,6 +11,7 @@ import {
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { getSurfaceProfile } from '../shared/surfaceDetector';
 import type { AiTaskId, DetectedSurfaceContext, RewriteResult } from '../shared/types';
+import { hasSecrets } from '../shared/verifier';
 import ProtocolClient from './ProtocolClient';
 
 export interface ActiveFieldHandle {
@@ -150,6 +151,7 @@ export function AiFloatingPill({
         surfaceId: context.surfaceId,
         subcontext: context.subcontext,
         threadContext,
+        domain: context.domain,
       });
 
       setLoading(false);
@@ -172,11 +174,9 @@ export function AiFloatingPill({
   if (!field || !coords.visible || context.isBlocked) {
     return null;
   }
-  if (!aiEnabled && !expanded) {
-    return null;
-  }
 
   const currentText = field.readText();
+  const containsSecrets = hasSecrets(currentText);
   const healthState = !aiEnabled
     ? 'offline'
     : checkingHealth
@@ -212,6 +212,28 @@ export function AiFloatingPill({
     if (!result) return;
     await navigator.clipboard.writeText(result.suggestion);
     setCopied(true);
+  }
+
+  async function handleFixSafe() {
+    if (!field) return;
+    const text = field.readText();
+    if (!text.trim()) return;
+    const res = await ProtocolClient.fixSafeIssues(text, context.surfaceId);
+    if (res.fixesApplied > 0) {
+      field.writeText(res.text);
+      setError(null);
+    } else {
+      setError('No deterministic slop, em dash, emoji, or hashtag fixes needed.');
+    }
+  }
+
+  async function handleTitleCase() {
+    if (!field) return;
+    const text = field.readText();
+    if (!text.trim()) return;
+    const next = await ProtocolClient.toTitleCase(text);
+    field.writeText(next);
+    setError(null);
   }
 
   async function handleSendToSidePanel() {
@@ -262,6 +284,18 @@ export function AiFloatingPill({
             {context.label}
             {context.subcontext ? ` · ${context.subcontext}` : ''}
           </span>
+          {containsSecrets ? (
+            <span
+              className="lexel-mono"
+              style={{
+                color: 'var(--lx-danger)',
+                fontSize: '10px',
+                fontWeight: 600,
+              }}
+            >
+              Secret
+            </span>
+          ) : null}
         </button>
       ) : (
         <div
@@ -362,6 +396,57 @@ export function AiFloatingPill({
                 <CloseIcon className="w-3.5 h-3.5" />
               </button>
             </div>
+          </div>
+
+          {containsSecrets ? (
+            <div
+              role="alert"
+              style={{
+                borderRadius: '6px',
+                border: '1px solid var(--lx-danger)',
+                backgroundColor: 'var(--lx-danger-bg)',
+                padding: '7px 10px',
+                fontSize: '11px',
+                color: 'var(--lx-danger)',
+              }}
+            >
+              Secrets Guard flagged sensitive credentials or PII in this field. AI rewrites are blocked.
+            </div>
+          ) : null}
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void handleFixSafe()}
+              style={{
+                borderRadius: '6px',
+                border: '1px solid var(--lx-signal)',
+                backgroundColor: 'var(--lx-card)',
+                color: 'var(--lx-signal)',
+                padding: '4px 8px',
+                fontSize: '11px',
+                fontWeight: 600,
+              }}
+            >
+              Fix Safe Issues
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void handleTitleCase()}
+              style={{
+                borderRadius: '6px',
+                border: '1px solid var(--lx-border)',
+                backgroundColor: 'var(--lx-muted)',
+                color: 'var(--lx-fg)',
+                padding: '4px 8px',
+                fontSize: '11px',
+                fontWeight: 500,
+              }}
+            >
+              Title Case
+            </button>
           </div>
 
           {!aiEnabled ? (

@@ -1,13 +1,28 @@
+import { inferTierFromModelName, resolveModelNameForTier } from './models';
 import { DEFAULT_PRIVACY_DOMAINS } from './surfaceDetector';
-import type { AiSettings, PageLintSummary, SurfaceId, VoiceExample } from './types';
+import type {
+  AiSettings,
+  LintLanguage,
+  PageLintSummary,
+  StoredWeirpack,
+  SurfaceId,
+  SurfaceProfile,
+  UnifiedDaemonSettings,
+  VoiceExample,
+} from './types';
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
   enabled: true,
+  mainModelTier: 'lexel-1.5b',
+  runtime: 'auto',
   provider: 'ollama',
   endpoint: 'http://127.0.0.1:11434',
+  openAiCompatEndpoint: 'http://127.0.0.1:8080',
   model: 'qwen2.5:1.5b',
   temperature: 0.3,
   maxTokens: 280,
+  idleUnloadSecs: 180,
+  keepWarm: false,
   saveVoiceMemory: true,
 };
 
@@ -19,15 +34,33 @@ const KEYS = {
   surfaceOverrides: 'lexel_surface_overrides',
   pageSummaries: 'lexel_page_summaries',
   activeDraft: 'lexel_active_draft',
+  languageMode: 'lexel_language_mode',
+  customSlopTerms: 'lexel_custom_slop_terms',
+  disabledSlopTerms: 'lexel_disabled_slop_terms',
+  customSurfaces: 'lexel_custom_surfaces',
+  weirpacks: 'lexel_weirpacks',
 } as const;
+
+const DOMAIN_KEY_PREFIX = 'domainStatus ';
+
+export function normalizeAiSettings(partial?: Partial<AiSettings>): AiSettings {
+  const merged = { ...DEFAULT_AI_SETTINGS, ...(partial ?? {}) };
+  if (!partial?.mainModelTier && partial?.model) {
+    merged.mainModelTier = inferTierFromModelName(partial.model);
+  }
+  if (merged.mainModelTier !== 'custom') {
+    merged.model = resolveModelNameForTier(merged.mainModelTier, merged.model);
+  }
+  return merged;
+}
 
 export async function getAiSettings(): Promise<AiSettings> {
   const res = await chrome.storage.local.get({ [KEYS.aiSettings]: DEFAULT_AI_SETTINGS });
-  return { ...DEFAULT_AI_SETTINGS, ...(res[KEYS.aiSettings] as Partial<AiSettings>) };
+  return normalizeAiSettings(res[KEYS.aiSettings] as Partial<AiSettings>);
 }
 
 export async function setAiSettings(settings: AiSettings): Promise<void> {
-  await chrome.storage.local.set({ [KEYS.aiSettings]: settings });
+  await chrome.storage.local.set({ [KEYS.aiSettings]: normalizeAiSettings(settings) });
 }
 
 export async function getTheme(): Promise<'dark' | 'light'> {
@@ -78,19 +111,20 @@ export async function setPrivacyBlocklist(domains: string[]): Promise<void> {
   await chrome.storage.local.set({ [KEYS.privacyBlocklist]: cleaned });
 }
 
-export async function getSurfaceOverride(domain: string): Promise<SurfaceId | null> {
+export async function getAllSurfaceOverrides(): Promise<Record<string, SurfaceId>> {
   const res = await chrome.storage.local.get({
     [KEYS.surfaceOverrides]: {} as Record<string, SurfaceId>,
   });
-  const map = (res[KEYS.surfaceOverrides] as Record<string, SurfaceId>) ?? {};
+  return (res[KEYS.surfaceOverrides] as Record<string, SurfaceId>) ?? {};
+}
+
+export async function getSurfaceOverride(domain: string): Promise<SurfaceId | null> {
+  const map = await getAllSurfaceOverrides();
   return map[domain.toLowerCase()] ?? null;
 }
 
 export async function setSurfaceOverride(domain: string, surfaceId: SurfaceId | null): Promise<void> {
-  const res = await chrome.storage.local.get({
-    [KEYS.surfaceOverrides]: {} as Record<string, SurfaceId>,
-  });
-  const map = { ...((res[KEYS.surfaceOverrides] as Record<string, SurfaceId>) ?? {}) };
+  const map = { ...(await getAllSurfaceOverrides()) };
   const key = domain.toLowerCase();
   if (surfaceId) {
     map[key] = surfaceId;
@@ -98,6 +132,73 @@ export async function setSurfaceOverride(domain: string, surfaceId: SurfaceId | 
     delete map[key];
   }
   await chrome.storage.local.set({ [KEYS.surfaceOverrides]: map });
+}
+
+export async function getAllDomainStatuses(): Promise<Record<string, boolean>> {
+  const all = await chrome.storage.local.get(null);
+  const map: Record<string, boolean> = {};
+  for (const [key, val] of Object.entries(all)) {
+    if (key.startsWith(DOMAIN_KEY_PREFIX) && typeof val === 'boolean') {
+      map[key.slice(DOMAIN_KEY_PREFIX.length)] = val;
+    }
+  }
+  return map;
+}
+
+export async function applyUnifiedSettingsToStorage(settings: UnifiedDaemonSettings): Promise<void> {
+  const currentAll = await chrome.storage.local.get(null);
+  const keysToRemove = Object.keys(currentAll).filter((k) => k.startsWith(DOMAIN_KEY_PREFIX));
+  if (keysToRemove.length > 0) {
+    await chrome.storage.local.remove(keysToRemove);
+  }
+
+  const aiSettings: AiSettings = {
+    enabled: settings.aiEnabled,
+    mainModelTier: settings.mainModelTier,
+    runtime: settings.runtime,
+    provider: settings.runtime === 'openai_compat' ? 'openai_compat' : 'ollama',
+    endpoint:
+      settings.runtime === 'openai_compat'
+        ? settings.openaiCompatEndpoint
+        : settings.ollamaEndpoint,
+    openAiCompatEndpoint: settings.openaiCompatEndpoint,
+    model: resolveModelNameForTier(settings.mainModelTier, settings.customModel),
+    temperature: settings.temperature,
+    maxTokens: settings.maxTokens,
+    idleUnloadSecs: settings.idleUnloadSecs,
+    keepWarm: settings.keepWarm,
+    saveVoiceMemory: settings.saveVoiceMemory,
+  };
+
+  const payload: Record<string, unknown> = {
+    [KEYS.theme]: settings.theme === 'light' ? 'light' : 'dark',
+    [KEYS.aiSettings]: aiSettings,
+    [KEYS.privacyBlocklist]: settings.privacyBlocklist,
+    [KEYS.surfaceOverrides]: settings.surfaceOverrides,
+    dialect: settings.dialect,
+    isolateEnglish: settings.isolateEnglish,
+    openSuggestionsOnHover: settings.openSuggestionsOnHover,
+    activationKey: settings.activationKey,
+    delay: settings.lintDelayMs,
+    defaultEnable: settings.defaultEnable !== false,
+    userDictionary: settings.userDictionary,
+    ignoredLints: settings.ignoredLints,
+    lintConfig: JSON.stringify(settings.lintConfig ?? {}),
+    [KEYS.languageMode]: settings.languageMode ?? 'plaintext',
+    [KEYS.customSlopTerms]: settings.customSlopTerms ?? [],
+    [KEYS.disabledSlopTerms]: settings.disabledSlopTerms ?? [],
+    [KEYS.customSurfaces]: settings.customSurfaces ?? [],
+  };
+
+  if (settings.hotkey) {
+    payload.hotkey = settings.hotkey;
+  }
+
+  for (const [domain, enabled] of Object.entries(settings.domainStatuses ?? {})) {
+    payload[`${DOMAIN_KEY_PREFIX}${domain.toLowerCase()}`] = enabled;
+  }
+
+  await chrome.storage.local.set(payload);
 }
 
 export async function setPageSummary(summary: PageLintSummary): Promise<void> {
@@ -138,4 +239,62 @@ export async function getActiveDraft(): Promise<{
       subcontext: string | null;
     } | null) ?? null
   );
+}
+
+export async function getLanguageMode(): Promise<LintLanguage> {
+  const res = await chrome.storage.local.get({ [KEYS.languageMode]: 'plaintext' });
+  const v = res[KEYS.languageMode];
+  return v === 'markdown' || v === 'typst' ? v : 'plaintext';
+}
+
+export async function setLanguageMode(language: LintLanguage): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.languageMode]: language });
+}
+
+export async function getCustomSlopConfig(): Promise<{
+  customTerms: string[];
+  disabledTerms: string[];
+}> {
+  const res = await chrome.storage.local.get({
+    [KEYS.customSlopTerms]: [] as string[],
+    [KEYS.disabledSlopTerms]: [] as string[],
+  });
+  return {
+    customTerms: Array.isArray(res[KEYS.customSlopTerms])
+      ? (res[KEYS.customSlopTerms] as string[])
+      : [],
+    disabledTerms: Array.isArray(res[KEYS.disabledSlopTerms])
+      ? (res[KEYS.disabledSlopTerms] as string[])
+      : [],
+  };
+}
+
+export async function setCustomSlopConfig(
+  customTerms: string[],
+  disabledTerms: string[],
+): Promise<void> {
+  await chrome.storage.local.set({
+    [KEYS.customSlopTerms]: [...new Set(customTerms.map((t) => t.trim()).filter(Boolean))],
+    [KEYS.disabledSlopTerms]: [...new Set(disabledTerms.map((t) => t.trim()).filter(Boolean))],
+  });
+}
+
+export async function getCustomSurfaces(): Promise<SurfaceProfile[]> {
+  const res = await chrome.storage.local.get({ [KEYS.customSurfaces]: [] as SurfaceProfile[] });
+  return Array.isArray(res[KEYS.customSurfaces])
+    ? (res[KEYS.customSurfaces] as SurfaceProfile[])
+    : [];
+}
+
+export async function setCustomSurfaces(surfaces: SurfaceProfile[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.customSurfaces]: surfaces });
+}
+
+export async function getStoredWeirpacks(): Promise<StoredWeirpack[]> {
+  const res = await chrome.storage.local.get({ [KEYS.weirpacks]: [] as StoredWeirpack[] });
+  return Array.isArray(res[KEYS.weirpacks]) ? (res[KEYS.weirpacks] as StoredWeirpack[]) : [];
+}
+
+export async function setStoredWeirpacks(packs: StoredWeirpack[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.weirpacks]: packs });
 }

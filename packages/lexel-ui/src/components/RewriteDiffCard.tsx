@@ -6,6 +6,7 @@ export interface GateCheckSummary {
   numbersPreserved: boolean;
   tokensPreserved: boolean;
   surfaceCompliant: boolean;
+  secretsFree?: boolean;
   warnings: string[];
 }
 
@@ -67,6 +68,9 @@ export function RewriteDiffCard({
           <GateChip ok={gates.numbersPreserved} label="Numbers" />
           <GateChip ok={gates.tokensPreserved} label="Code Tokens" />
           <GateChip ok={gates.surfaceCompliant} label="Surface Rules" />
+          {typeof gates.secretsFree === 'boolean' ? (
+            <GateChip ok={gates.secretsFree} label="Secrets Free" />
+          ) : null}
         </div>
       </div>
 

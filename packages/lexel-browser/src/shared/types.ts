@@ -1,8 +1,9 @@
 import type { Dialect, LintConfig } from 'harper.js';
 import type { GateCheckSummary } from 'lexel-ui';
 import type { UnpackedLintGroups } from 'lint-framework';
+import type { MainModelTier, RuntimeKind } from './models';
 
-export type SurfaceId =
+export type BuiltinSurfaceId =
   | 'web_reddit'
   | 'web_x'
   | 'web_github_pr'
@@ -10,6 +11,17 @@ export type SurfaceId =
   | 'web_discord_slack'
   | 'web_email'
   | 'general';
+
+export type SurfaceId = BuiltinSurfaceId | (string & {});
+
+export type LintLanguage = 'plaintext' | 'markdown' | 'typst';
+
+export interface StoredWeirpack {
+  name: string;
+  bytesBase64: string;
+  ruleCount: number;
+  enabled: boolean;
+}
 
 export type AiTaskId =
   | 'fix_grammar_flow'
@@ -21,6 +33,8 @@ export type AiTaskId =
 export type ActivationKey = 'off' | 'shift' | 'control';
 
 export type AiProviderKind = 'ollama' | 'openai_compat';
+
+export type { MainModelTier, RuntimeKind };
 
 export interface QuickActionDef {
   id: AiTaskId;
@@ -56,12 +70,96 @@ export interface DetectedSurfaceContext {
 
 export interface AiSettings {
   enabled: boolean;
+  mainModelTier: MainModelTier;
+  runtime: RuntimeKind;
   provider: AiProviderKind;
   endpoint: string;
+  openAiCompatEndpoint: string;
   model: string;
   temperature: number;
   maxTokens: number;
+  idleUnloadSecs: number;
+  keepWarm: boolean;
   saveVoiceMemory: boolean;
+}
+
+export interface InstalledModelStatus {
+  id: string;
+  tier: string;
+  label: string;
+  description: string;
+  ollamaTag: string;
+  ggufFilename: string;
+  ggufPath: string;
+  ggufInstalled: boolean;
+  ggufSizeValid: boolean;
+  ollamaInstalled: boolean;
+  approxRamMb: number;
+  sizeBytes: number;
+}
+
+export interface DaemonRuntimeSnapshot {
+  activeBackend: string;
+  modelLoaded: boolean;
+  loadedModel: string | null;
+  llamaServerAvailable: boolean;
+  ollamaBinaryAvailable: boolean;
+  ollamaRunning: boolean;
+  ollamaModels: string[];
+  lastError: string | null;
+}
+
+export interface UnifiedDaemonSettings {
+  theme: 'dark' | 'light';
+  aiEnabled: boolean;
+  mainModelTier: MainModelTier;
+  customModel: string;
+  runtime: RuntimeKind;
+  ollamaEndpoint: string;
+  openaiCompatEndpoint: string;
+  temperature: number;
+  maxTokens: number;
+  idleUnloadSecs: number;
+  keepWarm: boolean;
+  saveVoiceMemory: boolean;
+  dialect: number;
+  isolateEnglish: boolean;
+  openSuggestionsOnHover: boolean;
+  activationKey: ActivationKey;
+  lintDelayMs: number;
+  defaultEnable?: boolean;
+  hotkey?: Hotkey;
+  lintConfig: Record<string, boolean | null>;
+  userDictionary: string[];
+  ignoredLints: string;
+  privacyBlocklist: string[];
+  domainStatuses: Record<string, boolean>;
+  surfaceOverrides: Record<string, string>;
+  languageMode?: LintLanguage;
+  customSlopTerms?: string[];
+  disabledSlopTerms?: string[];
+  customSurfaces?: SurfaceProfile[];
+}
+
+export interface DaemonProfile {
+  id: string;
+  name: string;
+  isActive: boolean;
+  settings: UnifiedDaemonSettings;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DaemonStatusPayload {
+  version: string;
+  daemonRunning: boolean;
+  httpPort: number;
+  dataDir: string;
+  modelsDir: string;
+  activeProfile: DaemonProfile;
+  profiles: DaemonProfile[];
+  runtime: DaemonRuntimeSnapshot;
+  models: InstalledModelStatus[];
 }
 
 export interface VoiceExample {
@@ -112,6 +210,7 @@ export type ExtensionRequest =
   | { kind: 'getConfig' }
   | { kind: 'setConfig'; config: LintConfig }
   | { kind: 'getLintDescriptions' }
+  | { kind: 'getDefaultLintConfig' }
   | { kind: 'getDialect' }
   | { kind: 'setDialect'; dialect: Dialect }
   | { kind: 'getIsolateEnglish' }
@@ -126,6 +225,8 @@ export type ExtensionRequest =
   | { kind: 'setHotkey'; hotkey: Hotkey }
   | { kind: 'getDomainStatus'; domain: string }
   | { kind: 'setDomainStatus'; domain: string; enabled: boolean; overrideValue?: boolean }
+  | { kind: 'getDomainStatuses' }
+  | { kind: 'removeDomainStatus'; domain: string }
   | { kind: 'getDefaultStatus' }
   | { kind: 'setDefaultStatus'; enabled: boolean }
   | { kind: 'getEnabledDomains' }
@@ -136,6 +237,9 @@ export type ExtensionRequest =
   | { kind: 'clearIgnoredLints' }
   | { kind: 'getAiSettings' }
   | { kind: 'setAiSettings'; settings: AiSettings }
+  | { kind: 'toggleAi'; enabled: boolean }
+  | { kind: 'setMainModel'; model: string }
+  | { kind: 'unloadAi' }
   | { kind: 'aiHealth' }
   | { kind: 'aiListModels' }
   | {
@@ -145,13 +249,22 @@ export type ExtensionRequest =
       surfaceId: SurfaceId;
       subcontext: string | null;
       threadContext?: string;
+      domain?: string;
     }
+  | { kind: 'getDaemonStatus' }
+  | { kind: 'syncFromDaemon' }
+  | { kind: 'listProfiles' }
+  | { kind: 'createProfile'; name: string; cloneFromActive?: boolean }
+  | { kind: 'switchProfile'; profileId: string }
+  | { kind: 'renameProfile'; profileId: string; name: string }
+  | { kind: 'deleteProfile'; profileId: string }
   | { kind: 'getVoiceExamples'; surfaceId?: SurfaceId }
   | { kind: 'saveVoiceExample'; example: Omit<VoiceExample, 'id' | 'createdAt'> }
   | { kind: 'deleteVoiceExample'; id: string }
   | { kind: 'getPrivacyBlocklist' }
   | { kind: 'setPrivacyBlocklist'; domains: string[] }
   | { kind: 'getSurfaceOverride'; domain: string }
+  | { kind: 'getSurfaceOverrides' }
   | { kind: 'setSurfaceOverride'; domain: string; surfaceId: SurfaceId | null }
   | { kind: 'getTheme' }
   | { kind: 'setTheme'; theme: 'dark' | 'light' }
@@ -161,6 +274,23 @@ export type ExtensionRequest =
   | { kind: 'getActiveDraft' }
   | { kind: 'openSidePanel'; windowId?: number }
   | { kind: 'openOptions' }
+  | { kind: 'getStructuredLintConfig' }
+  | { kind: 'toTitleCase'; text: string }
+  | { kind: 'fixSafeIssues'; text: string; surfaceId: SurfaceId }
+  | { kind: 'loadWeirpack'; name: string; bytesBase64: string }
+  | { kind: 'getWeirpacks' }
+  | { kind: 'toggleWeirpack'; name: string; enabled: boolean }
+  | { kind: 'removeWeirpack'; name: string }
+  | { kind: 'getLanguageMode' }
+  | { kind: 'setLanguageMode'; language: LintLanguage }
+  | { kind: 'getCustomSlopConfig' }
+  | { kind: 'setCustomSlopConfig'; customTerms: string[]; disabledTerms: string[] }
+  | { kind: 'getCustomSurfaces' }
+  | { kind: 'setCustomSurfaces'; surfaces: SurfaceProfile[] }
+  | { kind: 'getStatsSummary' }
+  | { kind: 'exportStats' }
+  | { kind: 'importStats'; statsJson: string }
+  | { kind: 'applySuggestionStat'; text: string; lintKind: string; replacement: string }
   | { kind: 'exportAllData' }
   | { kind: 'purgeAllData' };
 

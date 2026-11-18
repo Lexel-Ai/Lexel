@@ -76,7 +76,7 @@ export default defineManifest({
       ],
     },
   ],
-  permissions: ['storage', 'tabs', 'sidePanel', 'activeTab'],
+  permissions: ['storage', 'tabs', 'sidePanel', 'activeTab', 'nativeMessaging'],
   host_permissions: ['http://127.0.0.1/*', 'http://localhost/*'],
   content_security_policy: {
     extension_pages: makeExtensionCSP(isDev),

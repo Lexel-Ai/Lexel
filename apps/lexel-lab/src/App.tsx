@@ -1,4 +1,10 @@
-import type { Dialect, LintConfig } from 'harper.js';
+import type {
+  Dialect,
+  LintConfig,
+  StructuredLintConfig,
+  Summary,
+  WeirpackTestFailures,
+} from 'harper.js';
 import {
   RewriteDiffCard,
   StatusPill,
@@ -8,6 +14,7 @@ import {
 import type { IgnorableLintBox, UnpackedLint, UnpackedLintGroups } from 'lint-framework';
 import {
   BookOpenCheck,
+  CaseSensitive,
   Check,
   CheckCircle2,
   Copy,
@@ -19,28 +26,67 @@ import {
   PenLine,
   PenTool,
   RefreshCw,
+  ShieldAlert,
   SlidersHorizontal,
   Sun,
+  WandSparkles,
 } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LabSuggestionPopover } from './components/LabSuggestionPopover';
 import { RulesWorkspace } from './components/RulesWorkspace';
 import { SettingsView } from './components/SettingsView';
-import { computeTextStats, LexelLabEngine, type LabLintResult } from './lib/engine';
+import {
+  checkDaemonHealth,
+  createDaemonProfile,
+  deleteDaemonProfile,
+  deleteDaemonVoiceExample,
+  fetchDaemonStatus,
+  listDaemonVoiceExamples,
+  patchDaemonSettings,
+  purgeDaemonAll,
+  rewriteWithDaemon,
+  saveDaemonVoiceExample,
+  setDaemonMainModel,
+  switchDaemonProfile,
+  toggleDaemonAi,
+  unloadDaemonAi,
+} from './lib/daemonClient';
+import {
+  computeWritingMetrics,
+  LexelLabEngine,
+  type LabLintResult,
+  uint8ArrayToBase64,
+} from './lib/engine';
 import { type ActiveLabLint, LabLintController } from './lib/labLintController';
 import { checkLocalAiHealth, generateLocalRewrite, type LocalAiHealth } from './lib/localAi';
+import { MODEL_MANIFEST_SPECS, resolveModelNameForTier } from './lib/models';
 import { LAB_PRESETS } from './lib/presets';
 import { buildRewriteMessages } from './lib/promptBuilder';
 import {
+  applyDaemonProfileToLabState,
   clearLabState,
   createVoiceExampleEntry,
+  labStateToDaemonPatch,
   loadLabState,
   parseImportedLabState,
   saveLabState,
 } from './lib/storage';
-import { getSurfaceProfile, SURFACE_PROFILES } from './lib/surfaces';
-import type { AiSettings, AiTaskId, LabSettingsState, RewriteResult, SurfaceId } from './lib/types';
-import { sanitizeModelOutput, verifyAiRewrite } from './lib/verifier';
+import { listSurfaceProfiles, resolveSurfaceProfile } from './lib/surfaces';
+import type {
+  AiSettings,
+  AiTaskId,
+  DaemonConnectionConfig,
+  LabSettingsState,
+  MainModelTier,
+  RewriteResult,
+  SurfaceId,
+} from './lib/types';
+import {
+  applySafeDeterministicFixes,
+  hasSecrets,
+  sanitizeModelOutput,
+  verifyAiRewrite,
+} from './lib/verifier';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -48,7 +94,7 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 type WorkspaceId = 'studio' | 'rules' | 'settings';
-type InspectorTab = 'diagnostics' | 'ai';
+type InspectorTab = 'diagnostics' | 'stats' | 'ai';
 
 const TASK_OPTIONS: Array<{ id: AiTaskId; label: string }> = [
   { id: 'rewrite_surface', label: 'Match surface style' },
@@ -63,9 +109,11 @@ const DIALECT_NAMES: Record<number, string> = {
   1: 'UK English',
   2: 'AU English',
   3: 'CA English',
+  4: 'IN English',
 };
 
 function lintSignalColor(rule: string, lintKind: string): string {
+  if (rule === 'LexelSecrets') return 'var(--lx-danger)';
   if (lintKind === 'Spelling' || lintKind === 'Typo') return 'var(--lx-danger)';
   if (
     rule === 'LexelAntiSlop' ||
@@ -89,12 +137,16 @@ export function App() {
     grammarCount: 0,
     slopCount: 0,
     surfaceCount: 0,
+    secretCount: 0,
     latencyMs: 0,
   });
   const [activeLint, setActiveLint] = useState<ActiveLabLint | null>(null);
   const [ruleConfig, setRuleConfig] = useState<LintConfig>({});
   const [defaultRuleConfig, setDefaultRuleConfig] = useState<LintConfig>({});
+  const [structuredConfig, setStructuredConfig] = useState<StructuredLintConfig | null>(null);
   const [ruleDescriptions, setRuleDescriptions] = useState<Record<string, string>>({});
+  const [harperStats, setHarperStats] = useState<Summary | null>(null);
+  const [tier0Notice, setTier0Notice] = useState<string | null>(null);
 
   const [aiHealth, setAiHealth] = useState<LocalAiHealth | null>(null);
   const [task, setTask] = useState<AiTaskId>('rewrite_surface');
@@ -110,10 +162,45 @@ export function App() {
   const controllerRef = useRef<LabLintController | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+  const skipNextDaemonPushRef = useRef(false);
+  const daemonConnectedRef = useRef(false);
 
   useEffect(() => {
     saveLabState(state);
   }, [state]);
+
+  useEffect(() => {
+    if (!daemonConnectedRef.current) return;
+    if (skipNextDaemonPushRef.current) {
+      skipNextDaemonPushRef.current = false;
+      return;
+    }
+    const conn = state.daemonConnection;
+    if (!conn.enabled || !conn.token.trim()) return;
+    const timer = window.setTimeout(() => {
+      void patchDaemonSettings(conn, labStateToDaemonPatch(stateRef.current)).catch(() => undefined);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [
+    state.theme,
+    state.dialect,
+    state.isolateEnglish,
+    state.openSuggestionsOnHover,
+    state.activationKey,
+    state.delayMs,
+    state.defaultEnable,
+    state.lintConfig,
+    state.ignoredLints,
+    state.userDictionary,
+    state.privacyBlocklist,
+    state.domainStatuses,
+    state.surfaceOverrides,
+    state.languageMode,
+    state.customSlopTerms,
+    state.disabledSlopTerms,
+    state.customSurfaces,
+    state.aiSettings,
+  ]);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -124,10 +211,103 @@ export function App() {
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
 
-  const refreshAiHealth = useCallback(async (aiSettings: AiSettings) => {
-    const health = await checkLocalAiHealth(aiSettings);
-    setAiHealth(health);
-  }, []);
+  const refreshAiHealth = useCallback(
+    async (aiSettings: AiSettings, connOverride?: DaemonConnectionConfig) => {
+      const conn = connOverride ?? stateRef.current.daemonConnection;
+      if (conn.enabled && conn.token.trim()) {
+        try {
+          const [status, voiceRes] = await Promise.all([
+            fetchDaemonStatus(conn),
+            listDaemonVoiceExamples(conn).catch(() => ({ examples: undefined })),
+          ]);
+          daemonConnectedRef.current = true;
+          skipNextDaemonPushRef.current = true;
+          setState((prev) =>
+            applyDaemonProfileToLabState(prev, status.activeProfile, voiceRes.examples),
+          );
+
+          const activeSettings = status.activeProfile.settings;
+          const effectiveModel = resolveModelNameForTier(
+            activeSettings.mainModelTier,
+            activeSettings.customModel,
+          );
+          const rt = status.runtime;
+          const matched = status.models.find(
+            (m) => m.id === activeSettings.mainModelTier || m.ollamaTag === effectiveModel,
+          );
+          const anyCapable =
+            rt.llamaServerAvailable || rt.ollamaBinaryAvailable || rt.ollamaRunning;
+          const modelAvailable =
+            activeSettings.mainModelTier === 'custom'
+              ? rt.ollamaModels.includes(effectiveModel) || rt.modelLoaded
+              : Boolean(
+                  matched?.ggufInstalled ||
+                    matched?.ollamaInstalled ||
+                    rt.ollamaModels.includes(effectiveModel),
+                );
+          const models = Array.from(
+            new Set([
+              ...status.models
+                .filter((m) => m.ggufInstalled || m.ollamaInstalled)
+                .map((m) => m.ollamaTag),
+              ...rt.ollamaModels,
+            ]),
+          );
+          let error: string | undefined;
+          if (!activeSettings.aiEnabled) {
+            error = 'Local AI is turned off.';
+          } else if (!modelAvailable) {
+            error = `Model "${effectiveModel}" is not downloaded yet. Run \`make setup\`.`;
+          } else if (!anyCapable && activeSettings.runtime === 'auto') {
+            error = 'GGUF models are installed, but neither llama-server nor Ollama was detected.';
+          }
+
+          setAiHealth({
+            ok: activeSettings.aiEnabled && anyCapable && modelAvailable,
+            models,
+            modelAvailable,
+            error,
+            source: 'daemon',
+            daemonConnected: true,
+            runtimeBackend: rt.activeBackend,
+            modelLoaded: rt.modelLoaded,
+            loadedModel: rt.loadedModel,
+            activeProfile: status.activeProfile,
+            profiles: status.profiles,
+            installedModels: status.models,
+          });
+          return;
+        } catch (err) {
+          daemonConnectedRef.current = false;
+          const probe = await checkDaemonHealth(conn.endpoint);
+          const direct = await checkLocalAiHealth(aiSettings);
+          setAiHealth({
+            ...direct,
+            source: 'direct',
+            daemonConnected: false,
+            daemonAuthRequired: Boolean(probe.ok && probe.authRequired),
+            error: (err as Error).message || direct.error,
+          });
+          return;
+        }
+      }
+
+      daemonConnectedRef.current = false;
+      const [probe, direct] = await Promise.all([
+        conn.enabled
+          ? checkDaemonHealth(conn.endpoint)
+          : Promise.resolve({ ok: false, authRequired: false }),
+        checkLocalAiHealth(aiSettings),
+      ]);
+      setAiHealth({
+        ...direct,
+        source: 'direct',
+        daemonConnected: false,
+        daemonAuthRequired: Boolean(probe.ok && probe.authRequired),
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     void refreshAiHealth(state.aiSettings);
@@ -144,14 +324,22 @@ export function App() {
           const result = await engine.lint(text, {
             surfaceId: s.surfaceId,
             dialect: s.dialect,
+            languageMode: s.languageMode,
             isolateEnglish: s.isolateEnglish,
             lintConfig: s.lintConfig,
             userDictionary: s.userDictionary,
             ignoredLints: s.ignoredLints,
+            customSlopTerms: s.customSlopTerms,
+            disabledSlopTerms: s.disabledSlopTerms,
+            customSurfaces: s.customSurfaces,
+            weirpacks: s.weirpacks,
           });
           setWasmStatus('ready');
           setWasmError(null);
           setLintSummary(result);
+          void engine.summarizeStats().then((sum) => {
+            if (sum) setHarperStats(sum);
+          });
           return result.lints;
         } catch (err) {
           setWasmStatus('error');
@@ -180,12 +368,14 @@ export function App() {
         lintConfig: stateRef.current.lintConfig,
         userDictionary: stateRef.current.userDictionary,
         ignoredLints: stateRef.current.ignoredLints,
+        weirpacks: stateRef.current.weirpacks,
       })
       .then(async () => {
         setWasmStatus('ready');
         const meta = await engine.getFullConfigAndDescriptions();
         setRuleConfig(meta.config);
         setDefaultRuleConfig(meta.defaultConfig);
+        setStructuredConfig(meta.structuredConfig);
         setRuleDescriptions(meta.descriptions);
         if (textareaRef.current) {
           controller.attach(textareaRef.current);
@@ -227,15 +417,17 @@ export function App() {
         lintConfig: state.lintConfig,
         userDictionary: state.userDictionary,
         ignoredLints: state.ignoredLints,
+        weirpacks: state.weirpacks,
       })
       .then(async () => {
         const meta = await engine.getFullConfigAndDescriptions();
         setRuleConfig(meta.config);
         setDefaultRuleConfig(meta.defaultConfig);
+        setStructuredConfig(meta.structuredConfig);
         await controllerRef.current?.refresh(true);
       })
       .catch(() => undefined);
-  }, [state.dialect, state.userDictionary]);
+  }, [state.dialect, state.userDictionary, state.weirpacks]);
 
   useEffect(() => {
     if (!state.draftText.trim()) {
@@ -244,14 +436,35 @@ export function App() {
         grammarCount: 0,
         slopCount: 0,
         surfaceCount: 0,
+        secretCount: 0,
         latencyMs: 0,
       });
     }
     void controllerRef.current?.refresh(true);
-  }, [state.surfaceId, state.isolateEnglish, state.lintConfig, state.ignoredLints]);
+  }, [
+    state.surfaceId,
+    state.languageMode,
+    state.isolateEnglish,
+    state.lintConfig,
+    state.ignoredLints,
+    state.customSlopTerms,
+    state.disabledSlopTerms,
+    state.customSurfaces,
+  ]);
 
-  const profile = getSurfaceProfile(state.surfaceId);
-  const textStats = useMemo(() => computeTextStats(state.draftText), [state.draftText]);
+  const allSurfaces = useMemo(
+    () => listSurfaceProfiles(state.customSurfaces),
+    [state.customSurfaces],
+  );
+  const profile = resolveSurfaceProfile(state.surfaceId, state.customSurfaces);
+  const textStats = useMemo(
+    () =>
+      computeWritingMetrics(state.draftText, {
+        slopCount: lintSummary.slopCount,
+        secretCount: lintSummary.secretCount,
+      }),
+    [state.draftText, lintSummary.slopCount, lintSummary.secretCount],
+  );
 
   const flattenedLints = useMemo(() => {
     const items: Array<{ rule: string; lint: UnpackedLint }> = [];
@@ -271,6 +484,12 @@ export function App() {
       setAiError('Write or load a sample draft before running a rewrite.');
       return;
     }
+    if (hasSecrets(state.draftText)) {
+      setWorkspace('studio');
+      setInspectorTab('ai');
+      setAiError('Draft contains detected secrets or PII. Remove sensitive tokens before sending to AI.');
+      return;
+    }
     if (overrideTask) setTask(overrideTask);
     setWorkspace('studio');
     setInspectorTab('ai');
@@ -280,27 +499,43 @@ export function App() {
     const started = performance.now();
 
     try {
-      const messages = buildRewriteMessages({
-        text: state.draftText,
-        task: chosenTask,
-        surfaceId: state.surfaceId,
-        subcontext: state.subcontext.trim() || null,
-        threadContext: chosenTask === 'reply_draft' ? state.threadContext : undefined,
-        voiceExamples: state.voiceExamples,
-      });
-      const raw = await generateLocalRewrite(state.aiSettings, messages);
-      const suggestion = sanitizeModelOutput(raw);
-      const gates = verifyAiRewrite(state.draftText, suggestion, state.surfaceId);
+      const conn = state.daemonConnection;
+      if (conn.enabled && conn.token.trim() && aiHealth?.daemonConnected) {
+        const res = await rewriteWithDaemon(conn, {
+          text: state.draftText,
+          task: chosenTask,
+          surfaceId: state.surfaceId,
+          subcontext: state.subcontext.trim() || null,
+          threadContext: chosenTask === 'reply_draft' ? state.threadContext : undefined,
+        });
+        setRewriteResult(res);
+      } else {
+        const messages = buildRewriteMessages({
+          text: state.draftText,
+          task: chosenTask,
+          surfaceId: state.surfaceId,
+          subcontext: state.subcontext.trim() || null,
+          threadContext: chosenTask === 'reply_draft' ? state.threadContext : undefined,
+          voiceExamples: state.voiceExamples,
+        });
+        const raw = await generateLocalRewrite(state.aiSettings, messages);
+        const suggestion = sanitizeModelOutput(raw);
+        const gates = verifyAiRewrite(state.draftText, suggestion, state.surfaceId, {
+          customSlopTerms: state.customSlopTerms,
+          disabledSlopTerms: state.disabledSlopTerms,
+          customSurfaces: state.customSurfaces,
+        });
 
-      setRewriteResult({
-        original: state.draftText,
-        suggestion,
-        model: state.aiSettings.model,
-        latencyMs: Math.round(performance.now() - started),
-        gates,
-        surfaceId: state.surfaceId,
-        subcontext: state.subcontext.trim() || null,
-      });
+        setRewriteResult({
+          original: state.draftText,
+          suggestion,
+          model: state.aiSettings.model,
+          latencyMs: Math.round(performance.now() - started),
+          gates,
+          surfaceId: state.surfaceId,
+          subcontext: state.subcontext.trim() || null,
+        });
+      }
     } catch (err) {
       setAiError((err as Error).message);
       void refreshAiHealth(state.aiSettings);
@@ -311,6 +546,20 @@ export function App() {
 
   function handleApplyRewrite() {
     if (!rewriteResult) return;
+    if (
+      state.aiSettings.saveVoiceMemory &&
+      state.daemonConnection.enabled &&
+      state.daemonConnection.token.trim() &&
+      aiHealth?.daemonConnected
+    ) {
+      void saveDaemonVoiceExample(state.daemonConnection, {
+        surfaceId: state.surfaceId,
+        subcontext: state.subcontext.trim() || null,
+        original: rewriteResult.original,
+        rewritten: rewriteResult.suggestion,
+        action: 'accepted',
+      }).catch(() => undefined);
+    }
     setState((prev) => {
       const nextExamples = prev.aiSettings.saveVoiceMemory
         ? [
@@ -334,6 +583,70 @@ export function App() {
     requestAnimationFrame(() => void controllerRef.current?.refresh(true));
   }
 
+  async function handleToggleAi(enabled: boolean) {
+    const nextAi = { ...state.aiSettings, enabled };
+    setState((prev) => ({ ...prev, aiSettings: nextAi }));
+    if (aiHealth?.daemonConnected && state.daemonConnection.token.trim()) {
+      await toggleDaemonAi(state.daemonConnection, enabled).catch(() => undefined);
+    }
+    await refreshAiHealth(nextAi);
+  }
+
+  async function handleSelectMainModel(modelSpec: string) {
+    const tier: MainModelTier =
+      modelSpec === 'lexel-0.5b' || modelSpec === '0.5b'
+        ? 'lexel-0.5b'
+        : modelSpec === 'lexel-1.5b' || modelSpec === '1.5b'
+          ? 'lexel-1.5b'
+          : 'custom';
+    const nextModel = resolveModelNameForTier(tier, modelSpec);
+    const nextAi = { ...state.aiSettings, mainModelTier: tier, model: nextModel };
+    setState((prev) => ({ ...prev, aiSettings: nextAi }));
+    if (aiHealth?.daemonConnected && state.daemonConnection.token.trim()) {
+      await setDaemonMainModel(state.daemonConnection, modelSpec).catch(() => undefined);
+    }
+    await refreshAiHealth(nextAi);
+  }
+
+  async function handleUnloadModel() {
+    if (aiHealth?.daemonConnected && state.daemonConnection.token.trim()) {
+      await unloadDaemonAi(state.daemonConnection).catch(() => undefined);
+      await refreshAiHealth(state.aiSettings);
+    }
+  }
+
+  async function handleSyncDaemon(conn: DaemonConnectionConfig) {
+    await refreshAiHealth(state.aiSettings, conn);
+  }
+
+  async function handleCreateProfile(name: string) {
+    if (!state.daemonConnection.token.trim()) return;
+    await createDaemonProfile(state.daemonConnection, name, true);
+    await refreshAiHealth(state.aiSettings);
+  }
+
+  async function handleSwitchProfile(profileId: string) {
+    if (!state.daemonConnection.token.trim()) return;
+    await switchDaemonProfile(state.daemonConnection, profileId);
+    await refreshAiHealth(state.aiSettings);
+  }
+
+  async function handleDeleteProfile(profileId: string) {
+    if (!state.daemonConnection.token.trim()) return;
+    await deleteDaemonProfile(state.daemonConnection, profileId);
+    await refreshAiHealth(state.aiSettings);
+  }
+
+  async function handleDeleteVoiceExample(id: string) {
+    setState((prev) => ({
+      ...prev,
+      voiceExamples: prev.voiceExamples.filter((item) => item.id !== id),
+    }));
+    if (aiHealth?.daemonConnected && state.daemonConnection.token.trim()) {
+      await deleteDaemonVoiceExample(state.daemonConnection, id).catch(() => undefined);
+    }
+  }
+
   async function handleRuleChange(ruleId: string, value: boolean | null) {
     const nextConfig: LintConfig = { ...state.lintConfig, [ruleId]: value };
     setState((prev) => ({ ...prev, lintConfig: nextConfig }));
@@ -342,11 +655,100 @@ export function App() {
     await controllerRef.current?.refresh(true);
   }
 
+  async function handleOneOfManyChange(names: string[], selected: string | null) {
+    const nextConfig: LintConfig = { ...state.lintConfig };
+    for (const id of names) {
+      nextConfig[id] = selected ? id === selected : false;
+    }
+    setState((prev) => ({ ...prev, lintConfig: nextConfig }));
+    await engineRef.current?.setLintConfig(nextConfig);
+    setRuleConfig((prev) => {
+      const updated = { ...prev };
+      for (const id of names) updated[id] = selected ? id === selected : false;
+      return updated;
+    });
+    await controllerRef.current?.refresh(true);
+  }
+
   async function handleResetAllRules() {
     setState((prev) => ({ ...prev, lintConfig: {} }));
     await engineRef.current?.setLintConfig(defaultRuleConfig);
     setRuleConfig(defaultRuleConfig);
     await controllerRef.current?.refresh(true);
+  }
+
+  function handleFixSafeIssues() {
+    if (!state.draftText.trim()) return;
+    const res = applySafeDeterministicFixes(state.draftText, profile, {
+      customSlopTerms: state.customSlopTerms,
+      disabledSlopTerms: state.disabledSlopTerms,
+      customSurfaces: state.customSurfaces,
+    });
+    if (res.fixesApplied === 0) {
+      setTier0Notice('No deterministic slop, em dash, emoji, or hashtag fixes needed.');
+      return;
+    }
+    setState((prev) => ({ ...prev, draftText: res.text }));
+    setTier0Notice(`Applied ${res.fixesApplied} deterministic fix${res.fixesApplied === 1 ? '' : 'es'} offline.`);
+    requestAnimationFrame(() => void controllerRef.current?.refresh(true));
+  }
+
+  async function handleTitleCase() {
+    if (!state.draftText.trim() || !engineRef.current) return;
+    const next = await engineRef.current.toTitleCase(state.draftText);
+    setState((prev) => ({ ...prev, draftText: next }));
+    setTier0Notice('Converted draft to Chicago title case.');
+    requestAnimationFrame(() => void controllerRef.current?.refresh(true));
+  }
+
+  async function handleImportWeirpack(
+    name: string,
+    bytes: Uint8Array,
+    ruleCount: number,
+  ): Promise<WeirpackTestFailures | undefined> {
+    if (!engineRef.current) {
+      throw new Error('Harper WASM engine not ready yet.');
+    }
+    const failures = await engineRef.current.loadWeirpackBytes(bytes);
+    if (failures && Object.keys(failures).length > 0) {
+      return failures;
+    }
+    const bytesBase64 = uint8ArrayToBase64(bytes);
+    setState((prev) => ({
+      ...prev,
+      weirpacks: [
+        ...prev.weirpacks.filter((p) => p.name !== name),
+        { name, bytesBase64, ruleCount, enabled: true },
+      ],
+    }));
+    await controllerRef.current?.refresh(true);
+    return undefined;
+  }
+
+  function handleToggleWeirpack(name: string, enabled: boolean) {
+    setState((prev) => ({
+      ...prev,
+      weirpacks: prev.weirpacks.map((p) => (p.name === name ? { ...p, enabled } : p)),
+    }));
+  }
+
+  function handleRemoveWeirpack(name: string) {
+    setState((prev) => ({
+      ...prev,
+      weirpacks: prev.weirpacks.filter((p) => p.name !== name),
+    }));
+  }
+
+  async function handleExportStats() {
+    if (!engineRef.current) return;
+    const content = await engineRef.current.exportStatsFile();
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'lexel-writing-stats.log';
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   async function handleClearIgnoredLints() {
@@ -566,9 +968,28 @@ export function App() {
             <RulesWorkspace
               ruleConfig={ruleConfig}
               defaultRuleConfig={defaultRuleConfig}
+              structuredConfig={structuredConfig}
               ruleDescriptions={ruleDescriptions}
+              customSlopTerms={state.customSlopTerms}
+              disabledSlopTerms={state.disabledSlopTerms}
+              customSurfaces={state.customSurfaces}
+              weirpacks={state.weirpacks}
               onRuleChange={handleRuleChange}
+              onOneOfManyChange={handleOneOfManyChange}
               onResetAllRules={handleResetAllRules}
+              onUpdateCustomSlop={(customTerms, disabledTerms) =>
+                setState((prev) => ({
+                  ...prev,
+                  customSlopTerms: customTerms,
+                  disabledSlopTerms: disabledTerms,
+                }))
+              }
+              onUpdateCustomSurfaces={(surfaces) =>
+                setState((prev) => ({ ...prev, customSurfaces: surfaces }))
+              }
+              onImportWeirpack={handleImportWeirpack}
+              onToggleWeirpack={handleToggleWeirpack}
+              onRemoveWeirpack={handleRemoveWeirpack}
             />
           ) : workspace === 'settings' ? (
             <SettingsView
@@ -576,10 +997,21 @@ export function App() {
               aiHealth={aiHealth}
               onUpdateState={setState}
               onTestAi={refreshAiHealth}
+              onToggleAi={handleToggleAi}
+              onSelectMainModel={handleSelectMainModel}
+              onUnloadModel={handleUnloadModel}
+              onSyncDaemon={handleSyncDaemon}
+              onCreateProfile={handleCreateProfile}
+              onSwitchProfile={handleSwitchProfile}
+              onDeleteProfile={handleDeleteProfile}
+              onDeleteVoiceExample={handleDeleteVoiceExample}
               onClearIgnoredLints={handleClearIgnoredLints}
               onExportJson={handleExportJson}
               onImportJson={handleImportJson}
               onPurgeAll={() => {
+                if (aiHealth?.daemonConnected && state.daemonConnection.token.trim()) {
+                  void purgeDaemonAll(state.daemonConnection).catch(() => undefined);
+                }
                 const clean = clearLabState();
                 setState(clean);
                 setRewriteResult(null);
@@ -643,7 +1075,7 @@ export function App() {
                         color: 'var(--lx-fg)',
                       }}
                     >
-                      {SURFACE_PROFILES.map((p) => (
+                      {allSurfaces.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.label}
                         </option>
@@ -687,6 +1119,40 @@ export function App() {
                   </label>
                 </div>
 
+                {lintSummary.secretCount > 0 ? (
+                  <div
+                    role="alert"
+                    className="mx-5 mt-3 rounded-[6px] border px-3 py-2 flex items-center gap-2 text-xs font-medium"
+                    style={{
+                      backgroundColor: 'var(--lx-danger-bg)',
+                      borderColor: 'var(--lx-danger)',
+                      color: 'var(--lx-danger)',
+                    }}
+                  >
+                    <ShieldAlert className="w-4 h-4 shrink-0" strokeWidth={1.75} aria-hidden="true" />
+                    <span>
+                      Secrets Guard flagged {lintSummary.secretCount} sensitive token or PII item
+                      {lintSummary.secretCount === 1 ? '' : 's'} in this draft. AI rewrite is paused until removed.
+                    </span>
+                  </div>
+                ) : null}
+
+                {tier0Notice ? (
+                  <div
+                    className="mx-5 mt-2 rounded-[6px] border px-3 py-1.5 flex items-center justify-between gap-2 text-[11px]"
+                    style={{
+                      backgroundColor: 'var(--lx-signal-bg)',
+                      borderColor: 'var(--lx-signal)',
+                      color: 'var(--lx-signal)',
+                    }}
+                  >
+                    <span>{tier0Notice}</span>
+                    <button type="button" onClick={() => setTier0Notice(null)} className="underline">
+                      Dismiss
+                    </button>
+                  </div>
+                ) : null}
+
                 <div className="flex-1 min-h-[260px] p-5 md:p-7 flex flex-col">
                   <textarea
                     ref={textareaRef}
@@ -708,12 +1174,38 @@ export function App() {
                 >
                   <div className="flex flex-wrap items-center gap-3 lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
                     <span>{textStats.words} words</span>
-                    <span>{textStats.sentences} sentences</span>
+                    <span>{textStats.readingTimeSec}s read</span>
+                    <span>Slop {textStats.slopDensity}/100w</span>
                     <span>Grammar {lintSummary.grammarCount}</span>
-                    <span>Slop {lintSummary.slopCount}</span>
                     <span>Platform {lintSummary.surfaceCount}</span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleFixSafeIssues}
+                      className="inline-flex items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
+                      style={{
+                        backgroundColor: 'var(--lx-bg)',
+                        borderColor: 'var(--lx-signal)',
+                        color: 'var(--lx-signal)',
+                      }}
+                    >
+                      <WandSparkles className="w-3 h-3" strokeWidth={1.75} aria-hidden="true" />
+                      <span>Fix Safe Issues</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleTitleCase()}
+                      className="inline-flex items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
+                      style={{
+                        backgroundColor: 'var(--lx-bg)',
+                        borderColor: 'var(--lx-border)',
+                        color: 'var(--lx-fg)',
+                      }}
+                    >
+                      <CaseSensitive className="w-3 h-3" strokeWidth={1.75} aria-hidden="true" />
+                      <span>Title Case</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -779,6 +1271,19 @@ export function App() {
                   <button
                     type="button"
                     role="tab"
+                    aria-selected={inspectorTab === 'stats'}
+                    onClick={() => setInspectorTab('stats')}
+                    className="pb-2.5 text-xs font-semibold border-b-2 transition-colors"
+                    style={{
+                      borderColor: inspectorTab === 'stats' ? 'var(--lx-signal)' : 'transparent',
+                      color: inspectorTab === 'stats' ? 'var(--lx-fg)' : 'var(--lx-fg-muted)',
+                    }}
+                  >
+                    Stats
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
                     aria-selected={inspectorTab === 'ai'}
                     onClick={() => setInspectorTab('ai')}
                     className="pb-2.5 text-xs font-semibold border-b-2 transition-colors"
@@ -791,7 +1296,79 @@ export function App() {
                   </button>
                 </div>
 
-                {inspectorTab === 'diagnostics' ? (
+                {inspectorTab === 'stats' ? (
+                  <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 text-xs">
+                    <div
+                      className="rounded-[8px] border p-3.5 grid grid-cols-2 gap-3"
+                      style={{ borderColor: 'var(--lx-border)', backgroundColor: 'var(--lx-card)' }}
+                    >
+                      <div>
+                        <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          Reading Time
+                        </div>
+                        <div className="text-base font-semibold lexel-mono">{textStats.readingTimeSec}s</div>
+                      </div>
+                      <div>
+                        <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          Slop Density
+                        </div>
+                        <div className="text-base font-semibold lexel-mono">{textStats.slopDensity} / 100w</div>
+                      </div>
+                      <div>
+                        <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          Words / Sentences
+                        </div>
+                        <div className="text-sm font-semibold lexel-mono">
+                          {textStats.words} / {textStats.sentences}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          Secrets Detected
+                        </div>
+                        <div className="text-sm font-semibold lexel-mono">{textStats.secretCount}</div>
+                      </div>
+                    </div>
+
+                    <div
+                      className="rounded-[8px] border p-3.5 flex flex-col gap-2"
+                      style={{ borderColor: 'var(--lx-border)', backgroundColor: 'var(--lx-card)' }}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold">Harper Session Telemetry (Local)</span>
+                        <button
+                          type="button"
+                          onClick={() => void handleExportStats()}
+                          className="rounded-[6px] border px-2 py-1 text-[11px]"
+                          style={{ borderColor: 'var(--lx-border)', backgroundColor: 'var(--lx-surface)' }}
+                        >
+                          Export Log
+                        </button>
+                      </div>
+                      {harperStats ? (
+                        <div className="space-y-1.5 lexel-mono text-[11px]">
+                          <div>Total fixes recorded: {harperStats.total_applied}</div>
+                          {Object.keys(harperStats.lint_counts).length > 0 ? (
+                            <div className="pt-1 border-t space-y-1" style={{ borderColor: 'var(--lx-border)' }}>
+                              {Object.entries(harperStats.lint_counts)
+                                .slice(0, 8)
+                                .map(([kind, count]) => (
+                                  <div key={kind} className="flex justify-between">
+                                    <span>{kind}</span>
+                                    <span>{count}</span>
+                                  </div>
+                                ))}
+                            </div>
+                          ) : (
+                            <div style={{ color: 'var(--lx-fg-muted)' }}>No Harper fixes recorded yet.</div>
+                          )}
+                        </div>
+                      ) : (
+                        <div style={{ color: 'var(--lx-fg-muted)' }}>Run checks to collect local stats.</div>
+                      )}
+                    </div>
+                  </div>
+                ) : inspectorTab === 'diagnostics' ? (
                   <div className="flex-1 overflow-y-auto divide-y" style={{ borderColor: 'var(--lx-border)' }}>
                     {flattenedLints.length === 0 ? (
                       <div className="p-6 text-xs space-y-2" style={{ color: 'var(--lx-fg-muted)' }}>
@@ -931,11 +1508,7 @@ export function App() {
                         <span>Local AI is turned off.</span>
                         <button
                           type="button"
-                          onClick={() => {
-                            const nextAi = { ...state.aiSettings, enabled: true };
-                            setState((prev) => ({ ...prev, aiSettings: nextAi }));
-                            void refreshAiHealth(nextAi);
-                          }}
+                          onClick={() => void handleToggleAi(true)}
                           className="rounded-[6px] px-2.5 py-1 text-xs font-semibold shrink-0"
                           style={{
                             backgroundColor: 'var(--lx-accent)',
@@ -959,11 +1532,7 @@ export function App() {
                           <select
                             aria-label="Switch available model"
                             value={state.aiSettings.model}
-                            onChange={(e) => {
-                              const nextAi = { ...state.aiSettings, model: e.target.value };
-                              setState((prev) => ({ ...prev, aiSettings: nextAi }));
-                              void refreshAiHealth(nextAi);
-                            }}
+                            onChange={(e) => void handleSelectMainModel(e.target.value)}
                             className="rounded-[6px] border px-2 py-1 text-xs lexel-mono"
                             style={{
                               backgroundColor: 'var(--lx-bg)',
@@ -1012,27 +1581,58 @@ export function App() {
                       </div>
                     ) : null}
 
-                    <label className="flex flex-col gap-1 text-xs">
-                      <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                        Rewrite Action
-                      </span>
-                      <select
-                        value={task}
-                        onChange={(e) => setTask(e.target.value as AiTaskId)}
-                        className="rounded-[6px] border px-2.5 py-1.5 text-xs"
-                        style={{
-                          backgroundColor: 'var(--lx-bg)',
-                          borderColor: 'var(--lx-border)',
-                          color: 'var(--lx-fg)',
-                        }}
-                      >
-                        {TASK_OPTIONS.map((opt) => (
-                          <option key={opt.id} value={opt.id}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <label className="flex flex-col gap-1 text-xs">
+                        <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          Rewrite Action
+                        </span>
+                        <select
+                          value={task}
+                          onChange={(e) => setTask(e.target.value as AiTaskId)}
+                          className="rounded-[6px] border px-2.5 py-1.5 text-xs"
+                          style={{
+                            backgroundColor: 'var(--lx-bg)',
+                            borderColor: 'var(--lx-border)',
+                            color: 'var(--lx-fg)',
+                          }}
+                        >
+                          {TASK_OPTIONS.map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="flex flex-col gap-1 text-xs">
+                        <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          Main Model
+                        </span>
+                        <select
+                          value={
+                            state.aiSettings.mainModelTier === 'custom'
+                              ? state.aiSettings.model
+                              : state.aiSettings.mainModelTier
+                          }
+                          onChange={(e) => void handleSelectMainModel(e.target.value)}
+                          className="rounded-[6px] border px-2.5 py-1.5 text-xs"
+                          style={{
+                            backgroundColor: 'var(--lx-bg)',
+                            borderColor: 'var(--lx-border)',
+                            color: 'var(--lx-fg)',
+                          }}
+                        >
+                          {MODEL_MANIFEST_SPECS.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.label}
+                            </option>
+                          ))}
+                          {state.aiSettings.mainModelTier === 'custom' ? (
+                            <option value={state.aiSettings.model}>{state.aiSettings.model}</option>
+                          ) : null}
+                        </select>
+                      </label>
+                    </div>
 
                     {task === 'reply_draft' ? (
                       <label className="flex flex-col gap-1 text-xs">

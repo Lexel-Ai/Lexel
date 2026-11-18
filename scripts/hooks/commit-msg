@@ -14,7 +14,7 @@ if [[ "$first_line" =~ ^(Merge|Revert)\  ]]; then
   exit 0
 fi
 
-pattern='^(feat|fix|perf|refactor|sec|arch|ml|sync|test|infra|docs|revert)(\([a-z0-9_-]+\))?(!)?: .{3,100}$'
+pattern='^(feat|fix|perf|refactor|sec|arch|ml|sync|test|infra|docs|revert)(\([a-z0-9_-]+(,[a-z0-9_-]+)*\))?(!)?: .{3,100}$'
 if [[ ! "$first_line" =~ $pattern ]]; then
   echo "ERROR: Commit headline must follow Lexel Conventional Commit format:" >&2
   echo "  <type>(<scope>): <imperative summary>" >&2

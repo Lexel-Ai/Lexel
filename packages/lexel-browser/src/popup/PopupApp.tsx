@@ -10,8 +10,14 @@ import {
 } from 'lexel-ui';
 import React, { useEffect, useState } from 'react';
 import type { LocalAiHealth } from '../shared/localAiClient';
+import { MODEL_MANIFEST_SPECS } from '../shared/models';
 import { detectSurfaceFromLocation, SURFACE_PROFILES } from '../shared/surfaceDetector';
-import type { AiSettings, DetectedSurfaceContext, PageLintSummary, SurfaceId } from '../shared/types';
+import type {
+  AiSettings,
+  DetectedSurfaceContext,
+  PageLintSummary,
+  SurfaceId,
+} from '../shared/types';
 
 export function PopupApp() {
   const [loading, setLoading] = useState(true);
@@ -20,6 +26,7 @@ export function PopupApp() {
   const [windowId, setWindowId] = useState<number | undefined>(undefined);
   const [tabUrl, setTabUrl] = useState('');
   const [domainEnabled, setDomainEnabled] = useState(true);
+  const [defaultEnable, setDefaultEnable] = useState(true);
   const [surfaceCtx, setSurfaceCtx] = useState<DetectedSurfaceContext | null>(null);
   const [surfaceOverride, setSurfaceOverride] = useState<SurfaceId | null>(null);
   const [dialect, setDialect] = useState<Dialect>(0);
@@ -27,81 +34,96 @@ export function PopupApp() {
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
   const [aiHealth, setAiHealth] = useState<LocalAiHealth | null>(null);
   const [summary, setSummary] = useState<PageLintSummary | null>(null);
+  const [copiedCmd, setCopiedCmd] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  async function refreshAll() {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = tab?.url ?? '';
+    const domain = url.startsWith('http') ? new URL(url).hostname : 'general';
+
+    const [
+      themeRes,
+      domainRes,
+      defaultRes,
+      overrideRes,
+      blocklistRes,
+      dialectRes,
+      hoverRes,
+      aiRes,
+      healthRes,
+      summaryRes,
+    ] = await Promise.all([
+      chrome.runtime.sendMessage({ kind: 'getTheme' }) as Promise<{ theme: 'dark' | 'light' }>,
+      chrome.runtime.sendMessage({ kind: 'getDomainStatus', domain }) as Promise<{
+        enabled: boolean;
+      }>,
+      chrome.runtime.sendMessage({ kind: 'getDefaultStatus' }) as Promise<{ enabled: boolean }>,
+      chrome.runtime.sendMessage({ kind: 'getSurfaceOverride', domain }) as Promise<{
+        surfaceId: SurfaceId | null;
+      }>,
+      chrome.runtime.sendMessage({ kind: 'getPrivacyBlocklist' }) as Promise<{
+        domains: string[];
+      }>,
+      chrome.runtime.sendMessage({ kind: 'getDialect' }) as Promise<{ dialect: Dialect }>,
+      chrome.runtime.sendMessage({ kind: 'getOpenSuggestionsOnHover' }) as Promise<{
+        enabled: boolean;
+      }>,
+      chrome.runtime.sendMessage({ kind: 'getAiSettings' }) as Promise<{
+        settings: AiSettings;
+      }>,
+      chrome.runtime.sendMessage({ kind: 'aiHealth' }) as Promise<LocalAiHealth>,
+      tab?.id != null
+        ? (chrome.runtime.sendMessage({
+            kind: 'getPageSummary',
+            tabId: tab.id,
+          }) as Promise<{ summary: PageLintSummary | null }>)
+        : Promise.resolve({ summary: null }),
+    ]);
+
+    setTabId(tab?.id ?? null);
+    setWindowId(tab?.windowId);
+    setTabUrl(url);
+    setTheme(themeRes.theme);
+    setDomainEnabled(domainRes.enabled);
+    setDefaultEnable(defaultRes.enabled);
+    setSurfaceOverride(overrideRes.surfaceId);
+    setSurfaceCtx(
+      detectSurfaceFromLocation(url || domain, {
+        blocklist: blocklistRes.domains,
+        overrideSurface: overrideRes.surfaceId,
+      }),
+    );
+    setDialect(dialectRes.dialect);
+    setHoverFixes(hoverRes.enabled);
+    setAiSettings(aiRes.settings);
+    setAiHealth(healthRes);
+    setSummary(summaryRes.summary);
+  }
+
   useEffect(() => {
-    (async () => {
-      try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        const url = tab?.url ?? '';
-        const domain = url.startsWith('http') ? new URL(url).hostname : 'general';
-
-        const [
-          themeRes,
-          domainRes,
-          overrideRes,
-          blocklistRes,
-          dialectRes,
-          hoverRes,
-          aiRes,
-          healthRes,
-          summaryRes,
-        ] = await Promise.all([
-          chrome.runtime.sendMessage({ kind: 'getTheme' }) as Promise<{ theme: 'dark' | 'light' }>,
-          chrome.runtime.sendMessage({ kind: 'getDomainStatus', domain }) as Promise<{
-            enabled: boolean;
-          }>,
-          chrome.runtime.sendMessage({ kind: 'getSurfaceOverride', domain }) as Promise<{
-            surfaceId: SurfaceId | null;
-          }>,
-          chrome.runtime.sendMessage({ kind: 'getPrivacyBlocklist' }) as Promise<{
-            domains: string[];
-          }>,
-          chrome.runtime.sendMessage({ kind: 'getDialect' }) as Promise<{ dialect: Dialect }>,
-          chrome.runtime.sendMessage({ kind: 'getOpenSuggestionsOnHover' }) as Promise<{
-            enabled: boolean;
-          }>,
-          chrome.runtime.sendMessage({ kind: 'getAiSettings' }) as Promise<{
-            settings: AiSettings;
-          }>,
-          chrome.runtime.sendMessage({ kind: 'aiHealth' }) as Promise<LocalAiHealth>,
-          tab?.id != null
-            ? (chrome.runtime.sendMessage({
-                kind: 'getPageSummary',
-                tabId: tab.id,
-              }) as Promise<{ summary: PageLintSummary | null }>)
-            : Promise.resolve({ summary: null }),
-        ]);
-
-        setTabId(tab?.id ?? null);
-        setWindowId(tab?.windowId);
-        setTabUrl(url);
-        setTheme(themeRes.theme);
-        setDomainEnabled(domainRes.enabled);
-        setSurfaceOverride(overrideRes.surfaceId);
-        setSurfaceCtx(
-          detectSurfaceFromLocation(url || domain, {
-            blocklist: blocklistRes.domains,
-            overrideSurface: overrideRes.surfaceId,
-          }),
-        );
-        setDialect(dialectRes.dialect);
-        setHoverFixes(hoverRes.enabled);
-        setAiSettings(aiRes.settings);
-        setAiHealth(healthRes);
-        setSummary(summaryRes.summary);
-      } catch (err) {
-        setError((err as Error).message);
-      } finally {
-        setLoading(false);
-      }
-    })();
+    refreshAll()
+      .catch((err) => setError((err as Error).message))
+      .finally(() => setLoading(false));
   }, []);
 
   async function handleThemeToggle() {
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
     await chrome.runtime.sendMessage({ kind: 'setTheme', theme: next });
+  }
+
+  async function handleDefaultEnableToggle() {
+    const next = !defaultEnable;
+    setDefaultEnable(next);
+    await chrome.runtime.sendMessage({ kind: 'setDefaultStatus', enabled: next });
+    if (surfaceCtx) {
+      const domainRes = (await chrome.runtime.sendMessage({
+        kind: 'getDomainStatus',
+        domain: surfaceCtx.domain,
+      })) as { enabled: boolean };
+      setDomainEnabled(domainRes.enabled);
+    }
   }
 
   async function handleDomainToggle() {
@@ -149,24 +171,38 @@ export function PopupApp() {
 
   async function handleModelChange(model: string) {
     if (!aiSettings) return;
-    const next = { ...aiSettings, model };
-    setAiSettings(next);
-    await chrome.runtime.sendMessage({ kind: 'setAiSettings', settings: next });
-    const health = (await chrome.runtime.sendMessage({ kind: 'aiHealth' })) as LocalAiHealth;
-    setAiHealth(health);
+    const res = (await chrome.runtime.sendMessage({
+      kind: 'setMainModel',
+      model,
+    })) as { health?: LocalAiHealth };
+    const nextAiRes = (await chrome.runtime.sendMessage({
+      kind: 'getAiSettings',
+    })) as { settings: AiSettings };
+    setAiSettings(nextAiRes.settings);
+    if (res.health) {
+      setAiHealth(res.health);
+    }
   }
 
   async function handleToggleAiEnabled() {
     if (!aiSettings) return;
-    const next = { ...aiSettings, enabled: !aiSettings.enabled };
-    setAiSettings(next);
-    await chrome.runtime.sendMessage({ kind: 'setAiSettings', settings: next });
-    if (next.enabled) {
-      const health = (await chrome.runtime.sendMessage({ kind: 'aiHealth' })) as LocalAiHealth;
-      setAiHealth(health);
-    } else {
-      setAiHealth({ ok: false, models: [], error: 'Local AI is turned off.' });
+    const nextEnabled = !aiSettings.enabled;
+    setAiSettings({ ...aiSettings, enabled: nextEnabled });
+    const res = (await chrome.runtime.sendMessage({
+      kind: 'toggleAi',
+      enabled: nextEnabled,
+    })) as { health?: LocalAiHealth; activationError?: string | null };
+    if (res.health) {
+      setAiHealth({
+        ...res.health,
+        error: res.activationError ?? res.health.error,
+      });
     }
+  }
+
+  async function handleProfileSwitch(profileId: string) {
+    await chrome.runtime.sendMessage({ kind: 'switchProfile', profileId });
+    await refreshAll();
   }
 
   async function handleRetryAiHealth() {
@@ -214,13 +250,23 @@ export function PopupApp() {
         ? 'Model Missing'
         : 'Local AI Offline';
 
-  const modelChoices = Array.from(
-    new Set([aiSettings?.model ?? 'qwen2.5:1.5b', 'qwen2.5:1.5b', 'qwen2.5:0.5b', ...(aiHealth?.models ?? [])]),
+  const selectValue =
+    aiSettings?.mainModelTier === 'lexel-0.5b'
+      ? 'lexel-0.5b'
+      : aiSettings?.mainModelTier === 'lexel-1.5b'
+        ? 'lexel-1.5b'
+        : aiSettings?.model ?? 'lexel-1.5b';
+
+  const customModels = (aiHealth?.models ?? []).filter(
+    (m) => m !== 'qwen2.5:0.5b' && m !== 'qwen2.5:1.5b',
   );
 
   return (
-    <div data-theme={theme} className="lexel-root w-[360px] min-h-[420px] p-4 flex flex-col gap-3">
-      <header className="flex items-center justify-between gap-2 pb-2 border-b" style={{ borderColor: 'var(--lx-border)' }}>
+    <div data-theme={theme} className="lexel-root w-[370px] min-h-[440px] p-4 flex flex-col gap-3">
+      <header
+        className="flex items-center justify-between gap-2 pb-2 border-b"
+        style={{ borderColor: 'var(--lx-border)' }}
+      >
         <div className="flex items-center gap-2">
           <NibIcon className="w-5 h-5" />
           <h1 className="text-base font-semibold tracking-tight m-0">Lexel</h1>
@@ -248,6 +294,40 @@ export function PopupApp() {
         </div>
       ) : surfaceCtx ? (
         <>
+          {aiHealth?.daemonConnected && aiHealth.activeProfile ? (
+            <div
+              className="rounded-[6px] border px-2.5 py-1.5 flex items-center justify-between gap-2 text-xs"
+              style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+            >
+              <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                Synced Account
+              </span>
+              {aiHealth.profiles && aiHealth.profiles.length > 1 ? (
+                <select
+                  aria-label="Active local account profile"
+                  value={aiHealth.activeProfile.id}
+                  onChange={(e) => void handleProfileSwitch(e.target.value)}
+                  className="rounded-[4px] border px-2 py-0.5 text-xs font-medium"
+                  style={{
+                    backgroundColor: 'var(--lx-bg)',
+                    borderColor: 'var(--lx-border)',
+                    color: 'var(--lx-fg)',
+                  }}
+                >
+                  {aiHealth.profiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="font-medium lexel-mono text-[11px]" style={{ color: 'var(--lx-signal)' }}>
+                  {aiHealth.activeProfile.name}
+                </span>
+              )}
+            </div>
+          ) : null}
+
           <section
             className="rounded-[8px] border p-3 flex flex-col gap-2.5"
             style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
@@ -265,12 +345,14 @@ export function PopupApp() {
                 disabled={surfaceCtx.isBlocked}
                 className="rounded-[6px] border px-2.5 py-1 text-xs font-semibold"
                 style={{
-                  backgroundColor: domainEnabled && !surfaceCtx.isBlocked ? 'var(--lx-accent)' : 'var(--lx-muted)',
+                  backgroundColor:
+                    domainEnabled && !surfaceCtx.isBlocked ? 'var(--lx-accent)' : 'var(--lx-muted)',
                   borderColor: 'var(--lx-border)',
-                  color: domainEnabled && !surfaceCtx.isBlocked ? 'var(--lx-on-accent)' : 'var(--lx-fg)',
+                  color:
+                    domainEnabled && !surfaceCtx.isBlocked ? 'var(--lx-on-accent)' : 'var(--lx-fg)',
                 }}
               >
-                {surfaceCtx.isBlocked ? 'Blocked' : domainEnabled ? 'Active' : 'Paused'}
+                {surfaceCtx.isBlocked ? 'Blocked' : domainEnabled ? 'Site On' : 'Site Paused'}
               </button>
             </div>
 
@@ -317,21 +399,32 @@ export function PopupApp() {
                     <option value={1}>British</option>
                     <option value={2}>Australian</option>
                     <option value={3}>Canadian</option>
+                    <option value={4}>Indian</option>
                   </select>
                 </label>
               </div>
             )}
 
-            {!surfaceCtx.isBlocked ? (
-              <label className="flex items-center justify-between gap-2 pt-1 text-xs">
-                <span style={{ color: 'var(--lx-fg-muted)' }}>Hover underline to fix</span>
+            <div className="flex flex-col gap-1.5 pt-1 text-xs">
+              {!surfaceCtx.isBlocked ? (
+                <label className="flex items-center justify-between gap-2">
+                  <span style={{ color: 'var(--lx-fg-muted)' }}>Hover underline to fix</span>
+                  <input
+                    type="checkbox"
+                    checked={hoverFixes}
+                    onChange={() => void handleHoverFixesToggle()}
+                  />
+                </label>
+              ) : null}
+              <label className="flex items-center justify-between gap-2">
+                <span style={{ color: 'var(--lx-fg-muted)' }}>Enable extension on new sites</span>
                 <input
                   type="checkbox"
-                  checked={hoverFixes}
-                  onChange={() => void handleHoverFixesToggle()}
+                  checked={defaultEnable}
+                  onChange={() => void handleDefaultEnableToggle()}
                 />
               </label>
-            ) : null}
+            </div>
           </section>
 
           <section
@@ -365,11 +458,18 @@ export function PopupApp() {
             style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium">Local AI Rewrites (Tier 1)</span>
+              <div className="min-w-0">
+                <span className="text-xs font-medium">Local AI Rewrites (Tier 1)</span>
+                {aiHealth?.daemonConnected && aiHealth.runtimeBackend ? (
+                  <div className="text-[10px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
+                    via lexel-daemon ({aiHealth.runtimeBackend})
+                  </div>
+                ) : null}
+              </div>
               <button
                 type="button"
                 onClick={() => void handleToggleAiEnabled()}
-                className="rounded-[6px] border px-2.5 py-1 text-xs font-semibold"
+                className="rounded-[6px] border px-2.5 py-1 text-xs font-semibold shrink-0"
                 style={{
                   backgroundColor: aiSettings?.enabled ? 'var(--lx-accent)' : 'var(--lx-muted)',
                   borderColor: 'var(--lx-border)',
@@ -383,20 +483,25 @@ export function PopupApp() {
             {aiSettings?.enabled ? (
               <>
                 <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                  <span>Model</span>
+                  <span>Main Model</span>
                   <select
-                    value={aiSettings.model}
+                    value={selectValue}
                     onChange={(e) => void handleModelChange(e.target.value)}
-                    className="rounded-[6px] border px-2 py-1.5 text-xs lexel-mono"
+                    className="rounded-[6px] border px-2 py-1.5 text-xs"
                     style={{
                       backgroundColor: 'var(--lx-muted)',
                       borderColor: 'var(--lx-border)',
                       color: 'var(--lx-fg)',
                     }}
                   >
-                    {modelChoices.map((m) => (
+                    {MODEL_MANIFEST_SPECS.map((spec) => (
+                      <option key={spec.id} value={spec.id}>
+                        {spec.label} · ~{spec.approxRamMb} MB RAM
+                      </option>
+                    ))}
+                    {customModels.map((m) => (
                       <option key={m} value={m}>
-                        {m}
+                        Custom: {m}
                       </option>
                     ))}
                   </select>
@@ -407,7 +512,7 @@ export function PopupApp() {
                     <p className="text-[11px] m-0 leading-snug" style={{ color: 'var(--lx-warn)' }}>
                       {aiHealth.error}
                     </p>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         onClick={() => void handleRetryAiHealth()}
@@ -420,29 +525,31 @@ export function PopupApp() {
                       >
                         Retry connection
                       </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void navigator.clipboard.writeText(
-                            'OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*" ollama serve',
-                          )
-                        }
-                        className="rounded-[6px] border px-2 py-1 text-[11px]"
-                        style={{
-                          backgroundColor: 'var(--lx-bg)',
-                          borderColor: 'var(--lx-border)',
-                          color: 'var(--lx-fg-muted)',
-                        }}
-                      >
-                        Copy Ollama cmd
-                      </button>
+                      {aiHealth.nativeHostCommand ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(aiHealth.nativeHostCommand!);
+                            setCopiedCmd(true);
+                            window.setTimeout(() => setCopiedCmd(false), 1500);
+                          }}
+                          className="rounded-[6px] border px-2 py-1 text-[11px]"
+                          style={{
+                            backgroundColor: 'var(--lx-bg)',
+                            borderColor: 'var(--lx-border)',
+                            color: 'var(--lx-fg-muted)',
+                          }}
+                        >
+                          {copiedCmd ? 'Copied command' : 'Copy host command'}
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}
               </>
             ) : (
               <p className="text-[11px] m-0" style={{ color: 'var(--lx-fg-muted)' }}>
-                AI is shut down (0 MB LLM RAM). Harper grammar and anti-slop checks stay active.
+                AI is unloaded (0 MB model RAM). Harper grammar and anti-slop checks stay active.
               </p>
             )}
           </section>
