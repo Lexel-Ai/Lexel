@@ -657,6 +657,9 @@ export function App() {
                     ref={textareaRef}
                     value={state.draftText}
                     onChange={(e) => setState((prev) => ({ ...prev, draftText: e.target.value }))}
+                    data-lexel-ignore="true"
+                    data-enable-grammarly="false"
+                    spellCheck={false}
                     placeholder="Write or paste a draft here. Hover or click any underlined word to fix it..."
                     aria-label="Lexel Lab draft editor"
                     className="w-full flex-1 bg-transparent border-0 text-[15px] leading-[1.7] resize-none focus:outline-none"
@@ -990,6 +993,9 @@ export function App() {
                           onChange={(e) =>
                             setState((prev) => ({ ...prev, threadContext: e.target.value }))
                           }
+                          data-lexel-ignore="true"
+                          data-enable-grammarly="false"
+                          spellCheck={false}
                           placeholder="Paste the post or comment you are replying to..."
                           className="rounded-[6px] border p-2 text-xs resize-y"
                           style={{
