@@ -2,12 +2,16 @@ import {
   applyRulePreset,
   applySafeGrammarLints,
   normalizeTypography,
+  resetSurfaceOverride,
   toSentenceCase,
   toTitleCase,
+  upsertSurfaceOverride,
 } from 'lexel-ui';
 import { describe, expect, it } from 'vitest';
 import { computeWritingMetrics } from '../src/lib/engine';
 import { LAB_PRESETS } from '../src/lib/presets';
+import { buildRewriteMessages } from '../src/lib/promptBuilder';
+import { getSurfaceProfile } from '../src/lib/surfaces';
 import {
   applySafeDeterministicFixes,
   scanSecretsAndPii,
@@ -69,5 +73,26 @@ describe('lexel-lab zero-AI enhancements', () => {
     expect(
       scanSecretsAndPii('NPM=npm_abcdefghijklmnopqrstuvwxyz123456').map((s) => s.kind),
     ).toContain('npm_token');
+  });
+
+  it('uses custom surface prompt overrides in buildRewriteMessages and resets cleanly', () => {
+    const baseLinkedin = getSurfaceProfile('web_linkedin');
+    const customSurfaces = upsertSurfaceOverride([], baseLinkedin, {
+      promptDirective: 'Write strictly bullet points with zero fluff.',
+      maxChars: 600,
+    });
+
+    const msgs = buildRewriteMessages({
+      text: 'We reduced build times.',
+      task: 'rewrite_surface',
+      surfaceId: 'web_linkedin',
+      subcontext: null,
+      voiceExamples: [],
+      customSurfaces,
+    });
+    expect(msgs[0].content).toContain('Write strictly bullet points with zero fluff.');
+    expect(msgs[0].content).toContain('Max characters: 600');
+
+    expect(resetSurfaceOverride(customSurfaces, 'web_linkedin')).toEqual([]);
   });
 });

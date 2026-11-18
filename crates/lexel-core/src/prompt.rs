@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AiTaskId, CoreError, SurfaceCatalog, VoiceExample};
+use crate::{AiTaskId, CoreError, SurfaceCatalog, SurfaceProfile, VoiceExample};
 
 /// Chat message passed to a local inference backend.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,7 +71,7 @@ pub fn select_relevant_voice_examples<'a>(
         .collect()
 }
 
-/// Build the structured system/user chat messages consumed by local models.
+/// Build the structured system/user chat messages consumed by local models using embedded defaults.
 pub fn build_rewrite_messages(
     text: &str,
     task: AiTaskId,
@@ -80,7 +80,28 @@ pub fn build_rewrite_messages(
     thread_context: Option<&str>,
     voice_examples: &[VoiceExample],
 ) -> Result<Vec<ChatMessage>, CoreError> {
-    let catalog = SurfaceCatalog::load_embedded()?;
+    build_rewrite_messages_with_surfaces(
+        text,
+        task,
+        surface_id,
+        subcontext,
+        thread_context,
+        voice_examples,
+        &[],
+    )
+}
+
+/// Build the structured system/user chat messages consumed by local models, applying custom surface overrides.
+pub fn build_rewrite_messages_with_surfaces(
+    text: &str,
+    task: AiTaskId,
+    surface_id: &str,
+    subcontext: Option<&str>,
+    thread_context: Option<&str>,
+    voice_examples: &[VoiceExample],
+    custom_surfaces: &[SurfaceProfile],
+) -> Result<Vec<ChatMessage>, CoreError> {
+    let catalog = SurfaceCatalog::load_with_custom(custom_surfaces)?;
     let profile = catalog.get(surface_id)?;
     let selected = select_relevant_voice_examples(voice_examples, surface_id, text, 2);
 

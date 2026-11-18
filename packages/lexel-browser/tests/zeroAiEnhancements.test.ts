@@ -3,12 +3,17 @@ import {
   applyRulePreset,
   applySafeGrammarLints,
   computeReadabilityMetrics,
+  getBuiltinSurfaceDefault,
+  isSurfaceProfileCustomized,
   normalizeTypography,
+  resetSurfaceOverride,
   toSentenceCase,
   toTitleCase,
+  upsertSurfaceOverride,
 } from 'lexel-ui';
 import { describe, expect, it } from 'vitest';
-import { detectSurfaceFromLocation } from '../src/shared/surfaceDetector';
+import { buildRewriteMessages } from '../src/shared/promptBuilder';
+import { detectSurfaceFromLocation, getSurfaceProfile } from '../src/shared/surfaceDetector';
 import {
   applySafeDeterministicFixes,
   findSlopMatches,
@@ -165,5 +170,36 @@ describe('zero-AI enhancements in lexel-ui & lexel-browser', () => {
     ]);
     expect(grammarFixed.applied).toBe(2);
     expect(grammarFixed.text).toBe('Here is a typo and an error.');
+  });
+
+  it('supports customizable per-surface prompts and resets back to shipped defaults', () => {
+    const baseReddit = getSurfaceProfile('web_reddit');
+    const overrideList = upsertSurfaceOverride([], baseReddit, {
+      promptDirective: 'Keep replies under three crisp sentences.',
+      allowLinks: true,
+    });
+    expect(overrideList.length).toBe(1);
+    expect(
+      isSurfaceProfileCustomized(getBuiltinSurfaceDefault('web_reddit'), overrideList[0]),
+    ).toBe(true);
+
+    const messages = buildRewriteMessages({
+      text: 'Checking latency today.',
+      task: 'rewrite_surface',
+      surfaceId: 'web_reddit',
+      subcontext: 'r/rust',
+      voiceExamples: [],
+      customSurfaces: overrideList,
+    });
+    expect(messages[0].content).toContain('Keep replies under three crisp sentences.');
+
+    const pruned = upsertSurfaceOverride(overrideList, overrideList[0], {
+      promptDirective: baseReddit.promptDirective,
+      allowLinks: baseReddit.allowLinks,
+    });
+    expect(pruned).toEqual([]);
+
+    const resetList = resetSurfaceOverride(overrideList, 'web_reddit');
+    expect(resetList).toEqual([]);
   });
 });

@@ -6,12 +6,16 @@ import type {
   WeirpackTestFailures,
 } from 'harper.js';
 import {
+  BUILTIN_SURFACES,
+  EditableSurfaceCard,
   RewriteDiffCard,
   StatusPill,
   SurfaceBadge,
   applyRulePreset,
   normalizeTypography,
+  resetSurfaceOverride,
   toSentenceCase,
+  upsertSurfaceOverride,
   type AiHealthState,
   type RulePresetId,
 } from 'lexel-ui';
@@ -527,6 +531,7 @@ export function App() {
           subcontext: state.subcontext.trim() || null,
           threadContext: chosenTask === 'reply_draft' ? state.threadContext : undefined,
           voiceExamples: state.voiceExamples,
+          customSurfaces: state.customSurfaces,
         });
         const raw = await generateLocalRewrite(state.aiSettings, messages);
         const suggestion = sanitizeModelOutput(raw);
@@ -1758,19 +1763,22 @@ export function App() {
                   </div>
                 ) : (
                   <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
-                    <div
-                      className="rounded-[6px] border px-3 py-2 text-[11px]"
-                      style={{
-                        backgroundColor: 'var(--lx-bg)',
-                        borderColor: 'var(--lx-border)',
-                        color: 'var(--lx-fg-muted)',
+                    <EditableSurfaceCard
+                      profile={profile}
+                      isCustomOnly={!BUILTIN_SURFACES.some((b) => b.id === profile.id)}
+                      onSaveOverride={(baseSurface, patch) => {
+                        const next = upsertSurfaceOverride(state.customSurfaces, baseSurface, patch);
+                        setState((prev) => ({ ...prev, customSurfaces: next }));
+                        setTier0Notice(`Updated prompt & rules for ${baseSurface.label}.`);
+                        requestAnimationFrame(() => void controllerRef.current?.refresh(true));
                       }}
-                    >
-                      <span className="font-semibold" style={{ color: 'var(--lx-fg)' }}>
-                        {profile.label} register:
-                      </span>{' '}
-                      {profile.promptDirective}
-                    </div>
+                      onResetOrDelete={(prof) => {
+                        const next = resetSurfaceOverride(state.customSurfaces, prof.id);
+                        setState((prev) => ({ ...prev, customSurfaces: next }));
+                        setTier0Notice(`Reset "${prof.label}" back to default prompt & rules.`);
+                        requestAnimationFrame(() => void controllerRef.current?.refresh(true));
+                      }}
+                    />
 
                     {!state.aiSettings.enabled ? (
                       <div

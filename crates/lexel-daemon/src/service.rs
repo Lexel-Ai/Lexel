@@ -6,9 +6,9 @@ use lexel_core::{
     AiTaskId, GateCheckSummary, HarperDiagnostic, HarperEngine, HarperRuleInfo, LexelProfile,
     ReadabilityReport, RulePreset, SafeFixResult, SecretMatch, SlopHit, SlopScanner,
     SurfaceCatalog, SurfaceViolation, UnifiedSettings, VoiceExample, analyze_readability,
-    apply_safe_deterministic_fixes, build_rewrite_messages, normalize_typography,
+    apply_safe_deterministic_fixes, build_rewrite_messages_with_surfaces, normalize_typography,
     preset_rule_overrides, sanitize_model_output, scan_secrets, structured_lint_config,
-    synonyms_for, to_sentence_case, to_title_case, verify_rewrite,
+    synonyms_for, to_sentence_case, to_title_case, verify_rewrite_with_surfaces,
 };
 use lexel_db::{DatabaseBackup, DbError, LexelDb};
 use serde::{Deserialize, Serialize};
@@ -373,13 +373,14 @@ impl DaemonService {
             )));
         }
 
-        let messages = build_rewrite_messages(
+        let messages = build_rewrite_messages_with_surfaces(
             &req.text,
             req.task,
             &req.surface_id,
             req.subcontext.as_deref(),
             req.thread_context.as_deref(),
             &voice_examples,
+            &profile.settings.custom_surfaces,
         )?;
 
         let (raw, model_used) = self
@@ -389,12 +390,13 @@ impl DaemonService {
             .map_err(DaemonError::Runtime)?;
 
         let suggestion = sanitize_model_output(&raw);
-        let gates = verify_rewrite(
+        let gates = verify_rewrite_with_surfaces(
             &req.text,
             &suggestion,
             &req.surface_id,
             profile.settings.dialect,
             &profile.settings.user_dictionary,
+            &profile.settings.custom_surfaces,
         )?;
         let latency_ms = started.elapsed().as_millis() as u64;
 

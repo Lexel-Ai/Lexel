@@ -2,10 +2,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use lexel_core::{
-    HarperEngine, RulePreset, SlopScanner, SurfaceCatalog, analyze_readability,
-    apply_safe_deterministic_fixes, build_antislop_weirpack_bytes, detect_language_from_path,
-    normalize_typography, preset_rule_overrides, scan_secrets, to_sentence_case,
-    validate_weirpack_bytes,
+    AiTaskId, HarperEngine, RulePreset, SlopScanner, SurfaceCatalog, analyze_readability,
+    apply_safe_deterministic_fixes, build_antislop_weirpack_bytes,
+    build_rewrite_messages_with_surfaces, detect_language_from_path, normalize_typography,
+    preset_rule_overrides, scan_secrets, to_sentence_case, validate_weirpack_bytes,
+    verify_rewrite_with_surfaces,
 };
 
 #[test]
@@ -192,5 +193,46 @@ fn readability_sentence_case_typography_presets_and_weirpack_bytes_work() {
     assert!(
         diags.iter().any(|d| d.rule == "LexelDelveInto"),
         "expected LexelDelveInto diagnostic, got: {diags:?}"
+    );
+}
+
+#[test]
+fn custom_surface_prompt_and_rule_overrides_propagate_through_prompt_and_verifier() {
+    let catalog = SurfaceCatalog::load_embedded().expect("surface catalog");
+    let mut custom_reddit = catalog.get("web_reddit").expect("web_reddit").clone();
+    custom_reddit.prompt_directive = "Speak like a concise Linux kernel maintainer.".to_owned();
+    custom_reddit.allow_links = true;
+    custom_reddit.max_chars = 1200;
+
+    let messages = build_rewrite_messages_with_surfaces(
+        "My Rust script is slow.",
+        AiTaskId::RewriteSurface,
+        "web_reddit",
+        Some("r/rust"),
+        None,
+        &[],
+        &[custom_reddit.clone()],
+    )
+    .expect("build custom messages");
+    assert!(
+        messages[0]
+            .content
+            .contains("concise Linux kernel maintainer")
+    );
+    assert!(messages[0].content.contains("Max characters: 1200"));
+
+    let gates = verify_rewrite_with_surfaces(
+        "Check https://example.com for details.",
+        "Check https://example.com for benchmark details.",
+        "web_reddit",
+        0,
+        &[],
+        &[custom_reddit],
+    )
+    .expect("verify with custom surface");
+    assert!(
+        gates.surface_compliant,
+        "expected overridden allow_links=true to pass: {:?}",
+        gates.warnings
     );
 }

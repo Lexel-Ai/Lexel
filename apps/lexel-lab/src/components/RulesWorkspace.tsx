@@ -6,7 +6,14 @@ import {
   unpackWeirpackBytes,
 } from 'harper.js';
 import { packWeirpackFiles } from 'harper.js';
-import { HARPER_RULE_PRESETS, type RulePresetId } from 'lexel-ui';
+import {
+  BUILTIN_SURFACES,
+  EditableSurfaceCard,
+  HARPER_RULE_PRESETS,
+  resetSurfaceOverride,
+  upsertSurfaceOverride,
+  type RulePresetId,
+} from 'lexel-ui';
 import { PackagePlus, Plus, RotateCcw, Search, Trash2, Upload } from 'lucide-react';
 import React, { useMemo, useRef, useState } from 'react';
 import { listSurfaceProfiles } from '../lib/surfaces';
@@ -120,7 +127,7 @@ export function RulesWorkspace({
     () => new Set(disabledSlopTerms.map((t) => t.toLowerCase())),
     [disabledSlopTerms],
   );
-  const customIds = useMemo(() => new Set(customSurfaces.map((s) => s.id)), [customSurfaces]);
+  const builtinIds = useMemo(() => new Set(BUILTIN_SURFACES.map((s) => s.id)), []);
 
   const query = search.trim().toLowerCase();
 
@@ -794,52 +801,31 @@ export function RulesWorkspace({
               </div>
             </form>
 
-            <div
-              className="rounded-[8px] border divide-y"
-              style={{ borderColor: 'var(--lx-border)', backgroundColor: 'var(--lx-card)' }}
-            >
-              {allSurfaces.map((p) => (
-                <div
-                  key={p.id}
-                  className="p-4 flex flex-col gap-1.5"
-                  style={{ borderColor: 'var(--lx-border)' }}
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold">{p.label}</span>
-                      <span className="lexel-mono text-[11px]" style={{ color: 'var(--lx-signal)' }}>
-                        {p.id}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="lexel-mono text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                        {p.minChars}-{p.maxChars} chars · links:{p.allowLinks ? 'yes' : 'no'} · emojis:
-                        {p.allowEmojis ? 'yes' : 'no'} · hashtags:{p.allowHashtags ? 'yes' : 'no'} · em-dash:
-                        {p.allowEmDashes ? 'yes' : 'no'}
-                      </span>
-                      {customIds.has(p.id) ? (
-                        <button
-                          type="button"
-                          aria-label={`Delete surface ${p.label}`}
-                          onClick={() =>
-                            onUpdateCustomSurfaces(customSurfaces.filter((s) => s.id !== p.id))
-                          }
-                          className="rounded-[4px] border p-1"
-                          style={{
-                            borderColor: 'var(--lx-border)',
-                            color: 'var(--lx-danger)',
-                          }}
-                        >
-                          <Trash2 className="w-3 h-3" strokeWidth={1.75} aria-hidden="true" />
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                  <p className="text-xs m-0" style={{ color: 'var(--lx-fg-muted)' }}>
-                    {p.promptDirective}
-                  </p>
-                </div>
-              ))}
+            <div className="flex flex-col gap-2.5">
+              {allSurfaces.map((p) => {
+                const isCustomOnly = !builtinIds.has(p.id);
+                return (
+                  <EditableSurfaceCard
+                    key={p.id}
+                    profile={p}
+                    isCustomOnly={isCustomOnly}
+                    onSaveOverride={(baseSurface, patch) => {
+                      const next = upsertSurfaceOverride(customSurfaces, baseSurface, patch);
+                      onUpdateCustomSurfaces(next);
+                      setNotice(`Saved prompt & rules for "${baseSurface.label}".`);
+                    }}
+                    onResetOrDelete={(prof, customOnly) => {
+                      const next = resetSurfaceOverride(customSurfaces, prof.id);
+                      onUpdateCustomSurfaces(next);
+                      setNotice(
+                        customOnly
+                          ? `Deleted custom surface "${prof.label}".`
+                          : `Reset "${prof.label}" back to default prompt & rules.`,
+                      );
+                    }}
+                  />
+                );
+              })}
             </div>
           </div>
         ) : null}

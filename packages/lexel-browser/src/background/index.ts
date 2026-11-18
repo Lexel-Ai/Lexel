@@ -407,6 +407,7 @@ async function handleAiRewrite(
       subcontext: req.subcontext,
       threadContext: req.threadContext,
       voiceExamples,
+      customSurfaces,
     });
 
     const raw = await generateLocalRewrite(settings, messages);

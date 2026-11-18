@@ -3,6 +3,8 @@ export * from './components/SurfaceBadge';
 export * from './components/StatusPill';
 export * from './components/ThemeToggle';
 export * from './components/RewriteDiffCard';
+export * from './components/EditableSurfaceCard';
 export * from './tier0/types';
 export * from './tier0/secretsAndFixes';
 export * from './tier0/verifierCore';
+export * from './tier0/promptCore';

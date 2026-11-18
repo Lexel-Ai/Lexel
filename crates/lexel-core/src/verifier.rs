@@ -63,8 +63,20 @@ pub fn verify_rewrite(
     dialect_code: u8,
     user_words: &[String],
 ) -> Result<GateCheckSummary, CoreError> {
+    verify_rewrite_with_surfaces(source, candidate, surface_id, dialect_code, user_words, &[])
+}
+
+/// Tier 2 deterministic gatekeeper validating AI rewrite candidates with user-configured surface overrides.
+pub fn verify_rewrite_with_surfaces(
+    source: &str,
+    candidate: &str,
+    surface_id: &str,
+    dialect_code: u8,
+    user_words: &[String],
+    custom_surfaces: &[SurfaceProfile],
+) -> Result<GateCheckSummary, CoreError> {
     let slop_scanner = SlopScanner::load_embedded()?;
-    let catalog = SurfaceCatalog::load_embedded()?;
+    let catalog = SurfaceCatalog::load_with_custom(custom_surfaces)?;
     let profile = catalog.get(surface_id)?;
     let mut warnings = Vec::new();
 

@@ -1,5 +1,6 @@
 import { Dialect } from 'harper.js';
 import { inferTierFromModelName, resolveModelNameForTier } from './models';
+import { SURFACE_PROFILES } from './surfaces';
 import type {
   AiSettings,
   DaemonConnectionConfig,
@@ -249,15 +250,7 @@ export function parseImportedLabState(jsonText: string): LabSettingsState {
   if (!parsed || typeof parsed !== 'object') {
     throw new Error('Invalid JSON backup file.');
   }
-  const validSurfaces = new Set<SurfaceId>([
-    'web_reddit',
-    'web_x',
-    'web_github_pr',
-    'web_linkedin',
-    'web_discord_slack',
-    'web_email',
-    'general',
-  ]);
+  const validSurfaces = new Set<SurfaceId>(SURFACE_PROFILES.map((s) => s.id));
   const customIds = new Set((parsed.customSurfaces ?? []).map((s) => s.id));
   return {
     ...defaults,

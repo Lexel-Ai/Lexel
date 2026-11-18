@@ -8,11 +8,15 @@ import type {
   WeirpackTestFailures,
 } from 'harper.js';
 import {
+  BUILTIN_SURFACES,
+  EditableSurfaceCard,
   HARPER_RULE_PRESETS,
   NibIcon,
   StatusPill,
   ThemeToggle,
   applyRulePreset,
+  resetSurfaceOverride,
+  upsertSurfaceOverride,
   type RulePresetId,
 } from 'lexel-ui';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -1652,41 +1656,29 @@ export function OptionsApp() {
                       Add Custom Surface
                     </button>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2">
                     {listSurfaceProfiles(customSurfaces).map((p) => {
-                      const isCustom = customSurfaces.some((c) => c.id === p.id);
+                      const isCustomOnly = !BUILTIN_SURFACES.some((b) => b.id === p.id);
                       return (
-                        <div
+                        <EditableSurfaceCard
                           key={p.id}
-                          className="rounded-[6px] border p-2.5 text-xs space-y-1"
-                          style={{ backgroundColor: 'var(--lx-bg)', borderColor: 'var(--lx-border)' }}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-semibold">{p.label}</span>
-                            <div className="flex items-center gap-2">
-                              <span className="lexel-mono text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                                max {p.maxChars} chars
-                              </span>
-                              {isCustom ? (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    void saveCustomSurfaceList(
-                                      customSurfaces.filter((c) => c.id !== p.id),
-                                    )
-                                  }
-                                  className="text-[11px]"
-                                  style={{ color: 'var(--lx-danger)' }}
-                                >
-                                  Delete
-                                </button>
-                              ) : null}
-                            </div>
-                          </div>
-                          <p className="m-0 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                            {p.promptDirective}
-                          </p>
-                        </div>
+                          profile={p}
+                          isCustomOnly={isCustomOnly}
+                          onSaveOverride={(baseSurface, patch) => {
+                            const next = upsertSurfaceOverride(customSurfaces, baseSurface, patch);
+                            void saveCustomSurfaceList(next);
+                            setNotice(`Saved prompt & rules for ${baseSurface.label}.`);
+                          }}
+                          onResetOrDelete={(prof, customOnly) => {
+                            const next = resetSurfaceOverride(customSurfaces, prof.id);
+                            void saveCustomSurfaceList(next);
+                            setNotice(
+                              customOnly
+                                ? `Deleted custom surface "${prof.label}".`
+                                : `Reset "${prof.label}" back to default prompt & rules.`,
+                            );
+                          }}
+                        />
                       );
                     })}
                   </div>
