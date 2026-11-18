@@ -1,6 +1,7 @@
 import type { LintOptions } from 'harper.js';
 import type { UnpackedLintGroups } from 'lint-framework';
 import { LRUCache } from 'lru-cache';
+import type { LocalAiHealth } from '../shared/localAiClient';
 import type {
   ActivationKey,
   AiSettings,
@@ -80,7 +81,7 @@ export default class ProtocolClient {
 
   public static async getOpenSuggestionsOnHover(): Promise<boolean> {
     const res = await send<{ enabled: boolean }>({ kind: 'getOpenSuggestionsOnHover' });
-    return res?.enabled === true;
+    return res?.enabled !== false;
   }
 
   public static async addToUserDictionary(words: string[]): Promise<void> {
@@ -121,6 +122,15 @@ export default class ProtocolClient {
   public static async getAiSettings(): Promise<AiSettings> {
     const res = await send<{ settings: AiSettings }>({ kind: 'getAiSettings' });
     return res.settings;
+  }
+
+  public static async getAiHealth(): Promise<LocalAiHealth> {
+    return send<LocalAiHealth>({ kind: 'aiHealth' });
+  }
+
+  public static async setAiEnabled(enabled: boolean): Promise<void> {
+    const current = await this.getAiSettings();
+    await send({ kind: 'setAiSettings', settings: { ...current, enabled } });
   }
 
   public static async getTheme(): Promise<'dark' | 'light'> {

@@ -1,4 +1,3 @@
-import type { LintFramework } from 'lint-framework';
 import GoogleDocsBridgeClient from './GoogleDocsBridgeClient';
 import {
 	createGoogleDocsLineBand,
@@ -31,7 +30,9 @@ const GOOGLE_DOCS_SOFT_BREAKS = /\u000b/gu;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: Native control characters cannot own visible source geometry.
 const GOOGLE_DOCS_CONTROL_CHARACTERS = /[\u0000-\u001f]/u;
 
-type LayoutRefreshFramework = LintFramework & {
+type LayoutRefreshFramework = {
+	addTarget: (target: Node) => void;
+	update: () => void | Promise<void>;
 	refreshLayout?: () => void;
 };
 
@@ -69,7 +70,7 @@ export function isGoogleDocsPage(): boolean {
 	);
 }
 
-export function createGoogleDocsBridgeSync(fw: LintFramework): () => Promise<void> {
+export function createGoogleDocsBridgeSync(fw: LayoutRefreshFramework): () => Promise<void> {
 	let bridgeClient: GoogleDocsBridgeClient | null = null;
 	let bridgeAttached = false;
 	let syncInFlight = false;

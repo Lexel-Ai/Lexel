@@ -59,6 +59,27 @@ export function SidePanelApp() {
   const profile = getSurfaceProfile(surfaceId);
   const tier0 = text.trim() ? scanTier0Diagnostics(text, surfaceId) : { slopLints: [], surfaceLints: [] };
 
+  async function handleRefreshHealth() {
+    const health = (await chrome.runtime.sendMessage({ kind: 'aiHealth' })) as LocalAiHealth;
+    setAiHealth(health);
+  }
+
+  async function handleEnableAi() {
+    if (!aiSettings) return;
+    const next = { ...aiSettings, enabled: true };
+    setAiSettings(next);
+    await chrome.runtime.sendMessage({ kind: 'setAiSettings', settings: next });
+    await handleRefreshHealth();
+  }
+
+  async function handleModelChange(model: string) {
+    if (!aiSettings) return;
+    const next = { ...aiSettings, model };
+    setAiSettings(next);
+    await chrome.runtime.sendMessage({ kind: 'setAiSettings', settings: next });
+    await handleRefreshHealth();
+  }
+
   async function handleThemeToggle() {
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
@@ -145,9 +166,17 @@ export function SidePanelApp() {
 
   const aiState: AiHealthState = !aiSettings?.enabled
     ? 'offline'
-    : aiHealth?.ok
+    : aiHealth?.ok && aiHealth.modelAvailable !== false
       ? 'ready'
       : 'error';
+
+  const aiLabel = !aiSettings?.enabled
+    ? 'AI Off'
+    : aiHealth?.ok && aiHealth.modelAvailable !== false
+      ? aiSettings.model
+      : aiHealth?.ok
+        ? 'Model Missing'
+        : 'AI Offline';
 
   return (
     <div data-theme={theme} className="lexel-root min-h-screen p-4 flex flex-col gap-3">
@@ -157,7 +186,7 @@ export function SidePanelApp() {
           <h1 className="text-sm font-semibold m-0">Lexel Workbench</h1>
         </div>
         <div className="flex items-center gap-2">
-          <StatusPill state={aiState} label={aiHealth?.ok ? aiSettings?.model ?? 'Ready' : 'AI Offline'} />
+          <StatusPill state={aiState} label={aiLabel} />
           <button
             type="button"
             onClick={() => void chrome.runtime.openOptionsPage()}
@@ -174,6 +203,102 @@ export function SidePanelApp() {
           <ThemeToggle theme={theme} onToggle={() => void handleThemeToggle()} />
         </div>
       </header>
+
+      {aiSettings && !aiSettings.enabled ? (
+        <div
+          className="rounded-[8px] border p-2.5 flex items-center justify-between gap-2 text-xs"
+          style={{
+            backgroundColor: 'var(--lx-card)',
+            borderColor: 'var(--lx-border)',
+            color: 'var(--lx-fg-muted)',
+          }}
+        >
+          <span>Local AI is off. Grammar checks remain active.</span>
+          <button
+            type="button"
+            onClick={() => void handleEnableAi()}
+            className="rounded-[6px] px-2.5 py-1 text-xs font-semibold shrink-0"
+            style={{ backgroundColor: 'var(--lx-accent)', color: 'var(--lx-on-accent)' }}
+          >
+            Turn AI On
+          </button>
+        </div>
+      ) : aiHealth && (!aiHealth.ok || aiHealth.modelAvailable === false) ? (
+        <div
+          className="rounded-[8px] border p-2.5 flex flex-col gap-2 text-xs"
+          style={{
+            backgroundColor: 'var(--lx-warn-bg)',
+            borderColor: 'var(--lx-warn)',
+            color: 'var(--lx-warn)',
+          }}
+        >
+          <div className="leading-snug break-words">{aiHealth.error}</div>
+          {aiHealth.models.length > 0 && aiSettings ? (
+            <label className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--lx-fg)' }}>
+              <span>Available model:</span>
+              <select
+                value={aiSettings.model}
+                onChange={(e) => void handleModelChange(e.target.value)}
+                className="rounded-[6px] border px-2 py-1 text-xs lexel-mono"
+                style={{
+                  backgroundColor: 'var(--lx-bg)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              >
+                <option value={aiSettings.model}>{aiSettings.model} (missing)</option>
+                {aiHealth.models.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void handleRefreshHealth()}
+              className="rounded-[6px] border px-2 py-1 text-[11px] font-medium"
+              style={{
+                backgroundColor: 'var(--lx-muted)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            >
+              Retry connection
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                void navigator.clipboard.writeText(
+                  'OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*" ollama serve',
+                )
+              }
+              className="rounded-[6px] border px-2 py-1 text-[11px]"
+              style={{
+                backgroundColor: 'var(--lx-bg)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg-muted)',
+              }}
+            >
+              Copy Ollama cmd
+            </button>
+            <button
+              type="button"
+              onClick={() => void chrome.runtime.openOptionsPage()}
+              className="rounded-[6px] border px-2 py-1 text-[11px]"
+              style={{
+                backgroundColor: 'var(--lx-bg)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg-muted)',
+              }}
+            >
+              Settings
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SurfaceBadge

@@ -264,8 +264,8 @@ async function handleRequest(
       await chrome.storage.local.set({ isolateEnglish: req.isolateEnglish });
       return { kind: 'unit' };
     case 'getOpenSuggestionsOnHover': {
-      const res = await chrome.storage.local.get({ openSuggestionsOnHover: false });
-      return { kind: 'getOpenSuggestionsOnHover', enabled: res.openSuggestionsOnHover === true };
+      const res = await chrome.storage.local.get({ openSuggestionsOnHover: true });
+      return { kind: 'getOpenSuggestionsOnHover', enabled: res.openSuggestionsOnHover !== false };
     }
     case 'setOpenSuggestionsOnHover':
       await chrome.storage.local.set({ openSuggestionsOnHover: req.enabled });

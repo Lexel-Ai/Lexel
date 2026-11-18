@@ -3,7 +3,21 @@ import type { AiSettings } from './types';
 export interface LocalAiHealth {
   ok: boolean;
   models: string[];
+  modelAvailable?: boolean;
   error?: string;
+}
+
+function isModelPresent(configured: string, available: string[]): boolean {
+  if (!configured || available.length === 0) return false;
+  const target = configured.trim().toLowerCase();
+  return available.some((m) => {
+    const candidate = m.toLowerCase();
+    return (
+      candidate === target ||
+      candidate === `${target}:latest` ||
+      `${candidate}:latest` === target
+    );
+  });
 }
 
 export function assertLocalEndpoint(rawUrl: string): URL {
@@ -39,37 +53,50 @@ export async function checkLocalAiHealth(settings: AiSettings): Promise<LocalAiH
   }
 
   try {
+    const signal = typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
+      ? AbortSignal.timeout(4000)
+      : undefined;
+
     if (settings.provider === 'ollama') {
-      const res = await fetch(`${base}/api/tags`, { method: 'GET' });
+      const res = await fetch(`${base}/api/tags`, { method: 'GET', signal });
       if (!res.ok) {
         return {
           ok: false,
           models: [],
           error:
             res.status === 403
-              ? 'Ollama blocked extension origin (403). Start Ollama with: OLLAMA_ORIGINS="chrome-extension://*" ollama serve'
+              ? 'Ollama blocked extension origin (403). Start Ollama with: OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*" ollama serve'
               : `Ollama returned HTTP ${res.status}`,
         };
       }
       const data = (await res.json()) as { models?: Array<{ name: string }> };
       const models = (data.models ?? []).map((m) => m.name);
-      return { ok: true, models };
+      const modelAvailable = isModelPresent(settings.model, models);
+      return {
+        ok: true,
+        models,
+        modelAvailable,
+        error: modelAvailable
+          ? undefined
+          : `Connected to Ollama, but "${settings.model}" is not pulled. Run: ollama pull ${settings.model}`,
+      };
     }
 
-    const res = await fetch(`${base}/v1/models`, { method: 'GET' });
+    const res = await fetch(`${base}/v1/models`, { method: 'GET', signal });
     if (!res.ok) {
       return { ok: false, models: [], error: `Local server returned HTTP ${res.status}` };
     }
     const data = (await res.json()) as { data?: Array<{ id: string }> };
     const models = (data.data ?? []).map((m) => m.id);
-    return { ok: true, models };
+    const modelAvailable = models.length === 0 || isModelPresent(settings.model, models);
+    return { ok: true, models, modelAvailable };
   } catch {
     return {
       ok: false,
       models: [],
       error:
         settings.provider === 'ollama'
-          ? `Cannot reach Ollama at ${base}. Run: OLLAMA_ORIGINS="chrome-extension://*" ollama serve`
+          ? `Cannot reach Ollama at ${base}. Run: OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*" ollama serve`
           : `Cannot reach local AI server at ${base}.`,
     };
   }
@@ -103,7 +130,7 @@ export async function generateLocalRewrite(
     if (!res.ok) {
       if (res.status === 403) {
         throw new Error(
-          'Ollama rejected the extension request (403). Restart Ollama with: OLLAMA_ORIGINS="chrome-extension://*" ollama serve',
+          'Ollama rejected the extension request (403). Restart Ollama with: OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*" ollama serve',
         );
       }
       if (res.status === 404) {

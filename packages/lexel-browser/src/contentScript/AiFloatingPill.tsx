@@ -1,5 +1,14 @@
-import React, { useEffect, useState } from 'react';
-import { CloseIcon, NibIcon, PanelIcon, RewriteDiffCard, SurfaceBadge } from 'lexel-ui';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  CloseIcon,
+  NibIcon,
+  PanelIcon,
+  RewriteDiffCard,
+  SlidersIcon,
+  StatusPill,
+  SurfaceBadge,
+} from 'lexel-ui';
+import type { LocalAiHealth } from '../shared/localAiClient';
 import { getSurfaceProfile } from '../shared/surfaceDetector';
 import type { AiTaskId, DetectedSurfaceContext, RewriteResult } from '../shared/types';
 import ProtocolClient from './ProtocolClient';
@@ -17,6 +26,7 @@ export interface AiFloatingPillProps {
   theme: 'dark' | 'light';
   aiEnabled: boolean;
   openSignal: number;
+  requestedTask?: { id: AiTaskId; seq: number } | null;
 }
 
 export function AiFloatingPill({
@@ -25,6 +35,7 @@ export function AiFloatingPill({
   theme,
   aiEnabled,
   openSignal,
+  requestedTask,
 }: AiFloatingPillProps) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -32,6 +43,8 @@ export function AiFloatingPill({
   const [result, setResult] = useState<RewriteResult | null>(null);
   const [lastTask, setLastTask] = useState<AiTaskId>('rewrite_surface');
   const [copied, setCopied] = useState(false);
+  const [health, setHealth] = useState<LocalAiHealth | null>(null);
+  const [checkingHealth, setCheckingHealth] = useState(false);
   const [coords, setCoords] = useState<{ top: number; left: number; visible: boolean }>({
     top: 0,
     left: 0,
@@ -40,11 +53,33 @@ export function AiFloatingPill({
 
   const profile = getSurfaceProfile(context.surfaceId);
 
+  const refreshHealth = useCallback(async () => {
+    if (!aiEnabled) {
+      setHealth({ ok: false, models: [], error: 'Local AI is turned off in Settings.' });
+      return;
+    }
+    setCheckingHealth(true);
+    try {
+      const next = await ProtocolClient.getAiHealth();
+      setHealth(next);
+    } catch (err) {
+      setHealth({ ok: false, models: [], error: (err as Error).message });
+    } finally {
+      setCheckingHealth(false);
+    }
+  }, [aiEnabled]);
+
   useEffect(() => {
     if (openSignal > 0 && field && !context.isBlocked) {
       setExpanded(true);
     }
   }, [openSignal, field, context.isBlocked]);
+
+  useEffect(() => {
+    if (expanded) {
+      void refreshHealth();
+    }
+  }, [expanded, refreshHealth]);
 
   useEffect(() => {
     setResult(null);
@@ -59,7 +94,7 @@ export function AiFloatingPill({
 
     const updatePosition = () => {
       const rect = field.element.getBoundingClientRect();
-      if (rect.width < 40 || rect.height < 24) {
+      if (rect.width < 24 || rect.height < 14) {
         setCoords((prev) => ({ ...prev, visible: false }));
         return;
       }
@@ -70,7 +105,7 @@ export function AiFloatingPill({
       );
       const top = Math.max(
         12,
-        Math.min(window.innerHeight - (expanded ? 340 : 42), rect.bottom + 6),
+        Math.min(window.innerHeight - (expanded ? 360 : 42), rect.bottom + 6),
       );
       setCoords({ top, left, visible: true });
     };
@@ -95,40 +130,69 @@ export function AiFloatingPill({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [expanded]);
 
-  if (!aiEnabled || !field || !coords.visible || context.isBlocked) {
+  const runTask = useCallback(
+    async (task: AiTaskId) => {
+      if (!field) return;
+      const source = field.readText().trim();
+      if (!source) {
+        setError('Type a few words or rough notes in the field first.');
+        return;
+      }
+      setLastTask(task);
+      setLoading(true);
+      setError(null);
+      setCopied(false);
+
+      const threadContext = task === 'reply_draft' ? field.readThreadContext() : undefined;
+      const res = await ProtocolClient.aiRewrite({
+        text: source,
+        task,
+        surfaceId: context.surfaceId,
+        subcontext: context.subcontext,
+        threadContext,
+      });
+
+      setLoading(false);
+      if (!res.ok) {
+        setError(res.error);
+        void refreshHealth();
+        return;
+      }
+      setResult(res.result);
+    },
+    [field, context.surfaceId, context.subcontext, refreshHealth],
+  );
+
+  useEffect(() => {
+    if (!requestedTask || !field || context.isBlocked || !aiEnabled) return;
+    setExpanded(true);
+    void runTask(requestedTask.id);
+  }, [requestedTask, field, context.isBlocked, aiEnabled, runTask]);
+
+  if (!field || !coords.visible || context.isBlocked) {
+    return null;
+  }
+  if (!aiEnabled && !expanded) {
     return null;
   }
 
   const currentText = field.readText();
-
-  async function runTask(task: AiTaskId) {
-    if (!field) return;
-    const source = field.readText().trim();
-    if (!source) {
-      setError('Type a few words or rough notes in the field first.');
-      return;
-    }
-    setLastTask(task);
-    setLoading(true);
-    setError(null);
-    setCopied(false);
-
-    const threadContext = task === 'reply_draft' ? field.readThreadContext() : undefined;
-    const res = await ProtocolClient.aiRewrite({
-      text: source,
-      task,
-      surfaceId: context.surfaceId,
-      subcontext: context.subcontext,
-      threadContext,
-    });
-
-    setLoading(false);
-    if (!res.ok) {
-      setError(res.error);
-      return;
-    }
-    setResult(res.result);
-  }
+  const healthState = !aiEnabled
+    ? 'offline'
+    : checkingHealth
+      ? 'loading'
+      : health?.ok && health.modelAvailable !== false
+        ? 'ready'
+        : health
+          ? 'error'
+          : 'loading';
+  const healthLabel = !aiEnabled
+    ? 'AI Off'
+    : checkingHealth
+      ? 'Checking...'
+      : health?.ok && health.modelAvailable !== false
+        ? 'Local AI Ready'
+        : 'AI Offline';
 
   async function handleApply() {
     if (!field || !result) return;
@@ -175,6 +239,7 @@ export function AiFloatingPill({
       {!expanded ? (
         <button
           type="button"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => setExpanded(true)}
           title="Open Lexel AI rewrite actions (Alt+L)"
           style={{
@@ -227,30 +292,31 @@ export function AiFloatingPill({
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <StatusPill state={healthState} label={healthLabel} />
+              {aiEnabled ? (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={async () => {
+                    await ProtocolClient.setAiEnabled(false);
+                    setExpanded(false);
+                  }}
+                  title="Shut down Local AI (keep grammar checks active)"
+                  style={{
+                    padding: '3px 6px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--lx-border)',
+                    backgroundColor: 'var(--lx-muted)',
+                    color: 'var(--lx-fg-muted)',
+                    fontSize: '11px',
+                  }}
+                >
+                  AI Off
+                </button>
+              ) : null}
               <button
                 type="button"
-                onClick={async () => {
-                  const current = await ProtocolClient.getAiSettings();
-                  await chrome.runtime.sendMessage({
-                    kind: 'setAiSettings',
-                    settings: { ...current, enabled: false },
-                  });
-                  setExpanded(false);
-                }}
-                title="Shut down Local AI (keep Harper grammar active)"
-                style={{
-                  padding: '3px 6px',
-                  borderRadius: '6px',
-                  border: '1px solid var(--lx-border)',
-                  backgroundColor: 'var(--lx-muted)',
-                  color: 'var(--lx-fg-muted)',
-                  fontSize: '11px',
-                }}
-              >
-                AI Off
-              </button>
-              <button
-                type="button"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={handleSendToSidePanel}
                 aria-label="Open in Side Panel"
                 title="Open in Side Panel"
@@ -266,6 +332,23 @@ export function AiFloatingPill({
               </button>
               <button
                 type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => void ProtocolClient.openOptions()}
+                aria-label="Open Lexel Settings"
+                title="Open Lexel Settings"
+                style={{
+                  padding: '4px',
+                  borderRadius: '6px',
+                  border: '1px solid var(--lx-border)',
+                  backgroundColor: 'var(--lx-muted)',
+                  color: 'var(--lx-fg)',
+                }}
+              >
+                <SlidersIcon className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => setExpanded(false)}
                 aria-label="Close Lexel popover"
                 style={{
@@ -290,32 +373,104 @@ export function AiFloatingPill({
                 padding: '8px 10px',
                 fontSize: '12px',
                 color: 'var(--lx-fg-muted)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px',
               }}
             >
-              Local AI is turned off in Settings. Harper grammar and anti-slop checks remain active.
+              <span>Local AI is off. Grammar and anti-slop checks stay active.</span>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => void ProtocolClient.setAiEnabled(true)}
+                style={{
+                  borderRadius: '6px',
+                  padding: '4px 8px',
+                  backgroundColor: 'var(--lx-accent)',
+                  color: 'var(--lx-on-accent)',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                }}
+              >
+                Turn AI On
+              </button>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-              {profile.quickActions.map((act) => (
-                <button
-                  key={act.id}
-                  type="button"
-                  disabled={loading}
-                  onClick={() => void runTask(act.id)}
+            <>
+              {health && (!health.ok || health.modelAvailable === false) ? (
+                <div
                   style={{
                     borderRadius: '6px',
-                    border: '1px solid var(--lx-border)',
-                    backgroundColor: 'var(--lx-muted)',
-                    color: 'var(--lx-fg)',
-                    padding: '5px 9px',
-                    fontSize: '12px',
-                    fontWeight: 500,
+                    border: '1px solid var(--lx-warn)',
+                    backgroundColor: 'var(--lx-warn-bg)',
+                    padding: '8px 10px',
+                    fontSize: '11px',
+                    color: 'var(--lx-warn)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
                   }}
                 >
-                  {act.label}
-                </button>
-              ))}
-            </div>
+                  <span style={{ wordBreak: 'break-word' }}>{health.error}</span>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => void refreshHealth()}
+                      style={{
+                        borderRadius: '6px',
+                        border: '1px solid var(--lx-border)',
+                        backgroundColor: 'var(--lx-muted)',
+                        color: 'var(--lx-fg)',
+                        padding: '3px 8px',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                      }}
+                    >
+                      Retry
+                    </button>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => void ProtocolClient.openOptions()}
+                      style={{
+                        borderRadius: '6px',
+                        border: '1px solid var(--lx-border)',
+                        backgroundColor: 'var(--lx-card)',
+                        color: 'var(--lx-fg)',
+                        padding: '3px 8px',
+                        fontSize: '11px',
+                      }}
+                    >
+                      AI Settings
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {profile.quickActions.map((act) => (
+                  <button
+                    key={act.id}
+                    type="button"
+                    disabled={loading}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => void runTask(act.id)}
+                    style={{
+                      borderRadius: '6px',
+                      border: '1px solid var(--lx-border)',
+                      backgroundColor: 'var(--lx-muted)',
+                      color: 'var(--lx-fg)',
+                      padding: '5px 9px',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                    }}
+                  >
+                    {act.label}
+                  </button>
+                ))}
+              </div>
+            </>
           )}
 
           {loading ? (

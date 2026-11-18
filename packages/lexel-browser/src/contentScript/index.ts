@@ -1,11 +1,14 @@
 import '@webcomponents/custom-elements';
-import { getClosestBlockAncestor, isVisible, leafNodes, LintFramework } from 'lint-framework';
+import { getClosestBlockAncestor, isVisible, leafNodes } from 'lint-framework';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import appCss from '../app.css?inline';
 import { detectSurfaceFromLocation, isSensitiveElement } from '../shared/surfaceDetector';
-import type { DetectedSurfaceContext, SurfaceId } from '../shared/types';
+import type { AiTaskId, DetectedSurfaceContext, SurfaceId } from '../shared/types';
 import { AiFloatingPill, type ActiveFieldHandle } from './AiFloatingPill';
 import { createGoogleDocsBridgeSync, isGoogleDocsPage } from './googleDocs';
+import { type ActiveLintPopup, LexelLintController } from './LexelLintController';
+import { LexelSuggestionPopover } from './LexelSuggestionPopover';
 import ProtocolClient from './ProtocolClient';
 import tokensCss from 'lexel-ui/tokens.css?inline';
 
@@ -14,8 +17,12 @@ let surfaceOverrideCache: SurfaceId | null = null;
 let themeCache: 'dark' | 'light' = 'dark';
 let aiEnabledCache = true;
 let activeField: ActiveFieldHandle | null = null;
+let activeLintPopup: ActiveLintPopup | null = null;
 let openSignal = 0;
-let pillRoot: Root | null = null;
+let requestedTask: { id: AiTaskId; seq: number } | null = null;
+let taskSeq = 0;
+let shadowHost: HTMLElement | null = null;
+let overlayRoot: Root | null = null;
 
 function currentSurfaceContext(el: Element | null): DetectedSurfaceContext {
   return detectSurfaceFromLocation(window.location.href, {
@@ -26,7 +33,7 @@ function currentSurfaceContext(el: Element | null): DetectedSurfaceContext {
   });
 }
 
-const fw = new LintFramework(
+const lintController = new LexelLintController(
   (text, domain, options) => {
     const ctx = currentSurfaceContext(activeField?.element ?? null);
     if (ctx.isBlocked) {
@@ -39,51 +46,86 @@ const fw = new LintFramework(
   },
   {
     ignoreLint: (hash) => ProtocolClient.ignoreHash(hash),
-    getActivationKey: () => ProtocolClient.getActivationKey(),
-    getHotkey: () => ProtocolClient.getHotkey(),
     getDelay: () => ProtocolClient.getDelay(),
-    openOptions: () => ProtocolClient.openOptions(),
-    addToUserDictionary: (words) => ProtocolClient.addToUserDictionary(words),
-    setRuleEnabled: async (ruleId, enabled) => {
-      await ProtocolClient.setRuleEnabled(ruleId, enabled);
-      fw.update();
+    onActiveLintChange: (next) => {
+      activeLintPopup = next;
+      renderOverlays();
     },
   },
 );
 
-const syncGoogleDocsBridge = createGoogleDocsBridgeSync(fw);
+const syncGoogleDocsBridge = createGoogleDocsBridgeSync(lintController);
 
 function ensureShadowMount(): Root {
-  if (pillRoot) return pillRoot;
+  if (overlayRoot) return overlayRoot;
   const host = document.createElement('div');
   host.id = 'lexel-shadow-host';
   host.style.position = 'fixed';
-  host.style.zIndex = '2147483646';
+  host.style.inset = '0';
+  host.style.zIndex = '2147483647';
   host.style.pointerEvents = 'none';
   document.documentElement.appendChild(host);
+  shadowHost = host;
 
   const shadow = host.attachShadow({ mode: 'open' });
   const styleEl = document.createElement('style');
-  styleEl.textContent = tokensCss;
+  styleEl.textContent = `${appCss}\n${tokensCss}`;
   shadow.appendChild(styleEl);
 
   const container = document.createElement('div');
   shadow.appendChild(container);
-  pillRoot = createRoot(container);
-  return pillRoot;
+  overlayRoot = createRoot(container);
+  return overlayRoot;
 }
 
-function renderFloatingPill() {
+function renderOverlays() {
   const root = ensureShadowMount();
   const ctx = currentSurfaceContext(activeField?.element ?? null);
   root.render(
-    React.createElement(AiFloatingPill, {
-      field: activeField,
-      context: ctx,
-      theme: themeCache,
-      aiEnabled: aiEnabledCache,
-      openSignal,
-    }),
+    React.createElement(
+      React.Fragment,
+      null,
+      React.createElement(AiFloatingPill, {
+        field: activeField,
+        context: ctx,
+        theme: themeCache,
+        aiEnabled: aiEnabledCache,
+        openSignal,
+        requestedTask,
+      }),
+      React.createElement(LexelSuggestionPopover, {
+        active: activeLintPopup,
+        theme: themeCache,
+        aiEnabled: aiEnabledCache,
+        onHoverChange: (hovered) => lintController.setPopoverHovered(hovered),
+        onClose: () => lintController.closePopup(),
+        onApplied: () => {
+          void lintController.requestLintUpdate(true);
+        },
+        onAddToDictionary: async (word) => {
+          await ProtocolClient.addToUserDictionary([word]);
+          await lintController.requestLintUpdate(true);
+        },
+        onDisableRule: async (ruleId) => {
+          await ProtocolClient.setRuleEnabled(ruleId, false);
+          await lintController.requestLintUpdate(true);
+        },
+        onOpenSettings: () => ProtocolClient.openOptions(),
+        onFixWithAi: (box) => {
+          const rootEl = resolveEditableRoot(box.source) ?? activeField?.element;
+          if (rootEl) {
+            activeField = makeFieldHandle(rootEl);
+          }
+          taskSeq += 1;
+          requestedTask = {
+            id: box.rule === 'LexelAntiSlop' ? 'deslop' : 'fix_grammar_flow',
+            seq: taskSeq,
+          };
+          openSignal += 1;
+          renderOverlays();
+        },
+      }),
+    ),
   );
 }
 
@@ -99,7 +141,8 @@ function readThreadContextAround(el: HTMLElement): string {
 
 function setElementValueSafely(el: HTMLElement, nextText: string) {
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
-    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const proto =
+      el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
     if (descriptor?.set) {
       descriptor.set.call(el, nextText);
@@ -137,7 +180,7 @@ function makeFieldHandle(el: HTMLElement): ActiveFieldHandle {
     },
     writeText: (nextText: string) => {
       setElementValueSafely(el, nextText);
-      fw.update();
+      void lintController.update();
     },
     readThreadContext: () => readThreadContextAround(el),
   };
@@ -153,19 +196,32 @@ function isEditableElement(node: EventTarget | null): node is HTMLElement {
   return node.isContentEditable;
 }
 
+/** Resolve inner <p>/<span> nodes of a rich editor up to its contenteditable root. */
+function resolveEditableRoot(node: EventTarget | null): HTMLElement | null {
+  if (!isEditableElement(node)) return null;
+  if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
+    return node;
+  }
+  let current: HTMLElement = node;
+  while (current.parentElement && current.parentElement.isContentEditable) {
+    current = current.parentElement;
+  }
+  return isSensitiveElement(current) ? null : current;
+}
+
 function scanFields() {
   void syncGoogleDocsBridge();
   if (isGoogleDocsPage()) return;
 
   document.querySelectorAll<HTMLTextAreaElement>('textarea').forEach((el) => {
     if (!el.disabled && !el.readOnly && isVisible(el) && !isSensitiveElement(el)) {
-      fw.addTarget(el);
+      lintController.addTarget(el);
     }
   });
 
   document.querySelectorAll<HTMLInputElement>('input[type="text"][spellcheck="true"]').forEach((el) => {
     if (!el.disabled && !el.readOnly && !isSensitiveElement(el)) {
-      fw.addTarget(el);
+      lintController.addTarget(el);
     }
   });
 
@@ -191,30 +247,32 @@ function scanFields() {
         continue;
       }
       seenBlocks.add(block);
-      fw.addTarget(block);
+      lintController.addTarget(block);
     }
 
     if (seenBlocks.size === 0 && isVisible(el)) {
-      fw.addTarget(el);
+      lintController.addTarget(el);
     }
   });
 }
 
 async function hydrateConfig() {
-  const [blocklist, override, theme, aiSettings, hoverEnabled] = await Promise.all([
+  const [blocklist, override, theme, aiSettings, hoverEnabled, activationKey] = await Promise.all([
     ProtocolClient.getPrivacyBlocklist(),
     ProtocolClient.getSurfaceOverride(window.location.hostname),
     ProtocolClient.getTheme(),
     ProtocolClient.getAiSettings(),
     ProtocolClient.getOpenSuggestionsOnHover(),
+    ProtocolClient.getActivationKey(),
   ]);
   blocklistCache = blocklist;
   surfaceOverrideCache = override;
   themeCache = theme;
   aiEnabledCache = aiSettings.enabled;
-  fw.setOpenSuggestionsOnHover(hoverEnabled);
+  lintController.setOpenSuggestionsOnHover(hoverEnabled);
+  lintController.setActivationKey(activationKey);
 
-  const ctx = currentSurfaceContext(null);
+  const ctx = currentSurfaceContext(activeField?.element ?? null);
   await ProtocolClient.setPageSummary({
     domain: ctx.domain,
     surfaceId: ctx.surfaceId,
@@ -225,14 +283,32 @@ async function hydrateConfig() {
   });
 }
 
+function captureFocusedElement(target: EventTarget | null) {
+  const rootEl = resolveEditableRoot(target);
+  if (!rootEl) return;
+  activeField = makeFieldHandle(rootEl);
+  if (target instanceof HTMLElement) {
+    lintController.addTarget(target);
+  }
+  renderOverlays();
+}
+
 document.addEventListener(
   'focusin',
   (event) => {
-    if (isEditableElement(event.target)) {
-      activeField = makeFieldHandle(event.target);
-      fw.addTarget(event.target);
-      renderFloatingPill();
-    }
+    captureFocusedElement(event.target);
+  },
+  true,
+);
+
+document.addEventListener(
+  'pointerdown',
+  (event) => {
+    if (!activeLintPopup) return;
+    const path = event.composedPath();
+    if (shadowHost && path.includes(shadowHost)) return;
+    if (path.includes(activeLintPopup.box.source)) return;
+    lintController.closePopup();
   },
   true,
 );
@@ -241,16 +317,30 @@ document.addEventListener('keydown', (event) => {
   if (event.altKey && event.key.toLowerCase() === 'l' && activeField) {
     event.preventDefault();
     openSignal += 1;
-    renderFloatingPill();
+    renderOverlays();
   }
 });
 
+const WATCHED_STORAGE_KEYS = new Set([
+  'lexel_theme',
+  'lexel_ai_settings',
+  'lexel_surface_overrides',
+  'lexel_privacy_blocklist',
+  'openSuggestionsOnHover',
+  'activationKey',
+  'delay',
+  'userDictionary',
+  'dialect',
+  'isolateEnglish',
+  'lintConfig',
+]);
+
 chrome.storage?.onChanged.addListener((changes) => {
-  if (changes.lexel_theme || changes.lexel_ai_settings || changes.lexel_surface_overrides) {
+  if (Object.keys(changes).some((k) => WATCHED_STORAGE_KEYS.has(k))) {
     void hydrateConfig().then(() => {
       ProtocolClient.clearCache();
-      fw.update();
-      renderFloatingPill();
+      void lintController.update();
+      renderOverlays();
     });
   }
 });
@@ -271,6 +361,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 void hydrateConfig().then(() => {
   scanFields();
+  if (document.activeElement) {
+    captureFocusedElement(document.activeElement);
+  }
 });
 
 const observer = new MutationObserver(() => scanFields());

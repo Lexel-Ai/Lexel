@@ -23,6 +23,7 @@ export function PopupApp() {
   const [surfaceCtx, setSurfaceCtx] = useState<DetectedSurfaceContext | null>(null);
   const [surfaceOverride, setSurfaceOverride] = useState<SurfaceId | null>(null);
   const [dialect, setDialect] = useState<Dialect>(0);
+  const [hoverFixes, setHoverFixes] = useState(true);
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
   const [aiHealth, setAiHealth] = useState<LocalAiHealth | null>(null);
   const [summary, setSummary] = useState<PageLintSummary | null>(null);
@@ -41,6 +42,7 @@ export function PopupApp() {
           overrideRes,
           blocklistRes,
           dialectRes,
+          hoverRes,
           aiRes,
           healthRes,
           summaryRes,
@@ -56,6 +58,9 @@ export function PopupApp() {
             domains: string[];
           }>,
           chrome.runtime.sendMessage({ kind: 'getDialect' }) as Promise<{ dialect: Dialect }>,
+          chrome.runtime.sendMessage({ kind: 'getOpenSuggestionsOnHover' }) as Promise<{
+            enabled: boolean;
+          }>,
           chrome.runtime.sendMessage({ kind: 'getAiSettings' }) as Promise<{
             settings: AiSettings;
           }>,
@@ -81,6 +86,7 @@ export function PopupApp() {
           }),
         );
         setDialect(dialectRes.dialect);
+        setHoverFixes(hoverRes.enabled);
         setAiSettings(aiRes.settings);
         setAiHealth(healthRes);
         setSummary(summaryRes.summary);
@@ -135,6 +141,12 @@ export function PopupApp() {
     await chrome.runtime.sendMessage({ kind: 'setDialect', dialect: nextDialect });
   }
 
+  async function handleHoverFixesToggle() {
+    const next = !hoverFixes;
+    setHoverFixes(next);
+    await chrome.runtime.sendMessage({ kind: 'setOpenSuggestionsOnHover', enabled: next });
+  }
+
   async function handleModelChange(model: string) {
     if (!aiSettings) return;
     const next = { ...aiSettings, model };
@@ -180,12 +192,15 @@ export function PopupApp() {
     if (windowId != null && chrome.sidePanel?.open) {
       await chrome.sidePanel.open({ windowId });
       window.close();
+      return;
     }
+    await chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
+    window.close();
   }
 
   const aiState: AiHealthState = !aiSettings?.enabled
     ? 'offline'
-    : aiHealth?.ok
+    : aiHealth?.ok && aiHealth.modelAvailable !== false
       ? 'ready'
       : aiHealth
         ? 'error'
@@ -193,9 +208,11 @@ export function PopupApp() {
 
   const aiLabel = !aiSettings?.enabled
     ? 'AI Off'
-    : aiHealth?.ok
+    : aiHealth?.ok && aiHealth.modelAvailable !== false
       ? `${aiSettings.model} Ready`
-      : 'Local AI Offline';
+      : aiHealth?.ok
+        ? 'Model Missing'
+        : 'Local AI Offline';
 
   const modelChoices = Array.from(
     new Set([aiSettings?.model ?? 'qwen2.5:1.5b', 'qwen2.5:1.5b', 'qwen2.5:0.5b', ...(aiHealth?.models ?? [])]),
@@ -304,6 +321,17 @@ export function PopupApp() {
                 </label>
               </div>
             )}
+
+            {!surfaceCtx.isBlocked ? (
+              <label className="flex items-center justify-between gap-2 pt-1 text-xs">
+                <span style={{ color: 'var(--lx-fg-muted)' }}>Hover underline to fix</span>
+                <input
+                  type="checkbox"
+                  checked={hoverFixes}
+                  onChange={() => void handleHoverFixesToggle()}
+                />
+              </label>
+            ) : null}
           </section>
 
           <section
@@ -374,7 +402,7 @@ export function PopupApp() {
                   </select>
                 </label>
 
-                {aiHealth && !aiHealth.ok ? (
+                {aiHealth && (!aiHealth.ok || aiHealth.modelAvailable === false) ? (
                   <div className="flex flex-col gap-1.5">
                     <p className="text-[11px] m-0 leading-snug" style={{ color: 'var(--lx-warn)' }}>
                       {aiHealth.error}
@@ -396,7 +424,7 @@ export function PopupApp() {
                         type="button"
                         onClick={() =>
                           void navigator.clipboard.writeText(
-                            'OLLAMA_ORIGINS="chrome-extension://*" ollama serve',
+                            'OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*" ollama serve',
                           )
                         }
                         className="rounded-[6px] border px-2 py-1 text-[11px]"

@@ -14,7 +14,7 @@ export function OptionsApp() {
   const [aiHealth, setAiHealth] = useState<LocalAiHealth | null>(null);
   const [dialect, setDialect] = useState<Dialect>(0);
   const [isolateEnglish, setIsolateEnglish] = useState(false);
-  const [hoverPopup, setHoverPopup] = useState(false);
+  const [hoverPopup, setHoverPopup] = useState(true);
   const [activationKey, setActivationKey] = useState<ActivationKey>('off');
   const [delayMs, setDelayMs] = useState(0);
   const [dictionaryText, setDictionaryText] = useState('');
@@ -141,8 +141,22 @@ export function OptionsApp() {
           </div>
           <div className="flex items-center gap-2">
             <StatusPill
-              state={aiHealth?.ok ? 'ready' : aiSettings?.enabled ? 'error' : 'offline'}
-              label={aiHealth?.ok ? 'Local AI Connected' : 'Local AI Offline'}
+              state={
+                !aiSettings?.enabled
+                  ? 'offline'
+                  : aiHealth?.ok && aiHealth.modelAvailable !== false
+                    ? 'ready'
+                    : 'error'
+              }
+              label={
+                !aiSettings?.enabled
+                  ? 'AI Off'
+                  : aiHealth?.ok && aiHealth.modelAvailable !== false
+                    ? 'Local AI Connected'
+                    : aiHealth?.ok
+                      ? 'Model Missing'
+                      : 'Local AI Offline'
+              }
             />
             <ThemeToggle
               theme={theme}
@@ -278,6 +292,19 @@ export function OptionsApp() {
               </label>
             </div>
 
+            {aiHealth?.error ? (
+              <div
+                className="rounded-[6px] border p-2.5 text-xs"
+                style={{
+                  backgroundColor: 'var(--lx-warn-bg)',
+                  borderColor: 'var(--lx-warn)',
+                  color: 'var(--lx-warn)',
+                }}
+              >
+                {aiHealth.error}
+              </div>
+            ) : null}
+
             {aiHealth?.models.length ? (
               <div className="text-xs" style={{ color: 'var(--lx-fg-muted)' }}>
                 Detected local models: <span className="lexel-mono">{aiHealth.models.join(', ')}</span>
@@ -292,7 +319,7 @@ export function OptionsApp() {
                 }}
               >
                 <div>Quick start with base Qwen2.5-1.5B (Ollama):</div>
-                <div>OLLAMA_ORIGINS="chrome-extension://*" ollama serve</div>
+                <div>OLLAMA_ORIGINS="chrome-extension://*,moz-extension://*" ollama serve</div>
                 <div>ollama pull qwen2.5:1.5b</div>
               </div>
             )}
