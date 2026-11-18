@@ -38,6 +38,9 @@ export default defineConfig({
       'harper.js': path.resolve(import.meta.dirname, 'node_modules/harper.js'),
     },
   },
+  optimizeDeps: {
+    exclude: ['lexel-ui'],
+  },
   test: {
     environment: 'jsdom',
     include: ['tests/**/*.test.ts'],

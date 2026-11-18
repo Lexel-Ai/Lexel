@@ -4,7 +4,7 @@ import { Activity, Download, Link2, Plus, Save, Trash2, Upload } from 'lucide-re
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { LocalAiHealth } from '../lib/localAi';
 import { MODEL_MANIFEST_SPECS, resolveModelNameForTier } from '../lib/models';
-import { SURFACE_PROFILES } from '../lib/surfaces';
+import { listSurfaceProfiles } from '../lib/surfaces';
 import type {
   ActivationKey,
   AiSettings,
@@ -809,7 +809,7 @@ export function SettingsView({
                   }}
                 >
                   <option value="auto">Auto Surface</option>
-                  {SURFACE_PROFILES.map((s) => (
+                  {listSurfaceProfiles(state.customSurfaces).map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.label}
                     </option>
