@@ -5,7 +5,7 @@ Master reference: [PLAN.md](PLAN.md)
 ## 1. Git Commit & Verification Workflow
 After completing any major feature, bug fix, upstream Harper sync, ML pipeline milestone, or passing a major test suite, follow [`.agents/rules/git-commits.md`](.agents/rules/git-commits.md) and [`.agents/rules/quality-gates.md`](.agents/rules/quality-gates.md):
 1. Run the relevant verification gates (`cargo fmt --check`, `cargo clippy`, `cargo test`, `pnpm -r typecheck/test/build`, `uv run pytest`).
-2. Suggest **strictly ONE ready-to-run single-line bash commit command** (`git add . && git commit -m "<type>(<scope>): <summary>"`, keeping it short enough not to wrap/break on copy-paste) following the Conventional Commit format in `.agents/rules/git-commits.md`.
+2. Suggest **strictly ONE ready-to-run bash commit command** (`git add . && git commit -m "<type>(<scope>): <summary>" -m "- <detail>" -m "- <impact/files>" -m "Verification: <observed checks>"`, avoiding multi-line `<< 'EOF'` heredocs) following the valid types (`feat|fix|perf|refactor|sec|arch|ml|sync|test|infra|docs|revert`), scopes, and Circumstance Matrix in `.agents/rules/git-commits.md` and `.gitmessage`.
 3. Only report checks and pass counts actually observed after the final edit.
 
 ## 2. Architecture & Privacy Invariants

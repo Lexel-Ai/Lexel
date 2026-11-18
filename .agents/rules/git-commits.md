@@ -94,5 +94,5 @@ Append `!` after type/scope (e.g. `arch(daemon)!:`) and add a `BREAKING CHANGE:`
 
 Whenever a major milestone, feature, fix, or test suite passes:
 1. Run all applicable quality gates in `.agents/rules/quality-gates.md` first.
-2. Output **strictly ONE short single-line ready-to-run bash command block** using `git add . && git commit -m "<type>(<scope>): <summary>"` (with a `<= 72`-char imperative headline and no extra `-m` flags or `<< 'EOF'` heredocs so terminal word-wrapping never breaks copy-paste). Put details and verification pass counts in the prose response above the command block.
+2. Output **strictly ONE ready-to-run bash command block** using `git add . && git commit -m "<type>(<scope>): <summary>" -m "- <detail 1>" -m "- <detail 2>" -m "Verification: <observed checks>"` (using a `<= 72`-char imperative headline with a valid Lexel type `feat|fix|perf|refactor|sec|arch|ml|sync|test|infra|docs|revert` that passes `scripts/hooks/commit-msg`, circumstance-specific `-m` bullets from Section 3, and observed verification results; avoid `<< 'EOF'` heredocs so copy-paste stays clean).
 3. Never invent test counts, timings, or build passes you did not directly observe. Never output duplicate commit blocks (one markdown preview + one bash block).

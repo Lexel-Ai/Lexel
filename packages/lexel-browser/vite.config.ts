@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react';
 import path from 'node:path';
 import copy from 'rollup-plugin-copy';
 import { defineConfig, loadEnv, type PluginOption } from 'vite';
-import manifest from './src/manifest';
+import manifest from './src/manifest.ts';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => {
       minify: mode === 'production',
       rollupOptions: {
         input: {
-          sidepanel: path.resolve(__dirname, 'sidepanel.html'),
+          sidepanel: path.resolve(import.meta.dirname, 'sidepanel.html'),
         },
         output: {
           chunkFileNames: 'assets/chunk-[hash].js',
@@ -43,7 +43,7 @@ export default defineConfig(({ mode }) => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, 'src'),
+        '@': path.resolve(import.meta.dirname, 'src'),
       },
     },
     test: {

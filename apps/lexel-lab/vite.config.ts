@@ -8,7 +8,7 @@ import { defineConfig, type PluginOption } from 'vite';
 // Resolve sibling deps (virtual-dom, colorjs.io) alongside pnpm's lint-framework
 // store directory so aliasing lint-framework to its FontAwesome-free TS sources works.
 const lintFrameworkDepsDir = path.dirname(
-  fs.realpathSync(path.resolve(__dirname, 'node_modules/lint-framework')),
+  fs.realpathSync(path.resolve(import.meta.dirname, 'node_modules/lint-framework')),
 );
 
 export default defineConfig({
@@ -31,11 +31,11 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, 'src'),
-      'lint-framework': path.resolve(__dirname, 'config/lintFramework.ts'),
+      '@': path.resolve(import.meta.dirname, 'src'),
+      'lint-framework': path.resolve(import.meta.dirname, 'config/lintFramework.ts'),
       'virtual-dom': path.resolve(lintFrameworkDepsDir, 'virtual-dom'),
       'colorjs.io': path.resolve(lintFrameworkDepsDir, 'colorjs.io'),
-      'harper.js': path.resolve(__dirname, 'node_modules/harper.js'),
+      'harper.js': path.resolve(import.meta.dirname, 'node_modules/harper.js'),
     },
   },
   test: {
