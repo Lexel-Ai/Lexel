@@ -1,4 +1,4 @@
-.PHONY: sync-harper install dev-browser build-browser typecheck test build
+.PHONY: sync-harper install dev-browser build-browser dev-lab build-lab typecheck test build
 
 install:
 	pnpm install
@@ -11,6 +11,12 @@ dev-browser:
 
 build-browser:
 	pnpm run build:browser
+
+dev-lab:
+	pnpm --filter lexel-lab dev
+
+build-lab:
+	pnpm run build:lab
 
 typecheck:
 	pnpm -r typecheck

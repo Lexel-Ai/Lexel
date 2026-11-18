@@ -5,6 +5,7 @@ build/
 target/
 *.tsbuildinfo
 packages/lexel-browser/public/wasm/
+apps/lexel-lab/public/wasm/
 
 # Local Data, Models & Secrets
 .env
