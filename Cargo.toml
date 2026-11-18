@@ -5,7 +5,7 @@ members = [
   "crates/lexel-daemon",
   "crates/lexel-cli",
 ]
-exclude = ["vendor/harper"]
+exclude = ["vendor/harper", "apps/lexel-desktop/src-tauri"]
 resolver = "2"
 
 [workspace.package]

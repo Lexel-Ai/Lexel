@@ -1,4 +1,4 @@
-.PHONY: sync-harper install setup dev-browser build-browser dev-lab build-lab typecheck test build rust-check rust-test daemon
+.PHONY: sync-harper install setup dev-browser build-browser dev-desktop build-desktop tauri-dev typecheck test build rust-check rust-test daemon
 
 install:
 	pnpm install
@@ -24,11 +24,14 @@ dev-browser:
 build-browser:
 	pnpm run build:browser
 
-dev-lab:
-	pnpm --filter lexel-lab dev
+dev-desktop:
+	pnpm --filter lexel-desktop dev
 
-build-lab:
-	pnpm run build:lab
+build-desktop:
+	pnpm run build:desktop
+
+tauri-dev:
+	pnpm --filter lexel-desktop tauri dev
 
 typecheck:
 	pnpm -r typecheck

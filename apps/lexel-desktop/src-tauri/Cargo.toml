@@ -1,0 +1,27 @@
+[package]
+name = "lexel-desktop"
+version = "0.1.0"
+description = "Lexel Desktop: Local AI, Unified Rules, and Browser Extension Sync"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+name = "lexel_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+dirs = "7.0"
+lexel-core = { path = "../../../crates/lexel-core" }
+lexel-daemon = { path = "../../../crates/lexel-daemon" }
+lexel-db = { path = "../../../crates/lexel-db" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "2", features = ["tray-icon"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

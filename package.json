@@ -9,9 +9,11 @@
   },
   "scripts": {
     "dev:browser": "pnpm --filter lexel-browser dev",
-    "dev:lab": "pnpm --filter lexel-lab dev",
+    "dev:desktop": "pnpm --filter lexel-desktop dev",
     "build:browser": "pnpm --filter lexel-ui build && pnpm --filter lexel-browser build",
-    "build:lab": "pnpm --filter lexel-ui build && pnpm --filter lexel-lab build",
+    "build:desktop": "pnpm --filter lexel-ui build && pnpm --filter lexel-desktop build",
+    "tauri:dev": "pnpm --filter lexel-desktop tauri dev",
+    "tauri:build": "pnpm --filter lexel-desktop tauri build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "build": "pnpm -r build"

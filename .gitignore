@@ -5,7 +5,7 @@ build/
 target/
 *.tsbuildinfo
 packages/lexel-browser/public/wasm/
-apps/lexel-lab/public/wasm/
+apps/lexel-desktop/src-tauri/gen/
 
 # Local Data, Models & Secrets
 .env
