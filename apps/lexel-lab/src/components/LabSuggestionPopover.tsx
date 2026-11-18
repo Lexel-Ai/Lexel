@@ -1,6 +1,6 @@
 import { SuggestionKind } from 'harper.js';
-import { CheckIcon, CloseIcon, NibIcon, SlidersIcon } from 'lexel-ui';
 import type { IgnorableLintBox, UnpackedSuggestion } from 'lint-framework';
+import { Check, PenTool, SlidersHorizontal, X } from 'lucide-react';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ActiveLabLint } from '../lib/labLintController';
 
@@ -211,7 +211,7 @@ export function LabSuggestionPopover({
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
-          <NibIcon className="w-3.5 h-3.5 shrink-0" />
+          <PenTool className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} aria-hidden="true" />
           <span
             className="inline-flex items-center rounded-[4px] border px-1.5 py-0.5 text-[11px] font-semibold lexel-mono shrink-0"
             style={{
@@ -238,7 +238,7 @@ export function LabSuggestionPopover({
           className="rounded-[6px] p-1 shrink-0"
           style={{ color: 'var(--lx-fg-muted)' }}
         >
-          <CloseIcon className="w-3.5 h-3.5" />
+          <X className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
         </button>
       </div>
 
@@ -297,7 +297,7 @@ export function LabSuggestionPopover({
                   className="inline-flex items-center gap-1 text-[11px] lexel-mono shrink-0"
                   style={{ color: isSelected ? 'var(--lx-signal)' : 'var(--lx-fg-muted)' }}
                 >
-                  {isSelected ? <CheckIcon className="w-3 h-3" /> : null}
+                  {isSelected ? <Check className="w-3 h-3" strokeWidth={2} aria-hidden="true" /> : null}
                   <span>{display.action}</span>
                 </span>
               </button>
@@ -395,7 +395,7 @@ export function LabSuggestionPopover({
           className="ml-auto inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[11px]"
           style={{ color: 'var(--lx-fg-muted)' }}
         >
-          <SlidersIcon className="w-3 h-3" />
+          <SlidersHorizontal className="w-3 h-3" strokeWidth={1.75} aria-hidden="true" />
           <span>Rule Settings</span>
         </button>
       </div>

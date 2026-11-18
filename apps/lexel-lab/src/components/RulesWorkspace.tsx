@@ -1,4 +1,5 @@
 import type { LintConfig } from 'harper.js';
+import { RotateCcw, Search } from 'lucide-react';
 import React, { useMemo, useState } from 'react';
 import { SURFACE_PROFILES } from '../lib/surfaces';
 import { SLOP_TERMS } from '../lib/verifier';
@@ -102,32 +103,41 @@ export function RulesWorkspace({
         {subTab === 'grammar' ? (
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <input
-                type="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search 900+ Harper rules by name or description..."
-                aria-label="Search grammar rules"
-                className="flex-1 min-w-[240px] rounded-[6px] border px-3 py-1.5 text-xs"
-                style={{
-                  backgroundColor: 'var(--lx-surface)',
-                  borderColor: 'var(--lx-border)',
-                  color: 'var(--lx-fg)',
-                }}
-              />
+              <div className="relative flex-1 min-w-[240px]">
+                <Search
+                  className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                  strokeWidth={1.75}
+                  style={{ color: 'var(--lx-fg-muted)' }}
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search 900+ Harper rules by name or description..."
+                  aria-label="Search grammar rules"
+                  className="w-full rounded-[6px] border pl-8 pr-3 py-1.5 text-xs"
+                  style={{
+                    backgroundColor: 'var(--lx-surface)',
+                    borderColor: 'var(--lx-border)',
+                    color: 'var(--lx-fg)',
+                  }}
+                />
+              </div>
               <button
                 type="button"
                 onClick={() => {
                   void onResetAllRules().then(() => setNotice('Reset all grammar rules to defaults.'));
                 }}
-                className="rounded-[6px] border px-3 py-1.5 text-xs font-medium"
+                className="inline-flex items-center gap-1.5 rounded-[6px] border px-3 py-1.5 text-xs font-medium"
                 style={{
                   backgroundColor: 'var(--lx-surface)',
                   borderColor: 'var(--lx-border)',
                   color: 'var(--lx-fg)',
                 }}
               >
-                Reset defaults
+                <RotateCcw className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+                <span>Reset defaults</span>
               </button>
             </div>
 

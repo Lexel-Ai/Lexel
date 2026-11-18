@@ -1,5 +1,6 @@
 import type { Dialect } from 'harper.js';
 import { StatusPill } from 'lexel-ui';
+import { Activity, Download, Save, Trash2, Upload } from 'lucide-react';
 import React, { useRef, useState } from 'react';
 import type { LocalAiHealth } from '../lib/localAi';
 import type { ActivationKey, AiSettings, LabSettingsState } from '../lib/types';
@@ -266,10 +267,11 @@ export function SettingsView({
               onClick={() => {
                 void onTestAi(state.aiSettings).then(() => setNotice('Tested local AI connection.'));
               }}
-              className="rounded-[6px] px-3.5 py-1.5 text-xs font-semibold"
+              className="inline-flex items-center gap-1.5 rounded-[6px] px-3.5 py-1.5 text-xs font-semibold"
               style={{ backgroundColor: 'var(--lx-accent)', color: 'var(--lx-on-accent)' }}
             >
-              Save &amp; Test Connection
+              <Activity className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+              <span>Save &amp; Test Connection</span>
             </button>
           </div>
         </section>
@@ -429,34 +431,37 @@ export function SettingsView({
                 onUpdateState((prev) => ({ ...prev, userDictionary: words }));
                 setNotice(`Saved ${words.length} dictionary word(s).`);
               }}
-              className="rounded-[6px] px-3 py-1.5 text-xs font-semibold"
+              className="inline-flex items-center gap-1.5 rounded-[6px] px-3 py-1.5 text-xs font-semibold"
               style={{ backgroundColor: 'var(--lx-accent)', color: 'var(--lx-on-accent)' }}
             >
-              Save Dictionary
+              <Save className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+              <span>Save Dictionary</span>
             </button>
             <button
               type="button"
               onClick={onExportJson}
-              className="rounded-[6px] border px-3 py-1.5 text-xs font-medium"
+              className="inline-flex items-center gap-1.5 rounded-[6px] border px-3 py-1.5 text-xs font-medium"
               style={{
                 backgroundColor: 'var(--lx-surface)',
                 borderColor: 'var(--lx-border)',
                 color: 'var(--lx-fg)',
               }}
             >
-              Export Backup (.json)
+              <Download className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+              <span>Export Backup (.json)</span>
             </button>
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="rounded-[6px] border px-3 py-1.5 text-xs font-medium"
+              className="inline-flex items-center gap-1.5 rounded-[6px] border px-3 py-1.5 text-xs font-medium"
               style={{
                 backgroundColor: 'var(--lx-surface)',
                 borderColor: 'var(--lx-border)',
                 color: 'var(--lx-fg)',
               }}
             >
-              Import Backup (.json)
+              <Upload className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+              <span>Import Backup (.json)</span>
             </button>
             <input
               ref={fileInputRef}
@@ -480,14 +485,15 @@ export function SettingsView({
                 setDictDraft('');
                 setNotice('Purged all local Lab settings and Voice Memory.');
               }}
-              className="ml-auto rounded-[6px] border px-3 py-1.5 text-xs font-medium"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-[6px] border px-3 py-1.5 text-xs font-medium"
               style={{
                 backgroundColor: 'var(--lx-danger-bg)',
                 borderColor: 'var(--lx-danger)',
                 color: 'var(--lx-danger)',
               }}
             >
-              Purge All Local Data
+              <Trash2 className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+              <span>Purge All Local Data</span>
             </button>
           </div>
 

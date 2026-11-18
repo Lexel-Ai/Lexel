@@ -1,14 +1,27 @@
 import type { Dialect, LintConfig } from 'harper.js';
 import {
-  NibIcon,
   RewriteDiffCard,
-  SlidersIcon,
   StatusPill,
   SurfaceBadge,
-  ThemeToggle,
   type AiHealthState,
 } from 'lexel-ui';
 import type { IgnorableLintBox, UnpackedLint, UnpackedLintGroups } from 'lint-framework';
+import {
+  BookOpenCheck,
+  Check,
+  CheckCircle2,
+  Copy,
+  Download,
+  Eraser,
+  FilePenLine,
+  MonitorDown,
+  Moon,
+  PenLine,
+  PenTool,
+  RefreshCw,
+  SlidersHorizontal,
+  Sun,
+} from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LabSuggestionPopover } from './components/LabSuggestionPopover';
 import { RulesWorkspace } from './components/RulesWorkspace';
@@ -396,7 +409,7 @@ export function App() {
       >
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex items-center gap-2">
-            <NibIcon className="w-4 h-4" />
+            <PenTool className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />
             <h1 className="text-sm font-semibold tracking-tight m-0">Lexel Lab</h1>
           </div>
           <span
@@ -426,21 +439,22 @@ export function App() {
                 await installPrompt.userChoice;
                 setInstallPrompt(null);
               }}
-              className="rounded-[6px] border px-2.5 py-1 text-xs font-medium"
+              className="inline-flex items-center gap-1.5 rounded-[6px] border px-2.5 py-1 text-xs font-medium"
               style={{
                 backgroundColor: 'var(--lx-bg)',
                 borderColor: 'var(--lx-border)',
                 color: 'var(--lx-fg)',
               }}
             >
-              Install
+              <MonitorDown className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+              <span>Install</span>
             </button>
           ) : null}
 
           <a
             href="./downloads/lexel-lab-standalone.zip"
             download="lexel-lab-standalone.zip"
-            className="rounded-[6px] border px-2.5 py-1 text-xs font-medium no-underline"
+            className="inline-flex items-center gap-1.5 rounded-[6px] border px-2.5 py-1 text-xs font-medium no-underline"
             style={{
               backgroundColor: 'var(--lx-bg)',
               borderColor: 'var(--lx-border)',
@@ -448,18 +462,33 @@ export function App() {
             }}
             title="Download offline Lexel Lab bundle"
           >
-            Download (.zip)
+            <Download className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+            <span>Download (.zip)</span>
           </a>
 
-          <ThemeToggle
-            theme={state.theme}
-            onToggle={() =>
+          <button
+            type="button"
+            onClick={() =>
               setState((prev) => ({
                 ...prev,
                 theme: prev.theme === 'dark' ? 'light' : 'dark',
               }))
             }
-          />
+            aria-label={state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            title={state.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-[6px] border transition-colors"
+            style={{
+              backgroundColor: 'var(--lx-muted)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          >
+            {state.theme === 'dark' ? (
+              <Sun className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />
+            ) : (
+              <Moon className="w-4 h-4" strokeWidth={1.75} aria-hidden="true" />
+            )}
+          </button>
         </div>
       </header>
 
@@ -484,7 +513,13 @@ export function App() {
                   }}
                 >
                   <span className="inline-flex items-center gap-2">
-                    {item.id === 'settings' ? <SlidersIcon className="w-3.5 h-3.5" /> : null}
+                    {item.id === 'studio' ? (
+                      <FilePenLine className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+                    ) : item.id === 'rules' ? (
+                      <BookOpenCheck className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+                    ) : (
+                      <SlidersHorizontal className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+                    )}
                     <span>{item.label}</span>
                   </span>
                   {item.meta ? (
@@ -686,14 +721,19 @@ export function App() {
                         setCopiedDraft(true);
                         window.setTimeout(() => setCopiedDraft(false), 1500);
                       }}
-                      className="rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
+                      className="inline-flex items-center gap-1.5 rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
                       style={{
                         backgroundColor: 'var(--lx-bg)',
                         borderColor: 'var(--lx-border)',
                         color: 'var(--lx-fg)',
                       }}
                     >
-                      {copiedDraft ? 'Copied' : 'Copy'}
+                      {copiedDraft ? (
+                        <Check className="w-3 h-3" strokeWidth={2} aria-hidden="true" />
+                      ) : (
+                        <Copy className="w-3 h-3" strokeWidth={1.75} aria-hidden="true" />
+                      )}
+                      <span>{copiedDraft ? 'Copied' : 'Copy'}</span>
                     </button>
                     <button
                       type="button"
@@ -701,10 +741,11 @@ export function App() {
                         setState((prev) => ({ ...prev, draftText: '' }));
                         setRewriteResult(null);
                       }}
-                      className="rounded-[6px] px-2 py-1 text-[11px]"
+                      className="inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[11px]"
                       style={{ color: 'var(--lx-fg-muted)' }}
                     >
-                      Clear
+                      <Eraser className="w-3 h-3" strokeWidth={1.75} aria-hidden="true" />
+                      <span>Clear</span>
                     </button>
                   </div>
                 </div>
@@ -754,8 +795,16 @@ export function App() {
                   <div className="flex-1 overflow-y-auto divide-y" style={{ borderColor: 'var(--lx-border)' }}>
                     {flattenedLints.length === 0 ? (
                       <div className="p-6 text-xs space-y-2" style={{ color: 'var(--lx-fg-muted)' }}>
-                        <div className="font-semibold" style={{ color: 'var(--lx-fg)' }}>
-                          {state.draftText.trim() ? 'Clean draft' : 'Waiting for text'}
+                        <div className="flex items-center gap-1.5 font-semibold" style={{ color: 'var(--lx-fg)' }}>
+                          {state.draftText.trim() ? (
+                            <CheckCircle2
+                              className="w-3.5 h-3.5"
+                              strokeWidth={1.75}
+                              style={{ color: 'var(--lx-signal)' }}
+                              aria-hidden="true"
+                            />
+                          ) : null}
+                          <span>{state.draftText.trim() ? 'Clean draft' : 'Waiting for text'}</span>
                         </div>
                         <p className="m-0 leading-relaxed">
                           {state.draftText.trim()
@@ -838,13 +887,14 @@ export function App() {
                                       rule === 'LexelAntiSlop' ? 'deslop' : 'fix_grammar_flow',
                                     )
                                   }
-                                  className="rounded-[6px] px-2.5 py-0.5 text-[11px] font-semibold"
+                                  className="inline-flex items-center gap-1 rounded-[6px] px-2.5 py-0.5 text-[11px] font-semibold"
                                   style={{
                                     backgroundColor: 'var(--lx-accent)',
                                     color: 'var(--lx-on-accent)',
                                   }}
                                 >
-                                  Rewrite with AI
+                                  <PenLine className="w-3 h-3" strokeWidth={1.75} aria-hidden="true" />
+                                  <span>Rewrite with AI</span>
                                 </button>
                               ) : null}
                             </div>
@@ -935,26 +985,28 @@ export function App() {
                           <button
                             type="button"
                             onClick={() => void refreshAiHealth(state.aiSettings)}
-                            className="rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
+                            className="inline-flex items-center gap-1.5 rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
                             style={{
                               backgroundColor: 'var(--lx-bg)',
                               borderColor: 'var(--lx-border)',
                               color: 'var(--lx-fg)',
                             }}
                           >
-                            Retry connection
+                            <RefreshCw className="w-3 h-3" strokeWidth={1.75} aria-hidden="true" />
+                            <span>Retry connection</span>
                           </button>
                           <button
                             type="button"
                             onClick={() => setWorkspace('settings')}
-                            className="rounded-[6px] border px-2.5 py-1 text-[11px]"
+                            className="inline-flex items-center gap-1.5 rounded-[6px] border px-2.5 py-1 text-[11px]"
                             style={{
                               backgroundColor: 'var(--lx-bg)',
                               borderColor: 'var(--lx-border)',
                               color: 'var(--lx-fg-muted)',
                             }}
                           >
-                            AI Settings
+                            <SlidersHorizontal className="w-3 h-3" strokeWidth={1.75} aria-hidden="true" />
+                            <span>AI Settings</span>
                           </button>
                         </div>
                       </div>
@@ -1011,13 +1063,16 @@ export function App() {
                       type="button"
                       disabled={aiLoading || !state.aiSettings.enabled}
                       onClick={() => void runAiTask()}
-                      className="w-full rounded-[6px] px-3 py-2 text-xs font-semibold"
+                      className="w-full inline-flex items-center justify-center gap-1.5 rounded-[6px] px-3 py-2 text-xs font-semibold"
                       style={{
                         backgroundColor: 'var(--lx-accent)',
                         color: 'var(--lx-on-accent)',
                       }}
                     >
-                      {aiLoading ? `Running ${state.aiSettings.model}...` : 'Rewrite with Local AI'}
+                      <PenLine className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+                      <span>
+                        {aiLoading ? `Running ${state.aiSettings.model}...` : 'Rewrite with Local AI'}
+                      </span>
                     </button>
 
                     {aiError ? (

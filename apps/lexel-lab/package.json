@@ -15,6 +15,7 @@
     "harper.js": "file:../../vendor/harper/packages/harper.js",
     "lexel-ui": "workspace:*",
     "lint-framework": "file:../../vendor/harper/packages/lint-framework",
+    "lucide-react": "^1.75.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
