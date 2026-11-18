@@ -27,9 +27,9 @@ function GateChip({ ok, label }: { ok: boolean; label: string }) {
     <span
       className="inline-flex items-center gap-1 rounded-[4px] border px-1.5 py-0.5 text-[11px] lexel-mono"
       style={{
-        backgroundColor: ok ? 'var(--lx-muted)' : 'var(--lx-warn-bg)',
-        borderColor: ok ? 'var(--lx-border)' : 'var(--lx-warn)',
-        color: ok ? 'var(--lx-accent)' : 'var(--lx-warn)',
+        backgroundColor: ok ? 'var(--lx-signal-bg)' : 'var(--lx-warn-bg)',
+        borderColor: ok ? 'var(--lx-signal)' : 'var(--lx-warn)',
+        color: ok ? 'var(--lx-signal)' : 'var(--lx-warn)',
       }}
     >
       {ok ? <CheckIcon className="w-3 h-3" /> : null}

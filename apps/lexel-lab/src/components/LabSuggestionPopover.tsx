@@ -96,7 +96,7 @@ function categoryBadgeStyle(rule: string, lintKind: string) {
   ) {
     return { bg: 'var(--lx-warn-bg)', border: 'var(--lx-warn)', color: 'var(--lx-warn)' };
   }
-  return { bg: 'var(--lx-muted)', border: 'var(--lx-border)', color: 'var(--lx-accent)' };
+  return { bg: 'var(--lx-signal-bg)', border: 'var(--lx-signal)', color: 'var(--lx-signal)' };
 }
 
 export interface LabSuggestionPopoverProps {
@@ -288,14 +288,14 @@ export function LabSuggestionPopover({
                 className="w-full flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-left text-xs transition-colors"
                 style={{
                   backgroundColor: isSelected ? 'var(--lx-card)' : 'var(--lx-muted)',
-                  borderColor: isSelected ? 'var(--lx-accent)' : 'var(--lx-border)',
+                  borderColor: isSelected ? 'var(--lx-signal)' : 'var(--lx-border)',
                   color: 'var(--lx-fg)',
                 }}
               >
                 <span className="font-semibold truncate">{display.label}</span>
                 <span
                   className="inline-flex items-center gap-1 text-[11px] lexel-mono shrink-0"
-                  style={{ color: isSelected ? 'var(--lx-accent)' : 'var(--lx-fg-muted)' }}
+                  style={{ color: isSelected ? 'var(--lx-signal)' : 'var(--lx-fg-muted)' }}
                 >
                   {isSelected ? <CheckIcon className="w-3 h-3" /> : null}
                   <span>{display.action}</span>

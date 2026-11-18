@@ -10,7 +10,7 @@ export interface StatusPillProps {
 export function StatusPill({ state, label }: StatusPillProps) {
   const dotColor =
     state === 'ready'
-      ? 'var(--lx-accent)'
+      ? 'var(--lx-signal)'
       : state === 'loading'
         ? 'var(--lx-warn)'
         : state === 'error'

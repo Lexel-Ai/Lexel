@@ -1,34 +1,37 @@
-# Lexel Design Direction (`DESIGN.md`)
+# Lexel Design System (`DESIGN.md`)
 
-**Identity:** Developer-grade local writing instrument (ink-on-slate, quiet precision, zero SaaS clutter).
+**Identity:** Monochrome editorial writing instrument (carbon black & pure paper white, one Proofreader Cobalt accent, zero SaaS clutter).
 
 ## 1. Visual Dials
-- **ENERGY:** 1 (Calm, utilitarian tool surface)
-- **RHYTHM:** 1 (Consistent, dense panels with clear hairline borders)
+- **ENERGY:** 1 (Calm, razor-sharp tool surface)
+- **RHYTHM:** 2 (Clear structural separation: navigation rail, primary canvas, right inspector)
 - **MOTION:** 1 (Crisp hover/focus states only; respects `prefers-reduced-motion`)
 
-## 2. Color Tokens (Dark Default + Full Light Mode)
-Both themes are first-class and verified for >= 4.5:1 text contrast:
+## 2. Color Tokens (Carbon Black & Paper White + Proofreader Cobalt)
+Both themes are first-class and verified for >= 4.5:1 WCAG AA contrast:
 
-| Semantic Token | Dark (`#0F172A` Slate Ink) | Light (`#F8FAFC` Paper) | Purpose |
+| Semantic Token | Dark (`#09090B` Carbon) | Light (`#FFFFFF` Paper) | Purpose |
 | :--- | :--- | :--- | :--- |
-| `--lx-bg` | `#0F172A` | `#F8FAFC` | Primary surface canvas |
-| `--lx-card` | `#1B2336` | `#FFFFFF` | Cards, popovers, diff boxes |
-| `--lx-muted` | `#272F42` | `#E2E8F0` | Secondary controls, input wells |
-| `--lx-fg` | `#F8FAFC` | `#0F172A` | Primary readable text |
-| `--lx-fg-muted` | `#94A3B8` | `#475569` | Metadata, helper copy, labels |
-| `--lx-border` | `#334155` | `#CBD5E1` | Hairline 1px panel dividers |
-| `--lx-accent` | `#22C55E` | `#15803D` | Verified pass badge & primary AI action |
-| `--lx-on-accent` | `#052E16` | `#FFFFFF` | High-contrast text on accent CTA |
-| `--lx-warn` | `#F59E0B` | `#B45309` | Surface bound / tone warnings |
-| `--lx-danger` | `#EF4444` | `#B91C1C` | Spelling errors & destructive purge |
+| `--lx-bg` | `#09090B` | `#FFFFFF` | Primary canvas & editor surface |
+| `--lx-surface` | `#111113` | `#F7F7F8` | Secondary structural rails & toolbars |
+| `--lx-card` | `#141416` | `#FFFFFF` | Popovers, diff panels, option groups |
+| `--lx-muted` | `#1F1F23` | `#F1F1F2` | Secondary controls, code spans, inactive tabs |
+| `--lx-fg` | `#FAFAFA` | `#0A0A0A` | Primary readable text |
+| `--lx-fg-muted` | `#A1A1AA` | `#52525B` | Metadata, helper copy, labels |
+| `--lx-border` | `#27272A` | `#E4E4E7` | Hairline 1px structural dividers |
+| `--lx-accent` | `#FAFAFA` | `#0A0A0A` | Primary B&W action buttons & active nav |
+| `--lx-on-accent` | `#09090B` | `#FFFFFF` | High-contrast text on primary B&W CTA |
+| `--lx-signal` | `#60A5FA` | `#2563EB` | Deliberate Proofreader Cobalt accent (verified gates, active focus) |
+| `--lx-warn` | `#F59E0B` | `#B45309` | Surface bound & anti-slop warnings |
+| `--lx-danger` | `#F87171` | `#DC2626` | Spelling errors & destructive purge |
 
 ## 3. Typography & Radius
-- **Body / UI:** `'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif` (100% local stack, zero external font requests for privacy and MV3 CSP).
-- **Mono / Surface Paths / Counters:** `'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace`.
-- **Radii:** `6px` inputs/buttons, `8px` cards/panels, `4px` inline badges. No uniform pill-everything styling.
+- **Body / UI:** `'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, sans-serif` (100% local stack).
+- **Mono / Rule IDs / Counters:** `'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace`.
+- **Radii:** `6px` inputs/buttons, `8px` panels/dialogs, `4px` inline badges.
 
 ## 4. Purpose-Built UI Rules
-- Zero decorative emojis, zero generic sparkle/magic icons, zero blue-purple gradients.
-- Every panel displays honest empty, loading, and error states.
-- Full keyboard accessibility (`Tab`, `Enter`, `Escape` to close inline overlays) with visible focus rings.
+- Every screen has one clear primary job; writing, rule browsing, and system configuration are separated cleanly.
+- Zero decorative emojis, zero generic sparkle/magic icons, zero purple-blue gradients.
+- Honest empty, loading, and error states with next actions.
+- Full keyboard accessibility (`Tab`, `ArrowUp`/`ArrowDown`, `Enter`, `Escape`) with visible focus rings.
