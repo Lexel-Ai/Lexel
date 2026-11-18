@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   daemonRpc,
+  downloadModel,
   installNativeMessaging,
   isTauriRuntime,
   MODEL_SPECS,
@@ -35,6 +36,7 @@ export function SystemSyncPane({
   const settings = status.activeProfile.settings;
   const [extensionIdsInput, setExtensionIdsInput] = useState('');
   const [newProfileName, setNewProfileName] = useState('');
+  const [downloadingModelId, setDownloadingModelId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -76,6 +78,26 @@ export function SystemSyncPane({
     await daemonRpc('unloadAi', {});
     await onRefreshAll();
     setActionMessage('Unloaded local AI model from RAM.');
+  }
+
+  async function handleDownloadModel(modelId: string) {
+    setActionError(null);
+    setActionMessage(null);
+    setDownloadingModelId(modelId);
+    try {
+      const report = await downloadModel(modelId);
+      await onRefreshAll();
+      const mb = Math.round(report.bytesDownloaded / (1024 * 1024));
+      setActionMessage(
+        report.alreadyPresent
+          ? `${report.id} is already verified on disk (${mb} MB).`
+          : `Downloaded and SHA-256 verified ${report.id} (${mb} MB).`,
+      );
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDownloadingModelId(null);
+    }
   }
 
   async function handleCreateProfile(e: React.FormEvent) {
@@ -322,23 +344,49 @@ export function SystemSyncPane({
         </div>
 
         <div className="grid gap-2 sm:grid-cols-2">
-          {status.models.map((m) => (
-            <div
-              key={m.id}
-              className="rounded-[6px] border px-2.5 py-2 text-[12px]"
-              style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
-            >
-              <div className="flex items-center justify-between font-medium">
-                <span>{m.label}</span>
-                <span className="text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
-                  {m.ggufInstalled ? 'GGUF ready' : m.ollamaInstalled ? 'Ollama ready' : 'Not downloaded'}
-                </span>
+          {status.models.map((m) => {
+            const ready = m.ggufInstalled && m.ggufSizeValid;
+            const downloading = downloadingModelId === m.id;
+            return (
+              <div
+                key={m.id}
+                className="flex flex-col justify-between gap-2 rounded-[6px] border px-2.5 py-2 text-[12px]"
+                style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+              >
+                <div>
+                  <div className="flex items-center justify-between font-medium">
+                    <span>{m.label}</span>
+                    <span className="text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
+                      {ready ? 'GGUF verified' : m.ollamaInstalled ? 'Ollama ready' : 'Not downloaded'}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
+                    {m.ggufFilename} ({Math.round(m.sizeBytes / (1024 * 1024))} MB)
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                    {m.description}
+                  </span>
+                  {!ready && (
+                    <button
+                      type="button"
+                      disabled={downloadingModelId !== null}
+                      onClick={() => void handleDownloadModel(m.id)}
+                      className="shrink-0 rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
+                      style={{
+                        backgroundColor: 'var(--lx-muted)',
+                        borderColor: 'var(--lx-border)',
+                        color: 'var(--lx-fg)',
+                      }}
+                    >
+                      {downloading ? 'Downloading...' : 'Download GGUF'}
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="mt-0.5 text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
-                {m.ggufFilename}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
 

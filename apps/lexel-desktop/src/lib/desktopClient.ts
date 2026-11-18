@@ -16,6 +16,7 @@ import type {
   DaemonProfile,
   DaemonStatusPayload,
   DesktopEnvInfo,
+  DownloadModelReport,
   HarperRulesPayload,
   NativeHostInstallReport,
   NativeHostStatusReport,
@@ -252,6 +253,10 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
     }
     case 'unloadAi':
       return buildPreviewStatus(store).runtime;
+    case 'downloadModel':
+      throw new Error(
+        'Model downloads require the native Lexel Desktop app or `make setup`.',
+      );
     case 'harperRules': {
       const sampleNames = [
         ['SpellCheck', 'Checks spelling against Harper dictionary and user lexicon.', true],
@@ -472,6 +477,10 @@ export async function installNativeMessaging(
     return invoke<NativeHostInstallReport>('install_native_messaging', { extensionIds });
   }
   throw new Error('Native Messaging installation requires running Lexel Desktop via Tauri.');
+}
+
+export function downloadModel(modelId: string): Promise<DownloadModelReport> {
+  return daemonRpc<DownloadModelReport>('downloadModel', { modelId });
 }
 
 export function rewriteWithTask(params: {

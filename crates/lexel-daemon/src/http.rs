@@ -59,6 +59,13 @@ struct SetMainModelBody {
     model: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadModelBody {
+    #[serde(alias = "model")]
+    model_id: String,
+}
+
 fn default_true() -> bool {
     true
 }
@@ -82,6 +89,7 @@ pub fn build_router(service: Arc<DaemonService>, token: String) -> Router {
         .route("/v1/ai/toggle", post(post_ai_toggle))
         .route("/v1/ai/main-model", post(post_ai_main_model))
         .route("/v1/ai/unload", post(post_ai_unload))
+        .route("/v1/models/download", post(post_download_model))
         .route("/v1/rewrite", post(post_rewrite))
         .route("/v1/harper/rules", get(get_harper_rules))
         .route("/v1/harper/structured-rules", get(get_structured_rules))
@@ -433,4 +441,11 @@ async fn post_import(
 
 async fn post_purge(State(state): State<AppState>) -> Result<impl IntoResponse, DaemonError> {
     Ok(Json(state.service.purge_all().await?))
+}
+
+async fn post_download_model(
+    State(state): State<AppState>,
+    Json(body): Json<DownloadModelBody>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.download_model(&body.model_id).await?))
 }

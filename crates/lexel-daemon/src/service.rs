@@ -16,7 +16,9 @@ use thiserror::Error;
 use tracing::info;
 
 use crate::auth::ensure_token;
-use crate::models_fs::{InstalledModelStatus, inspect_installed_models};
+use crate::models_fs::{
+    DownloadModelReport, InstalledModelStatus, download_manifest_model, inspect_installed_models,
+};
 use crate::runtime::{RuntimeManager, RuntimeSnapshot};
 
 #[derive(Debug, Error)]
@@ -321,6 +323,12 @@ impl DaemonService {
         let profile = self.active_profile()?;
         self.runtime.unload(&profile.settings).await;
         Ok(self.runtime.snapshot(&profile.settings).await)
+    }
+
+    pub async fn download_model(&self, model_id: &str) -> Result<DownloadModelReport, DaemonError> {
+        download_manifest_model(self.runtime.models_dir(), model_id)
+            .await
+            .map_err(DaemonError::Runtime)
     }
 
     pub async fn maybe_idle_unload(&self) {
@@ -713,6 +721,15 @@ impl DaemonService {
                     .map_err(DbError::from)?)
             }
             "unloadAi" => Ok(serde_json::to_value(self.unload_ai().await?).map_err(DbError::from)?),
+            "downloadModel" => {
+                let model_id = payload
+                    .get("modelId")
+                    .or_else(|| payload.get("model"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("lexel-1.5b");
+                Ok(serde_json::to_value(self.download_model(model_id).await?)
+                    .map_err(DbError::from)?)
+            }
             "rewrite" | "aiRewrite" => {
                 let req: RewriteRequest = serde_json::from_value(payload).map_err(DbError::from)?;
                 Ok(serde_json::to_value(self.rewrite(req).await?).map_err(DbError::from)?)

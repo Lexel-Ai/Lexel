@@ -187,6 +187,15 @@ export interface NativeHostInstallReport {
   writtenManifests: string[];
 }
 
+export interface DownloadModelReport {
+  id: string;
+  ggufPath: string;
+  bytesDownloaded: number;
+  sha256: string;
+  verified: boolean;
+  alreadyPresent: boolean;
+}
+
 export type DesktopTabId = 'studio' | 'surfaces' | 'rules' | 'system';
 
 export type { AiTaskId, RulePresetId };

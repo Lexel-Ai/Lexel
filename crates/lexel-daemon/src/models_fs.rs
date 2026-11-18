@@ -1,7 +1,11 @@
+use std::fmt::Write as _;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use lexel_core::{MainModelTier, ModelManifest, UnifiedSettings};
+use lexel_core::{MainModelTier, ModelManifest, ModelSpec, UnifiedSettings};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Status of one local model tier on disk and/or in Ollama.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -21,6 +25,18 @@ pub struct InstalledModelStatus {
     pub size_bytes: u64,
 }
 
+/// Result returned after downloading or verifying a manifest GGUF model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadModelReport {
+    pub id: String,
+    pub gguf_path: String,
+    pub bytes_downloaded: u64,
+    pub sha256: String,
+    pub verified: bool,
+    pub already_present: bool,
+}
+
 /// Inspect which manifest models (`0.5B` and `1.5B`) exist locally in `models_dir`.
 pub fn inspect_installed_models(
     models_dir: &Path,
@@ -35,7 +51,7 @@ pub fn inspect_installed_models(
         .into_iter()
         .map(|spec| {
             let path = models_dir.join(&spec.gguf_filename);
-            let meta = std::fs::metadata(&path).ok();
+            let meta = fs::metadata(&path).ok();
             let gguf_installed = meta.as_ref().is_some_and(|m| m.is_file());
             let gguf_size_valid = meta.as_ref().is_some_and(|m| m.len() == spec.size_bytes);
             let ollama_installed = ollama_has_tag(&spec.ollama_tag, ollama_models)
@@ -82,6 +98,141 @@ pub fn resolve_gguf_path(models_dir: &Path, settings: &UnifiedSettings) -> Optio
             relative.is_file().then_some(relative)
         }
     }
+}
+
+/// Download a manifest model by ID or alias (`lexel-0.5b`, `0.5b`, `lexel-1.5b`, `1.5b`) and verify SHA-256.
+pub async fn download_manifest_model(
+    models_dir: &Path,
+    model_id: &str,
+) -> Result<DownloadModelReport, String> {
+    let manifest = ModelManifest::load_embedded().map_err(|e| e.to_string())?;
+    let spec = manifest
+        .find(model_id)
+        .ok_or_else(|| format!("Unknown model id: {model_id}"))?
+        .clone();
+    download_model_spec(models_dir, &spec).await
+}
+
+/// Stream a `ModelSpec` GGUF artifact to `models_dir`, verify its size and SHA-256, and commit atomically.
+pub async fn download_model_spec(
+    models_dir: &Path,
+    spec: &ModelSpec,
+) -> Result<DownloadModelReport, String> {
+    fs::create_dir_all(models_dir)
+        .map_err(|e| format!("failed to create models directory: {e}"))?;
+    let dest = models_dir.join(&spec.gguf_filename);
+
+    if let Ok(meta) = fs::metadata(&dest)
+        && meta.is_file()
+        && meta.len() == spec.size_bytes
+        && let Ok(existing_sha) = compute_file_sha256(&dest)
+        && existing_sha.eq_ignore_ascii_case(&spec.sha256)
+    {
+        return Ok(DownloadModelReport {
+            id: spec.id.clone(),
+            gguf_path: dest.display().to_string(),
+            bytes_downloaded: meta.len(),
+            sha256: existing_sha,
+            verified: true,
+            already_present: true,
+        });
+    }
+
+    let part_path = models_dir.join(format!("{}.part", spec.gguf_filename));
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3600))
+        .build()
+        .map_err(|e| format!("failed to construct HTTP client: {e}"))?;
+
+    let mut response = client
+        .get(&spec.gguf_url)
+        .send()
+        .await
+        .map_err(|e| format!("model download failed: {e}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "model download returned HTTP {}",
+            response.status()
+        ));
+    }
+
+    let mut file =
+        File::create(&part_path).map_err(|e| format!("failed to create temp model file: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut total_bytes: u64 = 0;
+
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("stream error downloading model: {e}"))?
+    {
+        if let Err(e) = file.write_all(&chunk) {
+            let _ = fs::remove_file(&part_path);
+            return Err(format!("failed to write model chunk: {e}"));
+        }
+        hasher.update(&chunk);
+        total_bytes += chunk.len() as u64;
+    }
+
+    if let Err(e) = file.flush() {
+        let _ = fs::remove_file(&part_path);
+        return Err(format!("failed to flush model file: {e}"));
+    }
+    drop(file);
+
+    if spec.size_bytes > 0 && total_bytes != spec.size_bytes {
+        let _ = fs::remove_file(&part_path);
+        return Err(format!(
+            "downloaded size mismatch for {}: expected {} bytes, got {} bytes",
+            spec.id, spec.size_bytes, total_bytes
+        ));
+    }
+
+    let actual_sha = encode_hex(&hasher.finalize());
+    if !spec.sha256.is_empty() && !actual_sha.eq_ignore_ascii_case(&spec.sha256) {
+        let _ = fs::remove_file(&part_path);
+        return Err(format!(
+            "SHA-256 verification failed for {}: expected {}, got {}",
+            spec.id, spec.sha256, actual_sha
+        ));
+    }
+
+    fs::rename(&part_path, &dest).map_err(|e| {
+        let _ = fs::remove_file(&part_path);
+        format!("failed to move verified model into place: {e}")
+    })?;
+
+    Ok(DownloadModelReport {
+        id: spec.id.clone(),
+        gguf_path: dest.display().to_string(),
+        bytes_downloaded: total_bytes,
+        sha256: actual_sha,
+        verified: true,
+        already_present: false,
+    })
+}
+
+fn compute_file_sha256(path: &Path) -> std::io::Result<String> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(encode_hex(&hasher.finalize()))
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{b:02x}");
+    }
+    out
 }
 
 /// Check whether a target Ollama tag or `:latest` variant appears in `/api/tags`.

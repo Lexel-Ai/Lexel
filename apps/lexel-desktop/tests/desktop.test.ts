@@ -7,6 +7,7 @@ import {
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   daemonRpc,
+  downloadModel,
   getDesktopEnvInfo,
   getNativeHostStatus,
   isTauriRuntime,
@@ -76,5 +77,6 @@ describe('lexel-desktop client & catalog', () => {
     const native = await getNativeHostStatus();
     expect(native.hostName).toBe('com.lexel.daemon');
     expect(HARPER_RULE_PRESETS.length).toBeGreaterThanOrEqual(3);
+    await expect(downloadModel('lexel-0.5b')).rejects.toThrow(/native Lexel Desktop app/i);
   });
 });

@@ -60,29 +60,99 @@ pub fn write_frame<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> {
     writer.flush()
 }
 
+/// Forward runtime-stateful RPC commands to a running Desktop/daemon loopback server
+/// so the browser extension shares one loaded AI model in RAM instead of spawning a second one.
+pub async fn forward_rpc_to_loopback(
+    http_port: u16,
+    token: &str,
+    kind: &str,
+    payload: &serde_json::Value,
+) -> Option<Result<serde_json::Value, String>> {
+    let (method, path) = match kind {
+        "status" => (reqwest::Method::GET, "/v1/status"),
+        "toggleAi" => (reqwest::Method::POST, "/v1/ai/toggle"),
+        "setMainModel" => (reqwest::Method::POST, "/v1/ai/main-model"),
+        "unloadAi" => (reqwest::Method::POST, "/v1/ai/unload"),
+        "downloadModel" => (reqwest::Method::POST, "/v1/models/download"),
+        "rewrite" | "aiRewrite" => (reqwest::Method::POST, "/v1/rewrite"),
+        _ => return None,
+    };
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_millis(250))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .ok()?;
+
+    let url = format!("http://127.0.0.1:{http_port}{path}");
+    let mut req = client.request(method.clone(), &url).bearer_auth(token);
+    if method == reqwest::Method::POST {
+        req = req.json(payload);
+    }
+
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(_) => return None,
+    };
+
+    let status = resp.status();
+    let body: serde_json::Value = match resp.json().await {
+        Ok(val) => val,
+        Err(err) => return Some(Err(format!("invalid response from running daemon: {err}"))),
+    };
+
+    if status.is_success() {
+        Some(Ok(body))
+    } else {
+        let msg = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("daemon returned HTTP {status}"));
+        Some(Err(msg))
+    }
+}
+
 /// Run the Chrome/Firefox Native Messaging stdio loop until stdin closes.
 pub async fn run_stdio_loop(service: Arc<DaemonService>) -> io::Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut reader = stdin.lock();
     let mut writer = stdout.lock();
+    let token = service.token().ok();
 
     while let Some(bytes) = read_frame(&mut reader)? {
         let resp = match serde_json::from_slice::<NativeEnvelope>(&bytes) {
-            Ok(env) => match service.dispatch_rpc(&env.kind, env.payload).await {
-                Ok(data) => NativeResponse {
-                    id: env.id,
-                    ok: true,
-                    data: Some(data),
-                    error: None,
-                },
-                Err(err) => NativeResponse {
-                    id: env.id,
-                    ok: false,
-                    data: None,
-                    error: Some(err.to_string()),
-                },
-            },
+            Ok(env) => {
+                let forwarded = if let Some(tok) = token.as_deref() {
+                    forward_rpc_to_loopback(service.http_port, tok, &env.kind, &env.payload).await
+                } else {
+                    None
+                };
+
+                let outcome = match forwarded {
+                    Some(res) => res,
+                    None => service
+                        .dispatch_rpc(&env.kind, env.payload)
+                        .await
+                        .map_err(|err| err.to_string()),
+                };
+
+                match outcome {
+                    Ok(data) => NativeResponse {
+                        id: env.id,
+                        ok: true,
+                        data: Some(data),
+                        error: None,
+                    },
+                    Err(error) => NativeResponse {
+                        id: env.id,
+                        ok: false,
+                        data: None,
+                        error: Some(error),
+                    },
+                }
+            }
             Err(err) => {
                 warn!("invalid native messaging JSON: {err}");
                 NativeResponse {

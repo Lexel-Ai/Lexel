@@ -1,6 +1,8 @@
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use lexel_daemon::http::build_router;
 use lexel_daemon::native_messaging::{NATIVE_HOST_NAME, install_native_hosts};
 use lexel_daemon::service::DaemonService;
 use lexel_db::{default_data_dir, default_db_path, default_models_dir, default_token_path};
@@ -8,7 +10,8 @@ use serde::Serialize;
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, State};
-use tracing::{error, info};
+use tokio::net::TcpListener;
+use tracing::{error, info, warn};
 
 const DEFAULT_HTTP_PORT: u16 = 42424;
 
@@ -267,10 +270,40 @@ pub fn run() {
             .expect("failed to initialize Lexel local database"),
     );
 
+    let shared_http_service = Arc::clone(&service);
+
     tauri::Builder::default()
         .manage(service)
-        .setup(|app| {
+        .setup(move |app| {
             setup_tray(app.handle())?;
+
+            // Host the single shared loopback daemon so Chrome/Firefox Native Messaging
+            // forwards AI rewrites here and reuses the one GGUF model in RAM.
+            let daemon_service = Arc::clone(&shared_http_service);
+            tauri::async_runtime::spawn(async move {
+                match daemon_service.token() {
+                    Ok(token) => {
+                        let addr = SocketAddr::from(([127, 0, 0, 1], DEFAULT_HTTP_PORT));
+                        match TcpListener::bind(addr).await {
+                            Ok(listener) => {
+                                info!(%addr, "Lexel Desktop hosting shared daemon HTTP bridge");
+                                let router = build_router(daemon_service, token);
+                                if let Err(err) = axum::serve(listener, router).await {
+                                    warn!("shared daemon server exited: {err}");
+                                }
+                            }
+                            Err(err) => {
+                                info!(
+                                    %addr,
+                                    "loopback daemon port already bound ({err}); reusing external daemon"
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => warn!("could not ensure daemon.token: {err}"),
+                }
+            });
+
             info!("Lexel Desktop initialized");
             Ok(())
         })

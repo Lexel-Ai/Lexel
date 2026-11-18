@@ -203,3 +203,109 @@ async fn http_enforces_bearer_token_and_origin_and_syncs_profiles() {
     server.abort();
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[tokio::test]
+async fn downloads_verifies_sha256_and_forwards_runtime_rpc_to_running_daemon() {
+    use axum::{Router, routing::get};
+    use lexel_core::ModelSpec;
+    use lexel_daemon::models_fs::download_model_spec;
+    use lexel_daemon::native_messaging::forward_rpc_to_loopback;
+    use sha2::{Digest, Sha256};
+
+    let tmp = std::env::temp_dir().join(format!("lexel-dl-test-{}", uuid::Uuid::new_v4()));
+    let models_dir = tmp.join("models");
+    let token_path = tmp.join("daemon.token");
+    std::fs::create_dir_all(&models_dir).unwrap();
+
+    let payload_bytes = b"mock-gguf-binary-weights-payload".to_vec();
+    let expected_sha = {
+        let digest = Sha256::digest(&payload_bytes);
+        digest
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+
+    let bytes_clone = payload_bytes.clone();
+    let file_router = Router::new().route(
+        "/model.gguf",
+        get(move || {
+            let body = bytes_clone.clone();
+            async move { body }
+        }),
+    );
+    let dl_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dl_addr = dl_listener.local_addr().unwrap();
+    let dl_server = tokio::spawn(async move {
+        let _ = axum::serve(dl_listener, file_router).await;
+    });
+
+    let valid_spec = ModelSpec {
+        id: "lexel-0.5b".to_owned(),
+        tier: "lite".to_owned(),
+        label: "Mock 0.5B".to_owned(),
+        description: "Test model".to_owned(),
+        ollama_tag: "qwen2.5:0.5b".to_owned(),
+        gguf_repo: "test/mock".to_owned(),
+        gguf_filename: "mock-0.5b.gguf".to_owned(),
+        gguf_url: format!("http://{dl_addr}/model.gguf"),
+        sha256: expected_sha.clone(),
+        size_bytes: payload_bytes.len() as u64,
+        approx_ram_mb: 450,
+    };
+
+    // First download streams file and verifies SHA-256.
+    let report = download_model_spec(&models_dir, &valid_spec)
+        .await
+        .expect("valid download");
+    assert!(report.verified);
+    assert!(!report.already_present);
+    assert_eq!(report.sha256, expected_sha);
+
+    // Second call skips download because verified file is already present.
+    let cached = download_model_spec(&models_dir, &valid_spec)
+        .await
+        .expect("cached verify");
+    assert!(cached.already_present);
+
+    // Corrupt SHA-256 is rejected and never committed to disk.
+    let bad_spec = ModelSpec {
+        gguf_filename: "bad.gguf".to_owned(),
+        sha256: "0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
+        ..valid_spec.clone()
+    };
+    let err = download_model_spec(&models_dir, &bad_spec)
+        .await
+        .expect_err("checksum mismatch must fail");
+    assert!(err.contains("SHA-256 verification failed"));
+    assert!(!models_dir.join("bad.gguf").exists());
+
+    // Loopback forwarding reaches live daemon when up and returns None when down.
+    let token = ensure_token(&token_path).expect("token");
+    let service = Arc::new(
+        DaemonService::open_in_memory(tmp.clone(), models_dir, token_path, 42424).expect("service"),
+    );
+    let rpc_router = build_router(Arc::clone(&service), token.clone());
+    let rpc_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let rpc_port = rpc_listener.local_addr().unwrap().port();
+    let rpc_server = tokio::spawn(async move {
+        let _ = axum::serve(rpc_listener, rpc_router).await;
+    });
+
+    let forwarded = forward_rpc_to_loopback(rpc_port, &token, "status", &serde_json::json!({}))
+        .await
+        .expect("daemon should answer")
+        .expect("forwarded status ok");
+    assert_eq!(forwarded["activeProfile"]["name"], "Default");
+
+    rpc_server.abort();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(
+        forward_rpc_to_loopback(rpc_port, &token, "status", &serde_json::json!({}))
+            .await
+            .is_none()
+    );
+
+    dl_server.abort();
+    let _ = std::fs::remove_dir_all(&tmp);
+}
