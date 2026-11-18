@@ -7,8 +7,15 @@ description = "Deterministic Tier 0 Harper + anti-slop scanner, surface catalog,
 
 [dependencies]
 aho-corasick.workspace = true
+harper-asciidoc = { path = "../../vendor/harper/harper-asciidoc" }
+harper-comments = { path = "../../vendor/harper/harper-comments" }
 harper-core = { path = "../../vendor/harper/harper-core" }
+harper-git-commit = { path = "../../vendor/harper/harper-git-commit" }
+harper-html = { path = "../../vendor/harper/harper-html" }
+harper-python = { path = "../../vendor/harper/harper-python" }
+harper-tex = { path = "../../vendor/harper/harper-tex" }
 harper-thesaurus = { path = "../../vendor/harper/harper-thesaurus" }
+harper-typst = { path = "../../vendor/harper/harper-typst" }
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

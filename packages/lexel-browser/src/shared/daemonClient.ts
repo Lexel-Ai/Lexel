@@ -195,3 +195,15 @@ export function daemonDeleteVoiceExample(
 export function daemonPurgeAll(): Promise<NativeDaemonResult<DaemonProfile>> {
   return callNativeDaemon('purgeAll');
 }
+
+export function daemonLookupSynonyms(
+  word: string,
+): Promise<NativeDaemonResult<{ synonyms: string[] }>> {
+  return callNativeDaemon('synonyms', { word });
+}
+
+export function daemonApplyRulePreset(
+  preset: string,
+): Promise<NativeDaemonResult<DaemonProfile>> {
+  return callNativeDaemon('applyRulePreset', { preset });
+}

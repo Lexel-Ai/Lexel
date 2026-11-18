@@ -85,7 +85,12 @@ function formatSuggestionDisplay(
 }
 
 function categoryBadgeStyle(rule: string, lintKind: string) {
-  if (lintKind === 'Spelling' || lintKind === 'Typo') {
+  if (
+    rule === 'LexelSecrets' ||
+    lintKind === 'Security' ||
+    lintKind === 'Spelling' ||
+    lintKind === 'Typo'
+  ) {
     return { bg: 'var(--lx-danger-bg)', border: 'var(--lx-danger)', color: 'var(--lx-danger)' };
   }
   if (
@@ -106,6 +111,7 @@ export interface LabSuggestionPopoverProps {
   onClose: () => void;
   onAddToDictionary: (word: string) => void;
   onDisableRule: (ruleId: string) => void;
+  onAllowSlopTerm?: (term: string) => void;
   onOpenSettings: () => void;
   onFixWithAi: (box: IgnorableLintBox) => void;
 }
@@ -117,6 +123,7 @@ export function LabSuggestionPopover({
   onClose,
   onAddToDictionary,
   onDisableRule,
+  onAllowSlopTerm,
   onOpenSettings,
   onFixWithAi,
 }: LabSuggestionPopoverProps) {
@@ -184,7 +191,15 @@ export function LabSuggestionPopover({
   const paragraphs = parseSafeLintParagraphs(box.lint.message_html);
   const badge = categoryBadgeStyle(box.rule, box.lint.lint_kind);
   const canDisableRule =
-    Boolean(box.rule) && box.rule !== 'LexelAntiSlop' && box.rule !== 'LexelSurface';
+    Boolean(box.rule) &&
+    box.rule !== 'LexelAntiSlop' &&
+    box.rule !== 'LexelSurface' &&
+    box.rule !== 'LexelSecrets';
+  const canAllowSlopTerm =
+    Boolean(onAllowSlopTerm) &&
+    box.rule === 'LexelAntiSlop' &&
+    Boolean(box.lint.problem_text.trim()) &&
+    box.lint.problem_text.trim() !== '—';
 
   return (
     <div
@@ -367,6 +382,22 @@ export function LabSuggestionPopover({
             }}
           >
             + Dictionary
+          </button>
+        ) : null}
+
+        {canAllowSlopTerm ? (
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              onAllowSlopTerm?.(box.lint.problem_text.trim());
+              onClose();
+            }}
+            className="rounded-[6px] px-2 py-1 text-[11px]"
+            style={{ color: 'var(--lx-fg-muted)' }}
+            title={`Allow "${box.lint.problem_text.trim()}" in Lexel Lab`}
+          >
+            Allow term
           </button>
         ) : null}
 

@@ -7,6 +7,11 @@ import {
   type Summary,
   type WeirpackTestFailures,
 } from 'harper.js';
+import {
+  applySafeGrammarLints,
+  computeReadabilityMetrics,
+  type Tier0Lint,
+} from 'lexel-ui';
 import { type UnpackedLintGroups, unpackLint } from 'lint-framework';
 import type { LintLanguage, StoredWeirpack, SurfaceId, SurfaceProfile } from './types';
 import { scanTier0Diagnostics } from './verifier';
@@ -30,6 +35,10 @@ export interface WritingMetrics extends TextStats {
   readingTimeSec: number;
   slopDensity: number;
   secretCount: number;
+  longSentences: number;
+  fleschReadingEase: number;
+  fleschKincaidGrade: number;
+  passiveHintCount: number;
 }
 
 export function computeTextStats(text: string): TextStats {
@@ -45,6 +54,7 @@ export function computeWritingMetrics(
   counts?: { slopCount?: number; secretCount?: number },
 ): WritingMetrics {
   const base = computeTextStats(text);
+  const read = computeReadabilityMetrics(text);
   const readingTimeSec = base.words > 0 ? Math.max(1, Math.round((base.words / 200) * 60)) : 0;
   const slopCount = counts?.slopCount ?? 0;
   const slopDensity = base.words > 0 ? Math.round((slopCount / base.words) * 1000) / 10 : 0;
@@ -53,6 +63,10 @@ export function computeWritingMetrics(
     readingTimeSec,
     slopDensity,
     secretCount: counts?.secretCount ?? 0,
+    longSentences: read.longSentences,
+    fleschReadingEase: read.fleschReadingEase,
+    fleschKincaidGrade: read.fleschKincaidGrade,
+    passiveHintCount: read.passiveHintCount,
   };
 }
 
@@ -257,6 +271,28 @@ export class LexelLabEngine {
   public async toTitleCase(text: string): Promise<string> {
     if (!this.linter) return text;
     return this.linter.toTitleCase(text);
+  }
+
+  public async applySafeHarperFixes(
+    text: string,
+    languageMode: LintLanguage = 'plaintext',
+    isolateEnglish = false,
+  ): Promise<{ text: string; applied: number }> {
+    if (!this.linter || !text.trim()) {
+      return { text, applied: 0 };
+    }
+    const grouped = await this.linter.organizedLints(text, {
+      isolateEnglish,
+      language: languageMode,
+    });
+    const unpacked: Tier0Lint[] = [];
+    for (const lints of Object.values(grouped)) {
+      for (const lint of lints) {
+        unpacked.push(await unpackLint(text, lint, this.linter));
+        lint.free();
+      }
+    }
+    return applySafeGrammarLints(text, unpacked);
   }
 
   public async loadWeirpackBytes(bytes: Uint8Array): Promise<WeirpackTestFailures | undefined> {

@@ -1,0 +1,17 @@
+[package]
+name = "lexel-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Fast zero-AI CLI linter, readability analyzer, safe fixer, and Weirpack tool."
+
+[[bin]]
+name = "lexel"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+lexel-core = { path = "../lexel-core" }
+serde.workspace = true
+serde_json.workspace = true

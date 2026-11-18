@@ -93,7 +93,12 @@ function categoryBadgeStyle(rule: string, lintKind: string): {
   border: string;
   color: string;
 } {
-  if (lintKind === 'Spelling' || lintKind === 'Typo') {
+  if (
+    rule === 'LexelSecrets' ||
+    lintKind === 'Security' ||
+    lintKind === 'Spelling' ||
+    lintKind === 'Typo'
+  ) {
     return {
       bg: 'var(--lx-danger-bg)',
       border: 'var(--lx-danger)',
@@ -128,6 +133,7 @@ export interface LexelSuggestionPopoverProps {
   onApplied: () => void;
   onAddToDictionary: (word: string) => Promise<void>;
   onDisableRule: (ruleId: string) => Promise<void>;
+  onAllowSlopTerm?: (term: string) => Promise<void>;
   onOpenSettings: () => Promise<void>;
   onFixWithAi: (box: IgnorableLintBox) => void;
 }
@@ -141,6 +147,7 @@ export function LexelSuggestionPopover({
   onApplied,
   onAddToDictionary,
   onDisableRule,
+  onAllowSlopTerm,
   onOpenSettings,
   onFixWithAi,
 }: LexelSuggestionPopoverProps) {
@@ -212,7 +219,15 @@ export function LexelSuggestionPopover({
   const paragraphs = parseSafeLintParagraphs(box.lint.message_html);
   const badge = categoryBadgeStyle(box.rule, box.lint.lint_kind);
   const canDisableRule =
-    Boolean(box.rule) && box.rule !== 'LexelAntiSlop' && box.rule !== 'LexelSurface';
+    Boolean(box.rule) &&
+    box.rule !== 'LexelAntiSlop' &&
+    box.rule !== 'LexelSurface' &&
+    box.rule !== 'LexelSecrets';
+  const canAllowSlopTerm =
+    Boolean(onAllowSlopTerm) &&
+    box.rule === 'LexelAntiSlop' &&
+    Boolean(box.lint.problem_text.trim()) &&
+    box.lint.problem_text.trim() !== '—';
 
   async function handleApply(suggestion: UnpackedSuggestion) {
     if (!box) return;
@@ -423,6 +438,24 @@ export function LexelSuggestionPopover({
             }}
           >
             + Dictionary
+          </button>
+        ) : null}
+
+        {canAllowSlopTerm ? (
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              void onAllowSlopTerm?.(box.lint.problem_text.trim()).then(() => {
+                onApplied();
+                onClose();
+              });
+            }}
+            className="rounded-[6px] px-2 py-1 text-[11px]"
+            style={{ color: 'var(--lx-fg-muted)' }}
+            title={`Allow "${box.lint.problem_text.trim()}" on all drafts`}
+          >
+            Allow term
           </button>
         ) : null}
 

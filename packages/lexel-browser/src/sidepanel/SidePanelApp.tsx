@@ -5,6 +5,7 @@ import {
   StatusPill,
   SurfaceBadge,
   ThemeToggle,
+  computeReadabilityMetrics,
   type AiHealthState,
 } from 'lexel-ui';
 import React, { useEffect, useState } from 'react';
@@ -31,6 +32,10 @@ export function SidePanelApp() {
   const [task, setTask] = useState<AiTaskId>('rewrite_surface');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [undoText, setUndoText] = useState<string | null>(null);
+  const [synonymWord, setSynonymWord] = useState('');
+  const [synonyms, setSynonyms] = useState<string[]>([]);
+  const [synonymStatus, setSynonymStatus] = useState<string | null>(null);
   const [result, setResult] = useState<RewriteResult | null>(null);
   const [copied, setCopied] = useState(false);
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
@@ -472,7 +477,51 @@ export function SidePanelApp() {
         </div>
       ) : null}
 
-      <div className="flex flex-wrap gap-2">
+      {text.trim() ? (
+        (() => {
+          const stats = computeReadabilityMetrics(text);
+          return (
+            <div
+              className="rounded-[8px] border p-2.5 grid grid-cols-4 gap-2 text-[11px] lexel-mono"
+              style={{
+                backgroundColor: 'var(--lx-card)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg-muted)',
+              }}
+            >
+              <div>
+                <div className="text-[10px] uppercase">Words</div>
+                <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
+                  {stats.words}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase">Grade</div>
+                <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
+                  {stats.fleschKincaidGrade.toFixed(1)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase">Ease</div>
+                <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
+                  {stats.fleschReadingEase.toFixed(0)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase">Long Sent.</div>
+                <div
+                  className="text-xs font-semibold"
+                  style={{ color: stats.longSentences > 0 ? 'var(--lx-warn)' : 'var(--lx-fg)' }}
+                >
+                  {stats.longSentences}
+                </div>
+              </div>
+            </div>
+          );
+        })()
+      ) : null}
+
+      <div className="flex flex-wrap gap-1.5">
         <button
           type="button"
           onClick={async () => {
@@ -483,20 +532,47 @@ export function SidePanelApp() {
               surfaceId,
             })) as { result?: { text: string; fixesApplied: number } };
             if (res.result && res.result.fixesApplied > 0) {
+              setUndoText(text);
               setText(res.result.text);
               setError(null);
             } else {
               setError('No safe deterministic slop, em dash, emoji, or hashtag fixes needed.');
             }
           }}
-          className="flex-1 rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
+          className="rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
           style={{
             backgroundColor: 'var(--lx-card)',
             borderColor: 'var(--lx-signal)',
             color: 'var(--lx-signal)',
           }}
         >
-          Fix Safe Issues (No AI)
+          Fix Safe Slop
+        </button>
+        <button
+          type="button"
+          onClick={async () => {
+            if (!text.trim()) return;
+            const res = (await chrome.runtime.sendMessage({
+              kind: 'fixAllSafe',
+              text,
+              surfaceId,
+            })) as { result?: { text: string; fixesApplied: number } };
+            if (res.result && res.result.fixesApplied > 0 && res.result.text !== text) {
+              setUndoText(text);
+              setText(res.result.text);
+              setError(null);
+            } else {
+              setError('No deterministic slop, typography, or safe grammar fixes needed.');
+            }
+          }}
+          className="rounded-[6px] border px-2.5 py-1.5 text-xs font-semibold"
+          style={{
+            backgroundColor: 'var(--lx-muted)',
+            borderColor: 'var(--lx-border)',
+            color: 'var(--lx-fg)',
+          }}
+        >
+          Fix All Safe
         </button>
         <button
           type="button"
@@ -506,7 +582,10 @@ export function SidePanelApp() {
               kind: 'toTitleCase',
               text,
             })) as { text?: string };
-            if (res.text) setText(res.text);
+            if (res.text && res.text !== text) {
+              setUndoText(text);
+              setText(res.text);
+            }
           }}
           className="rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
           style={{
@@ -517,6 +596,148 @@ export function SidePanelApp() {
         >
           Title Case
         </button>
+        <button
+          type="button"
+          onClick={async () => {
+            if (!text.trim()) return;
+            const res = (await chrome.runtime.sendMessage({
+              kind: 'toSentenceCase',
+              text,
+            })) as { text?: string };
+            if (res.text && res.text !== text) {
+              setUndoText(text);
+              setText(res.text);
+            }
+          }}
+          className="rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
+          style={{
+            backgroundColor: 'var(--lx-muted)',
+            borderColor: 'var(--lx-border)',
+            color: 'var(--lx-fg)',
+          }}
+        >
+          Sentence Case
+        </button>
+        <button
+          type="button"
+          onClick={async () => {
+            if (!text.trim()) return;
+            const res = (await chrome.runtime.sendMessage({
+              kind: 'normalizeTypography',
+              text,
+            })) as { result?: { text: string; fixesApplied: number } };
+            if (res.result && res.result.text !== text) {
+              setUndoText(text);
+              setText(res.result.text);
+              setError(null);
+            } else {
+              setError('Quotes and spacing are already normalized.');
+            }
+          }}
+          className="rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
+          style={{
+            backgroundColor: 'var(--lx-muted)',
+            borderColor: 'var(--lx-border)',
+            color: 'var(--lx-fg)',
+          }}
+        >
+          Clean Quotes
+        </button>
+        {undoText != null ? (
+          <button
+            type="button"
+            onClick={() => {
+              setText(undoText);
+              setUndoText(null);
+            }}
+            className="rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
+            style={{
+              backgroundColor: 'var(--lx-warn-bg)',
+              borderColor: 'var(--lx-warn)',
+              color: 'var(--lx-warn)',
+            }}
+          >
+            Undo
+          </button>
+        ) : null}
+      </div>
+
+      <div
+        className="rounded-[8px] border p-2.5 flex flex-col gap-2"
+        style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+      >
+        <form
+          className="flex gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const q = synonymWord.trim();
+            if (!q) return;
+            setSynonymStatus('Searching...');
+            void chrome.runtime
+              .sendMessage({ kind: 'lookupSynonyms', word: q })
+              .then((res: unknown) => {
+                const payload = res as { ok?: boolean; synonyms?: string[]; error?: string };
+                if (payload.ok) {
+                  const list = payload.synonyms ?? [];
+                  setSynonyms(list);
+                  setSynonymStatus(list.length === 0 ? `No synonyms found for "${q}".` : null);
+                } else {
+                  setSynonyms([]);
+                  setSynonymStatus(payload.error ?? 'Daemon offline.');
+                }
+              });
+          }}
+        >
+          <input
+            type="text"
+            value={synonymWord}
+            onChange={(e) => setSynonymWord(e.target.value)}
+            placeholder="Offline thesaurus lookup..."
+            aria-label="Look up word synonyms"
+            className="flex-1 rounded-[6px] border px-2.5 py-1 text-xs"
+            style={{
+              backgroundColor: 'var(--lx-bg)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          />
+          <button
+            type="submit"
+            className="rounded-[6px] border px-2.5 py-1 text-xs font-medium"
+            style={{
+              backgroundColor: 'var(--lx-muted)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          >
+            Synonyms
+          </button>
+        </form>
+        {synonymStatus ? (
+          <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+            {synonymStatus}
+          </div>
+        ) : null}
+        {synonyms.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {synonyms.map((syn) => (
+              <button
+                key={syn}
+                type="button"
+                onClick={() => void navigator.clipboard.writeText(syn)}
+                className="rounded-[4px] border px-2 py-0.5 text-[11px] lexel-mono"
+                style={{
+                  backgroundColor: 'var(--lx-bg)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-signal)',
+                }}
+                title="Copy synonym"
+              >
+                {syn}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <button

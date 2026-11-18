@@ -9,9 +9,11 @@ import { type UnpackedLintGroups, unpackLint } from 'lint-framework';
 import {
   daemonCreateProfile,
   daemonDeleteProfile,
+  daemonApplyRulePreset,
   daemonDeleteVoiceExample,
   daemonListProfiles,
   daemonListVoiceExamples,
+  daemonLookupSynonyms,
   daemonPatchSettings,
   daemonPurgeAll,
   daemonRenameProfile,
@@ -23,6 +25,13 @@ import {
   daemonUnloadAi,
   fetchDaemonStatus,
 } from '../shared/daemonClient';
+import {
+  applyRulePreset,
+  applySafeGrammarLints,
+  normalizeTypography,
+  toSentenceCase,
+  type Tier0Lint,
+} from 'lexel-ui';
 import {
   checkLocalAiHealth,
   generateLocalRewrite,
@@ -814,6 +823,91 @@ async function handleRequest(
         disabledSlopTerms: req.disabledTerms,
       });
       return { kind: 'unit' };
+    case 'allowSlopTerm': {
+      const clean = req.term.trim();
+      if (!clean) return { kind: 'unit' };
+      const slopCfg = await getCustomSlopConfig();
+      const exists = slopCfg.disabledTerms.some(
+        (t) => t.toLowerCase() === clean.toLowerCase(),
+      );
+      if (!exists) {
+        const nextDisabled = [...slopCfg.disabledTerms, clean];
+        await setCustomSlopConfig(slopCfg.customTerms, nextDisabled);
+        await pushPatchToDaemon({
+          customSlopTerms: slopCfg.customTerms,
+          disabledSlopTerms: nextDisabled,
+        });
+      }
+      return { kind: 'unit' };
+    }
+    case 'applyRulePreset': {
+      const instance = await ensureLinter();
+      const current = await getStoredLintConfig(instance);
+      const nextConfig = applyRulePreset(current as Record<string, boolean | null>, req.presetId);
+      await instance.setLintConfig(nextConfig);
+      const json = await instance.getLintConfigAsJSON();
+      await chrome.storage.local.set({ lintConfig: json });
+      const daemonRes = await daemonApplyRulePreset(req.presetId);
+      if (!daemonRes.connected) {
+        await pushPatchToDaemon({ lintConfig: nextConfig });
+      }
+      return { config: nextConfig };
+    }
+    case 'fixAllSafe': {
+      const [instance, isolateRes, languageMode, slopCfg, customSurfaces] = await Promise.all([
+        ensureLinter(),
+        chrome.storage.local.get({ isolateEnglish: false }),
+        getLanguageMode(),
+        getCustomSlopConfig(),
+        getCustomSurfaces(),
+      ]);
+      const slopFixed = applySafeDeterministicFixes(req.text, req.surfaceId, {
+        customSlopTerms: slopCfg.customTerms,
+        disabledSlopTerms: slopCfg.disabledTerms,
+        customSurfaces,
+      });
+      const norm = normalizeTypography(slopFixed.text);
+      const grouped = await instance.organizedLints(norm.text, {
+        language: languageMode,
+        isolateEnglish: isolateRes.isolateEnglish === true,
+      });
+      const unpackedAll: Tier0Lint[] = [];
+      for (const lints of Object.values(grouped)) {
+        for (const lint of lints) {
+          unpackedAll.push(await unpackLint(norm.text, lint, instance));
+          lint.free();
+        }
+      }
+      const grammarFixed = applySafeGrammarLints(norm.text, unpackedAll);
+      return {
+        result: {
+          text: grammarFixed.text,
+          fixesApplied: slopFixed.fixesApplied + norm.fixesApplied + grammarFixed.applied,
+          categories: [
+            ...new Set([
+              ...slopFixed.categories,
+              ...norm.categories,
+              ...(grammarFixed.applied > 0 ? ['harper_safe'] : []),
+            ]),
+          ],
+        },
+      };
+    }
+    case 'toSentenceCase':
+      return { text: toSentenceCase(req.text) };
+    case 'normalizeTypography':
+      return { result: normalizeTypography(req.text) };
+    case 'lookupSynonyms': {
+      const daemonRes = await daemonLookupSynonyms(req.word);
+      if (daemonRes.connected && daemonRes.data) {
+        return { ok: true, synonyms: daemonRes.data.synonyms };
+      }
+      return {
+        ok: false,
+        synonyms: [],
+        error: daemonRes.error ?? 'Start lexel-daemon to look up local thesaurus synonyms.',
+      };
+    }
     case 'getCustomSurfaces':
       return { surfaces: await getCustomSurfaces() };
     case 'setCustomSurfaces':

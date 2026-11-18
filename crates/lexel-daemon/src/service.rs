@@ -4,10 +4,11 @@ use std::time::Instant;
 
 use lexel_core::{
     AiTaskId, GateCheckSummary, HarperDiagnostic, HarperEngine, HarperRuleInfo, LexelProfile,
-    SafeFixResult, SecretMatch, SlopHit, SlopScanner, SurfaceCatalog, SurfaceViolation,
-    UnifiedSettings, VoiceExample, apply_safe_deterministic_fixes, build_rewrite_messages,
-    sanitize_model_output, scan_secrets, structured_lint_config, synonyms_for, to_title_case,
-    verify_rewrite,
+    ReadabilityReport, RulePreset, SafeFixResult, SecretMatch, SlopHit, SlopScanner,
+    SurfaceCatalog, SurfaceViolation, UnifiedSettings, VoiceExample, analyze_readability,
+    apply_safe_deterministic_fixes, build_rewrite_messages, normalize_typography,
+    preset_rule_overrides, sanitize_model_output, scan_secrets, structured_lint_config,
+    synonyms_for, to_sentence_case, to_title_case, verify_rewrite,
 };
 use lexel_db::{DatabaseBackup, DbError, LexelDb};
 use serde::{Deserialize, Serialize};
@@ -107,6 +108,26 @@ pub struct TitleCaseRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SynonymsRequest {
     pub word: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadabilityRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixAllSafeRequest {
+    pub text: String,
+    pub surface_id: Option<String>,
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyPresetRequest {
+    pub preset: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -433,6 +454,68 @@ impl DaemonService {
         to_title_case(text)
     }
 
+    pub fn sentence_case(&self, text: &str) -> String {
+        to_sentence_case(text)
+    }
+
+    pub fn normalize_typography_text(&self, text: &str) -> SafeFixResult {
+        normalize_typography(text)
+    }
+
+    pub fn readability(&self, text: &str) -> ReadabilityReport {
+        analyze_readability(text)
+    }
+
+    pub fn fix_all_safe(&self, req: FixAllSafeRequest) -> Result<SafeFixResult, DaemonError> {
+        let profile = self.active_profile()?;
+        let surface_id = req.surface_id.as_deref().unwrap_or("general");
+        let language = req.language.as_deref().unwrap_or("plaintext");
+
+        let deterministic = apply_safe_deterministic_fixes(
+            &req.text,
+            surface_id,
+            &profile.settings.custom_slop_terms,
+            &profile.settings.disabled_slop_terms,
+            &profile.settings.custom_surfaces,
+        )?;
+
+        let mut engine = HarperEngine::new(
+            profile.settings.dialect,
+            &profile.settings.lint_config,
+            &profile.settings.user_dictionary,
+            &profile.settings.ignored_lints,
+        )?;
+        let grammar = engine.apply_safe_harper_fixes(&deterministic.text, language);
+
+        let mut categories = deterministic.categories;
+        for cat in grammar.categories {
+            if !categories.contains(&cat) {
+                categories.push(cat);
+            }
+        }
+
+        Ok(SafeFixResult {
+            text: grammar.text,
+            fixes_applied: deterministic.fixes_applied + grammar.fixes_applied,
+            categories,
+        })
+    }
+
+    pub fn apply_rule_preset(&self, preset_raw: &str) -> Result<LexelProfile, DaemonError> {
+        let preset = RulePreset::parse(preset_raw).ok_or_else(|| {
+            DaemonError::BadRequest(format!("Unknown Harper preset: {preset_raw}"))
+        })?;
+        let mut settings = self.active_profile()?.settings;
+        if preset == RulePreset::Curated {
+            settings.lint_config.clear();
+        } else {
+            for (k, v) in preset_rule_overrides(preset) {
+                settings.lint_config.insert(k, v);
+            }
+        }
+        self.update_settings(&settings)
+    }
+
     pub fn synonyms(&self, word: &str) -> Vec<String> {
         synonyms_for(word)
     }
@@ -648,6 +731,35 @@ impl DaemonService {
                 let req: TitleCaseRequest =
                     serde_json::from_value(payload).map_err(DbError::from)?;
                 Ok(serde_json::json!({ "text": self.title_case(&req.text) }))
+            }
+            "sentenceCase" => {
+                let req: TitleCaseRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::json!({ "text": self.sentence_case(&req.text) }))
+            }
+            "normalizeTypography" => {
+                let req: TitleCaseRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(
+                    serde_json::to_value(self.normalize_typography_text(&req.text))
+                        .map_err(DbError::from)?,
+                )
+            }
+            "readability" => {
+                let req: ReadabilityRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::to_value(self.readability(&req.text)).map_err(DbError::from)?)
+            }
+            "fixAllSafe" => {
+                let req: FixAllSafeRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::to_value(self.fix_all_safe(req)?).map_err(DbError::from)?)
+            }
+            "applyRulePreset" => {
+                let req: ApplyPresetRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::to_value(self.apply_rule_preset(&req.preset)?)
+                    .map_err(DbError::from)?)
             }
             "synonyms" => {
                 let req: SynonymsRequest =

@@ -188,4 +188,32 @@ export default class ProtocolClient {
     }>({ kind: 'fixSafeIssues', text, surfaceId });
     return res?.result ?? { text, fixesApplied: 0, categories: [] };
   }
+
+  public static async fixAllSafe(
+    text: string,
+    surfaceId: SurfaceId,
+  ): Promise<{ text: string; fixesApplied: number; categories: string[] }> {
+    const res = await send<{
+      result: { text: string; fixesApplied: number; categories: string[] };
+    }>({ kind: 'fixAllSafe', text, surfaceId });
+    return res?.result ?? { text, fixesApplied: 0, categories: [] };
+  }
+
+  public static async toSentenceCase(text: string): Promise<string> {
+    const res = await send<{ text: string }>({ kind: 'toSentenceCase', text });
+    return res?.text ?? text;
+  }
+
+  public static async normalizeTypography(
+    text: string,
+  ): Promise<{ text: string; fixesApplied: number; categories: string[] }> {
+    const res = await send<{
+      result: { text: string; fixesApplied: number; categories: string[] };
+    }>({ kind: 'normalizeTypography', text });
+    return res?.result ?? { text, fixesApplied: 0, categories: [] };
+  }
+
+  public static async allowSlopTerm(term: string): Promise<void> {
+    await send({ kind: 'allowSlopTerm', term });
+  }
 }

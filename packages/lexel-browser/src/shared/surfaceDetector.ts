@@ -191,6 +191,17 @@ export function detectSurfaceFromLocation(
       isBlocked: false,
     };
   }
+  if (domHint === 'substack' || domHint === 'wordpress' || domHint === 'discourse') {
+    const mapped = getSurfaceProfile(`web_${domHint}`);
+    return {
+      surfaceId: mapped.id,
+      label: mapped.label,
+      subcontext: null,
+      composerKind,
+      domain: hostname,
+      isBlocked: false,
+    };
+  }
 
   return {
     surfaceId: 'general',

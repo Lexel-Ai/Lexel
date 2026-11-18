@@ -18,6 +18,7 @@ struct SecretRule {
     kind: &'static str,
     label: &'static str,
     regex: Regex,
+    capture_group: usize,
 }
 
 fn secret_rules() -> &'static [SecretRule] {
@@ -29,6 +30,7 @@ fn secret_rules() -> &'static [SecretRule] {
                 label: "Private key block",
                 regex: Regex::new(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
                     .expect("valid private key regex"),
+                capture_group: 0,
             },
             SecretRule {
                 kind: "jwt",
@@ -37,6 +39,7 @@ fn secret_rules() -> &'static [SecretRule] {
                     r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b",
                 )
                 .expect("valid jwt regex"),
+                capture_group: 0,
             },
             SecretRule {
                 kind: "github_token",
@@ -45,39 +48,83 @@ fn secret_rules() -> &'static [SecretRule] {
                     r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b",
                 )
                 .expect("valid github token regex"),
+                capture_group: 0,
             },
             SecretRule {
                 kind: "aws_access_key",
                 label: "AWS access key ID",
                 regex: Regex::new(r"\bAKIA[0-9A-Z]{16}\b").expect("valid aws regex"),
+                capture_group: 0,
             },
             SecretRule {
                 kind: "google_api_key",
                 label: "Google API key",
                 regex: Regex::new(r"\bAIza[0-9A-Za-z_-]{35}\b").expect("valid google regex"),
+                capture_group: 0,
             },
             SecretRule {
                 kind: "slack_token",
                 label: "Slack token",
                 regex: Regex::new(r"\bxox[baprs]-[0-9A-Za-z-]{16,}\b").expect("valid slack regex"),
+                capture_group: 0,
+            },
+            SecretRule {
+                kind: "stripe_key",
+                label: "Stripe secret key",
+                regex: Regex::new(r"\b(?:sk|rk)_live_[0-9A-Za-z]{16,}\b")
+                    .expect("valid stripe regex"),
+                capture_group: 0,
+            },
+            SecretRule {
+                kind: "huggingface_token",
+                label: "Hugging Face token",
+                regex: Regex::new(r"\bhf_[A-Za-z0-9]{20,}\b").expect("valid hf regex"),
+                capture_group: 0,
+            },
+            SecretRule {
+                kind: "npm_token",
+                label: "npm access token",
+                regex: Regex::new(r"\bnpm_[A-Za-z0-9]{20,}\b").expect("valid npm regex"),
+                capture_group: 0,
+            },
+            SecretRule {
+                kind: "discord_webhook",
+                label: "Discord webhook URL",
+                regex: Regex::new(
+                    r"https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/\d{15,}/[A-Za-z0-9_-]{20,}",
+                )
+                .expect("valid discord webhook regex"),
+                capture_group: 0,
             },
             SecretRule {
                 kind: "api_key",
                 label: "API secret key",
                 regex: Regex::new(r"\bsk-(?:proj-|ant-[a-z0-9-]+-)?[A-Za-z0-9_-]{16,}\b")
                     .expect("valid api key regex"),
+                capture_group: 0,
             },
             SecretRule {
                 kind: "bearer_token",
                 label: "Bearer auth header",
                 regex: Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}")
                     .expect("valid bearer regex"),
+                capture_group: 0,
+            },
+            SecretRule {
+                kind: "env_secret",
+                label: "Environment credential assignment",
+                regex: Regex::new(
+                    r#"(?im)\b(?:[A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|API_KEY|ACCESS_TOKEN|PRIVATE_KEY|AUTH_TOKEN))\s*=\s*['"]?([A-Za-z0-9._~+/=-]{12,})['"]?"#,
+                )
+                .expect("valid env secret regex"),
+                capture_group: 1,
             },
             SecretRule {
                 kind: "ssn",
                 label: "US SSN-like number",
                 regex: Regex::new(r"\b(?:00[1-9]|0[1-9]\d|[1-5]\d{2}|6(?:[0-5]\d|6[0-5]|6[7-9]|[7-9]\d)|[78]\d{2})-(?:0[1-9]|[1-9]\d)-(?:000[1-9]|00[1-9]\d|0[1-9]\d{2}|[1-9]\d{3})\b")
                     .expect("valid ssn regex"),
+                capture_group: 0,
             },
         ]
     })
@@ -126,7 +173,16 @@ pub fn scan_secrets(text: &str) -> Vec<SecretMatch> {
     let mut matches = Vec::new();
 
     for rule in secret_rules() {
-        for m in rule.regex.find_iter(text) {
+        for caps in rule.regex.captures_iter(text) {
+            let Some(m) = caps.get(rule.capture_group).or_else(|| caps.get(0)) else {
+                continue;
+            };
+            let overlaps_existing = matches
+                .iter()
+                .any(|existing: &SecretMatch| m.start() < existing.end && m.end() > existing.start);
+            if overlaps_existing {
+                continue;
+            }
             matches.push(SecretMatch {
                 kind: rule.kind.to_owned(),
                 label: rule.label.to_owned(),

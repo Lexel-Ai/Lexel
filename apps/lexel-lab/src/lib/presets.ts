@@ -48,6 +48,20 @@ export const LAB_PRESETS: LabPreset[] = [
       'Comment by u/dev_user: Running a 1.5B model in the browser slows down typing on 8GB laptops, and loading a 5MB WASM grammar dictionary on startup feels heavy.',
   },
   {
+    id: 'git_commit',
+    label: 'Git Commit + Length/Period Issues',
+    surfaceId: 'ide_git_commit',
+    subcontext: 'feat(core)',
+    text: 'Added a super verbose commit message that exceeds the seventy two character limit right here.\n\nWe delve into an typo across `lexel-core`.',
+  },
+  {
+    id: 'docs_markdown',
+    label: 'Docs / Markdown + Code Masking',
+    surfaceId: 'docs_markdown',
+    subcontext: 'README.md',
+    text: 'In this document we will delve into CLI options. Run `lexel check README.md` — it ignores code:\n\n```rust\n// delve and utilize stay untouched here\nlet x = 1;\n```\n',
+  },
+  {
     id: 'clean_start',
     label: 'Empty Draft',
     surfaceId: 'general',

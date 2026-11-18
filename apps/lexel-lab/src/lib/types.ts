@@ -1,17 +1,23 @@
 import type { Dialect, LintConfig } from 'harper.js';
-import type { GateCheckSummary } from 'lexel-ui';
+import type {
+  AiTaskId,
+  BuiltinSurfaceId,
+  GateCheckSummary,
+  QuickActionDef,
+  RulePresetId,
+  SurfaceId,
+  SurfaceProfile,
+} from 'lexel-ui';
 import type { MainModelTier, RuntimeKind } from './models';
 
-export type BuiltinSurfaceId =
-  | 'web_reddit'
-  | 'web_x'
-  | 'web_github_pr'
-  | 'web_linkedin'
-  | 'web_discord_slack'
-  | 'web_email'
-  | 'general';
-
-export type SurfaceId = BuiltinSurfaceId | (string & {});
+export type {
+  AiTaskId,
+  BuiltinSurfaceId,
+  QuickActionDef,
+  RulePresetId,
+  SurfaceId,
+  SurfaceProfile,
+};
 
 export type LintLanguage = 'plaintext' | 'markdown' | 'typst';
 
@@ -22,39 +28,10 @@ export interface StoredWeirpack {
   enabled: boolean;
 }
 
-export type AiTaskId =
-  | 'fix_grammar_flow'
-  | 'deslop'
-  | 'rewrite_surface'
-  | 'shorten'
-  | 'reply_draft';
-
 export type ActivationKey = 'off' | 'shift' | 'control';
 export type AiProviderKind = 'ollama' | 'openai_compat';
 
 export type { MainModelTier, RuntimeKind };
-
-export interface QuickActionDef {
-  id: AiTaskId;
-  label: string;
-}
-
-export interface SurfaceProfile {
-  id: SurfaceId;
-  label: string;
-  hostPatterns: string[];
-  pathRegex?: string;
-  register: string;
-  minChars: number;
-  maxChars: number;
-  allowLinks: boolean;
-  allowEmojis: boolean;
-  allowHashtags: boolean;
-  allowEmDashes: boolean;
-  bannedOpeners: string[];
-  promptDirective: string;
-  quickActions: QuickActionDef[];
-}
 
 export interface DaemonConnectionConfig {
   enabled: boolean;

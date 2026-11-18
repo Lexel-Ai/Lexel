@@ -12,8 +12,9 @@ use serde::Deserialize;
 
 use crate::auth::{constant_time_eq, is_allowed_origin};
 use crate::service::{
-    DaemonError, DaemonService, RewriteRequest, SaveVoiceRequest, SynonymsRequest,
-    Tier0CheckRequest, Tier0FixSafeRequest, TitleCaseRequest,
+    ApplyPresetRequest, DaemonError, DaemonService, FixAllSafeRequest, ReadabilityRequest,
+    RewriteRequest, SaveVoiceRequest, SynonymsRequest, Tier0CheckRequest, Tier0FixSafeRequest,
+    TitleCaseRequest,
 };
 
 #[derive(Clone)]
@@ -84,9 +85,17 @@ pub fn build_router(service: Arc<DaemonService>, token: String) -> Router {
         .route("/v1/rewrite", post(post_rewrite))
         .route("/v1/harper/rules", get(get_harper_rules))
         .route("/v1/harper/structured-rules", get(get_structured_rules))
+        .route("/v1/harper/apply-preset", post(post_harper_apply_preset))
         .route("/v1/tier0/check", post(post_tier0_check))
         .route("/v1/tier0/fix-safe", post(post_tier0_fix_safe))
+        .route("/v1/tier0/fix-all-safe", post(post_tier0_fix_all_safe))
         .route("/v1/tier0/title-case", post(post_tier0_title_case))
+        .route("/v1/tier0/sentence-case", post(post_tier0_sentence_case))
+        .route(
+            "/v1/tier0/normalize-typography",
+            post(post_tier0_normalize_typography),
+        )
+        .route("/v1/tier0/readability", post(post_tier0_readability))
         .route("/v1/tier0/synonyms", post(post_tier0_synonyms))
         .route(
             "/v1/voice-examples",
@@ -316,6 +325,13 @@ async fn get_structured_rules(
     Ok(Json(state.service.structured_harper_rules()?))
 }
 
+async fn post_harper_apply_preset(
+    State(state): State<AppState>,
+    Json(body): Json<ApplyPresetRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.apply_rule_preset(&body.preset)?))
+}
+
 async fn post_tier0_check(
     State(state): State<AppState>,
     Json(body): Json<Tier0CheckRequest>,
@@ -330,6 +346,13 @@ async fn post_tier0_fix_safe(
     Ok(Json(state.service.fix_safe(body)?))
 }
 
+async fn post_tier0_fix_all_safe(
+    State(state): State<AppState>,
+    Json(body): Json<FixAllSafeRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.fix_all_safe(body)?))
+}
+
 async fn post_tier0_title_case(
     State(state): State<AppState>,
     Json(body): Json<TitleCaseRequest>,
@@ -337,6 +360,29 @@ async fn post_tier0_title_case(
     Ok(Json(serde_json::json!({
         "text": state.service.title_case(&body.text),
     })))
+}
+
+async fn post_tier0_sentence_case(
+    State(state): State<AppState>,
+    Json(body): Json<TitleCaseRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(serde_json::json!({
+        "text": state.service.sentence_case(&body.text),
+    })))
+}
+
+async fn post_tier0_normalize_typography(
+    State(state): State<AppState>,
+    Json(body): Json<TitleCaseRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.normalize_typography_text(&body.text)))
+}
+
+async fn post_tier0_readability(
+    State(state): State<AppState>,
+    Json(body): Json<ReadabilityRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.readability(&body.text)))
 }
 
 async fn post_tier0_synonyms(

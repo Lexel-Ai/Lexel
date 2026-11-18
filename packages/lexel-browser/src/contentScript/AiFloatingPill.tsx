@@ -41,6 +41,7 @@ export function AiFloatingPill({
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [undoText, setUndoText] = useState<string | null>(null);
   const [result, setResult] = useState<RewriteResult | null>(null);
   const [lastTask, setLastTask] = useState<AiTaskId>('rewrite_surface');
   const [copied, setCopied] = useState(false);
@@ -220,10 +221,25 @@ export function AiFloatingPill({
     if (!text.trim()) return;
     const res = await ProtocolClient.fixSafeIssues(text, context.surfaceId);
     if (res.fixesApplied > 0) {
+      setUndoText(text);
       field.writeText(res.text);
       setError(null);
     } else {
       setError('No deterministic slop, em dash, emoji, or hashtag fixes needed.');
+    }
+  }
+
+  async function handleFixAllSafe() {
+    if (!field) return;
+    const text = field.readText();
+    if (!text.trim()) return;
+    const res = await ProtocolClient.fixAllSafe(text, context.surfaceId);
+    if (res.fixesApplied > 0 && res.text !== text) {
+      setUndoText(text);
+      field.writeText(res.text);
+      setError(null);
+    } else {
+      setError('No deterministic slop or unambiguous grammar fixes needed.');
     }
   }
 
@@ -232,7 +248,29 @@ export function AiFloatingPill({
     const text = field.readText();
     if (!text.trim()) return;
     const next = await ProtocolClient.toTitleCase(text);
-    field.writeText(next);
+    if (next !== text) {
+      setUndoText(text);
+      field.writeText(next);
+    }
+    setError(null);
+  }
+
+  async function handleSentenceCase() {
+    if (!field) return;
+    const text = field.readText();
+    if (!text.trim()) return;
+    const next = await ProtocolClient.toSentenceCase(text);
+    if (next !== text) {
+      setUndoText(text);
+      field.writeText(next);
+    }
+    setError(null);
+  }
+
+  function handleUndoTransform() {
+    if (!field || undoText == null) return;
+    field.writeText(undoText);
+    setUndoText(null);
     setError(null);
   }
 
@@ -434,6 +472,23 @@ export function AiFloatingPill({
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void handleFixAllSafe()}
+              style={{
+                borderRadius: '6px',
+                border: '1px solid var(--lx-border)',
+                backgroundColor: 'var(--lx-muted)',
+                color: 'var(--lx-fg)',
+                padding: '4px 8px',
+                fontSize: '11px',
+                fontWeight: 600,
+              }}
+              title="Clean safe slop phrases, typography, and unambiguous Harper fixes"
+            >
+              Fix All Safe
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => void handleTitleCase()}
               style={{
                 borderRadius: '6px',
@@ -447,6 +502,40 @@ export function AiFloatingPill({
             >
               Title Case
             </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void handleSentenceCase()}
+              style={{
+                borderRadius: '6px',
+                border: '1px solid var(--lx-border)',
+                backgroundColor: 'var(--lx-muted)',
+                color: 'var(--lx-fg)',
+                padding: '4px 8px',
+                fontSize: '11px',
+                fontWeight: 500,
+              }}
+            >
+              Sentence Case
+            </button>
+            {undoText != null ? (
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => handleUndoTransform()}
+                style={{
+                  borderRadius: '6px',
+                  border: '1px solid var(--lx-warn)',
+                  backgroundColor: 'var(--lx-warn-bg)',
+                  color: 'var(--lx-warn)',
+                  padding: '4px 8px',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                }}
+              >
+                Undo
+              </button>
+            ) : null}
           </div>
 
           {!aiEnabled ? (

@@ -214,3 +214,23 @@ export function deleteDaemonVoiceExample(
 export function purgeDaemonAll(conn: DaemonConnectionConfig): Promise<DaemonProfile> {
   return daemonFetch(conn, '/v1/purge', { method: 'POST' });
 }
+
+export function fetchDaemonSynonyms(
+  conn: DaemonConnectionConfig,
+  word: string,
+): Promise<{ synonyms: string[] }> {
+  return daemonFetch(conn, '/v1/tier0/synonyms', {
+    method: 'POST',
+    body: JSON.stringify({ word }),
+  });
+}
+
+export function applyDaemonRulePreset(
+  conn: DaemonConnectionConfig,
+  preset: string,
+): Promise<DaemonProfile> {
+  return daemonFetch(conn, '/v1/harper/apply-preset', {
+    method: 'POST',
+    body: JSON.stringify({ preset }),
+  });
+}

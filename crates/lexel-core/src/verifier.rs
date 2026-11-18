@@ -1,6 +1,9 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::slop::{
+    ignored_prose_ranges, overlaps_ignored_ranges, parse_custom_slop_entry, preserve_case,
+};
 use crate::{CoreError, HarperEngine, SlopScanner, SurfaceCatalog, SurfaceProfile, scan_secrets};
 
 /// Verification summary matching `GateCheckSummary` in `packages/lexel-ui`.
@@ -162,27 +165,8 @@ pub fn verify_rewrite(
     })
 }
 
-const SAFE_SLOP_REPLACEMENTS: &[(&str, &str)] = &[
-    ("it is important to note that ", ""),
-    ("in today's fast-paced world, ", ""),
-    ("in today's fast-paced landscape, ", ""),
-    ("delve into", "explore"),
-    ("delving into", "exploring"),
-    ("utilize", "use"),
-    ("utilizing", "using"),
-    ("utilization", "use"),
-    ("leverage", "use"),
-    ("leveraging", "using"),
-    ("in order to", "to"),
-    ("a tapestry of", "a mix of"),
-    ("paramount", "essential"),
-    ("seamlessly", "smoothly"),
-    ("seamless", "smooth"),
-    ("robust", "solid"),
-    ("game-changer", "breakthrough"),
-];
-
 /// Apply zero-AI, deterministic safe text cleanup for slop phrases, em dashes, emojis, and hashtags.
+/// Preserves Markdown fenced code blocks, inline backtick spans, and `> ` quote lines.
 pub fn apply_safe_deterministic_fixes(
     text: &str,
     surface_id: &str,
@@ -192,42 +176,71 @@ pub fn apply_safe_deterministic_fixes(
 ) -> Result<SafeFixResult, CoreError> {
     let catalog = SurfaceCatalog::load_with_custom(custom_surfaces)?;
     let profile = catalog.get(surface_id)?;
+    let scanner = SlopScanner::load_embedded()?;
     let mut current = text.to_owned();
     let mut fixes_applied = 0usize;
     let mut categories = Vec::new();
-    let _ = custom_slop;
 
     if !profile.allow_em_dashes {
         let em_re = Regex::new(r"\s*—\s*|\s+--\s+")?;
-        let count = em_re.find_iter(&current).count();
+        let ignored = ignored_prose_ranges(&current);
+        let mut count = 0usize;
+        let replaced = em_re.replace_all(&current, |caps: &regex::Captures<'_>| {
+            let m = caps.get(0).expect("full match");
+            if overlaps_ignored_ranges(m.start(), m.end(), &ignored) {
+                m.as_str().to_owned()
+            } else {
+                count += 1;
+                ", ".to_owned()
+            }
+        });
         if count > 0 {
-            current = em_re.replace_all(&current, ", ").into_owned();
+            current = replaced.into_owned();
             fixes_applied += count;
             categories.push("em_dash".to_owned());
         }
     }
 
+    let mut replacement_rules: Vec<(String, String)> = Vec::new();
+    for raw in custom_slop {
+        let (term, repl) = parse_custom_slop_entry(raw);
+        if !term.is_empty()
+            && let Some(r) = repl
+            && !disabled_slop
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case(term.trim()))
+        {
+            replacement_rules.push((term.to_owned(), r.to_owned()));
+        }
+    }
+    replacement_rules.extend(scanner.safe_replacements_sorted());
+
     let mut slop_count = 0usize;
-    for (phrase, replacement) in SAFE_SLOP_REPLACEMENTS {
+    for (phrase, replacement) in replacement_rules {
+        let clean_key = phrase.trim_end();
         if disabled_slop
             .iter()
-            .any(|d| d.eq_ignore_ascii_case(phrase.trim()))
+            .any(|d| d.eq_ignore_ascii_case(clean_key))
         {
             continue;
         }
-        let pattern = format!(r"(?i)\b{}\b", regex::escape(phrase.trim_end()));
+        let trailing_space = if phrase.ends_with(' ') { r"\s*" } else { "" };
+        let pattern = format!(r"(?i)\b{}{}", regex::escape(clean_key), trailing_space);
         let re = Regex::new(&pattern)?;
-        let matches = re.find_iter(&current).count();
-        if matches > 0 {
-            let suffix = if phrase.ends_with(' ') { " " } else { "" };
-            let target = format!("{pattern}{suffix}");
-            let exact_re = Regex::new(&target)?;
-            current = exact_re
-                .replace_all(&current, |caps: &regex::Captures<'_>| {
-                    preserve_case(caps.get(0).map(|m| m.as_str()).unwrap_or(""), replacement)
-                })
-                .into_owned();
-            slop_count += matches;
+        let ignored = ignored_prose_ranges(&current);
+        let mut matched_here = 0usize;
+        let replaced = re.replace_all(&current, |caps: &regex::Captures<'_>| {
+            let m = caps.get(0).expect("full match");
+            if overlaps_ignored_ranges(m.start(), m.end(), &ignored) {
+                m.as_str().to_owned()
+            } else {
+                matched_here += 1;
+                preserve_case(m.as_str(), &replacement)
+            }
+        });
+        if matched_here > 0 {
+            current = replaced.into_owned();
+            slop_count += matched_here;
         }
     }
     if slop_count > 0 {
@@ -237,20 +250,34 @@ pub fn apply_safe_deterministic_fixes(
 
     if !profile.allow_hashtags {
         let hashtag_re = Regex::new(r"(?:^|\s)#[a-zA-Z][a-zA-Z0-9_]{1,}")?;
-        let count = hashtag_re.find_iter(&current).count();
+        let ignored = ignored_prose_ranges(&current);
+        let mut count = 0usize;
+        let replaced = hashtag_re.replace_all(&current, |caps: &regex::Captures<'_>| {
+            let m = caps.get(0).expect("full match");
+            if overlaps_ignored_ranges(m.start(), m.end(), &ignored) {
+                m.as_str().to_owned()
+            } else {
+                count += 1;
+                String::new()
+            }
+        });
         if count > 0 {
-            current = hashtag_re.replace_all(&current, "").into_owned();
+            current = replaced.into_owned();
             fixes_applied += count;
             categories.push("hashtag".to_owned());
         }
     }
 
     if !profile.allow_emojis {
+        let ignored = ignored_prose_ranges(&current);
         let mut cleaned = String::with_capacity(current.len());
         let mut emoji_count = 0usize;
-        for ch in current.chars() {
+        for (idx, ch) in current.char_indices() {
+            let end = idx + ch.len_utf8();
             let cp = ch as u32;
-            if matches!(cp, 0x1F300..=0x1FAFF | 0x2600..=0x27BF | 0x2300..=0x23FF) {
+            if matches!(cp, 0x1F300..=0x1FAFF | 0x2600..=0x27BF | 0x2300..=0x23FF)
+                && !overlaps_ignored_ranges(idx, end, &ignored)
+            {
                 emoji_count += 1;
             } else {
                 cleaned.push(ch);
@@ -275,27 +302,7 @@ pub fn apply_safe_deterministic_fixes(
     })
 }
 
-fn preserve_case(matched: &str, replacement: &str) -> String {
-    if replacement.is_empty() {
-        return String::new();
-    }
-    let first_upper = matched
-        .chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_uppercase());
-    if !first_upper {
-        return replacement.to_owned();
-    }
-    let mut chars = replacement.chars();
-    match chars.next() {
-        Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
-        None => String::new(),
-    }
-}
-
 fn extract_unit_bound_metrics(text: &str) -> Result<Vec<UnitMetric>, CoreError> {
-    // Rust regex does not support lookaround; match an optional boundary char before the metric
-    // and rely on word/punctuation token boundaries via trailing capture.
     let re = Regex::new(
         r"(?i)(?:^|[\s(\[])(#|\$)?(\d+(?:[.,]\d+)?)\s*(%|ms|s|sec|min|hrs?|kb|mb|gb|x|k|m|b)?(?:$|[\s,.;:!?/\)\]])",
     )?;

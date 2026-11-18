@@ -9,7 +9,11 @@ import {
   RewriteDiffCard,
   StatusPill,
   SurfaceBadge,
+  applyRulePreset,
+  normalizeTypography,
+  toSentenceCase,
   type AiHealthState,
+  type RulePresetId,
 } from 'lexel-ui';
 import type { IgnorableLintBox, UnpackedLint, UnpackedLintGroups } from 'lint-framework';
 import {
@@ -45,6 +49,8 @@ import {
   patchDaemonSettings,
   purgeDaemonAll,
   rewriteWithDaemon,
+  applyDaemonRulePreset,
+  fetchDaemonSynonyms,
   saveDaemonVoiceExample,
   setDaemonMainModel,
   switchDaemonProfile,
@@ -147,6 +153,10 @@ export function App() {
   const [ruleDescriptions, setRuleDescriptions] = useState<Record<string, string>>({});
   const [harperStats, setHarperStats] = useState<Summary | null>(null);
   const [tier0Notice, setTier0Notice] = useState<string | null>(null);
+  const [undoDraftText, setUndoDraftText] = useState<string | null>(null);
+  const [synonymQuery, setSynonymQuery] = useState('');
+  const [synonymList, setSynonymList] = useState<string[]>([]);
+  const [synonymMsg, setSynonymMsg] = useState<string | null>(null);
 
   const [aiHealth, setAiHealth] = useState<LocalAiHealth | null>(null);
   const [task, setTask] = useState<AiTaskId>('rewrite_surface');
@@ -677,6 +687,41 @@ export function App() {
     await controllerRef.current?.refresh(true);
   }
 
+  async function handleApplyRulePreset(presetId: RulePresetId) {
+    const nextConfig = applyRulePreset(
+      state.lintConfig as Record<string, boolean | null>,
+      presetId,
+    );
+    setState((prev) => ({ ...prev, lintConfig: nextConfig }));
+    await engineRef.current?.setLintConfig(
+      Object.keys(nextConfig).length === 0 ? defaultRuleConfig : nextConfig,
+    );
+    const updated = await engineRef.current?.getFullConfigAndDescriptions();
+    if (updated) {
+      setRuleConfig(updated.config);
+    }
+    if (aiHealth?.daemonConnected && state.daemonConnection.token.trim()) {
+      await applyDaemonRulePreset(state.daemonConnection, presetId).catch(() => undefined);
+    }
+    await controllerRef.current?.refresh(true);
+  }
+
+  function handleAllowSlopTerm(term: string) {
+    const clean = term.trim();
+    if (!clean) return;
+    setState((prev) => {
+      if (prev.disabledSlopTerms.some((t) => t.toLowerCase() === clean.toLowerCase())) {
+        return prev;
+      }
+      return {
+        ...prev,
+        disabledSlopTerms: [...prev.disabledSlopTerms, clean],
+      };
+    });
+    setTier0Notice(`Allowed "${clean}" in your local anti-slop list.`);
+    requestAnimationFrame(() => void controllerRef.current?.refresh(true));
+  }
+
   function handleFixSafeIssues() {
     if (!state.draftText.trim()) return;
     const res = applySafeDeterministicFixes(state.draftText, profile, {
@@ -688,17 +733,101 @@ export function App() {
       setTier0Notice('No deterministic slop, em dash, emoji, or hashtag fixes needed.');
       return;
     }
+    setUndoDraftText(state.draftText);
     setState((prev) => ({ ...prev, draftText: res.text }));
     setTier0Notice(`Applied ${res.fixesApplied} deterministic fix${res.fixesApplied === 1 ? '' : 'es'} offline.`);
+    requestAnimationFrame(() => void controllerRef.current?.refresh(true));
+  }
+
+  async function handleFixAllSafe() {
+    if (!state.draftText.trim()) return;
+    const slopRes = applySafeDeterministicFixes(state.draftText, profile, {
+      customSlopTerms: state.customSlopTerms,
+      disabledSlopTerms: state.disabledSlopTerms,
+      customSurfaces: state.customSurfaces,
+    });
+    const normRes = normalizeTypography(slopRes.text);
+    const harperRes = engineRef.current
+      ? await engineRef.current.applySafeHarperFixes(
+          normRes.text,
+          state.languageMode,
+          state.isolateEnglish,
+        )
+      : { text: normRes.text, applied: 0 };
+    const total = slopRes.fixesApplied + normRes.fixesApplied + harperRes.applied;
+    if (total === 0 && harperRes.text === state.draftText) {
+      setTier0Notice('No deterministic slop, formatting, or safe grammar fixes needed.');
+      return;
+    }
+    setUndoDraftText(state.draftText);
+    setState((prev) => ({ ...prev, draftText: harperRes.text }));
+    setTier0Notice(
+      `Applied ${total} deterministic fix${total === 1 ? '' : 'es'} (${slopRes.fixesApplied} style, ${normRes.fixesApplied} format, ${harperRes.applied} grammar).`,
+    );
     requestAnimationFrame(() => void controllerRef.current?.refresh(true));
   }
 
   async function handleTitleCase() {
     if (!state.draftText.trim() || !engineRef.current) return;
     const next = await engineRef.current.toTitleCase(state.draftText);
-    setState((prev) => ({ ...prev, draftText: next }));
+    if (next !== state.draftText) {
+      setUndoDraftText(state.draftText);
+      setState((prev) => ({ ...prev, draftText: next }));
+    }
     setTier0Notice('Converted draft to Chicago title case.');
     requestAnimationFrame(() => void controllerRef.current?.refresh(true));
+  }
+
+  function handleSentenceCase() {
+    if (!state.draftText.trim()) return;
+    const next = toSentenceCase(state.draftText);
+    if (next !== state.draftText) {
+      setUndoDraftText(state.draftText);
+      setState((prev) => ({ ...prev, draftText: next }));
+    }
+    setTier0Notice('Converted draft to sentence case.');
+    requestAnimationFrame(() => void controllerRef.current?.refresh(true));
+  }
+
+  function handleNormalizeFormatting() {
+    if (!state.draftText.trim()) return;
+    const res = normalizeTypography(state.draftText);
+    if (res.fixesApplied === 0 && res.text === state.draftText) {
+      setTier0Notice('Quotes, ellipses, and spacing are already normalized.');
+      return;
+    }
+    setUndoDraftText(state.draftText);
+    setState((prev) => ({ ...prev, draftText: res.text }));
+    setTier0Notice('Normalized quotes, ellipses, and whitespace outside code blocks.');
+    requestAnimationFrame(() => void controllerRef.current?.refresh(true));
+  }
+
+  function handleUndoDraftTransform() {
+    if (undoDraftText == null) return;
+    setState((prev) => ({ ...prev, draftText: undoDraftText }));
+    setUndoDraftText(null);
+    setTier0Notice('Restored previous draft before deterministic transform.');
+    requestAnimationFrame(() => void controllerRef.current?.refresh(true));
+  }
+
+  async function handleLookupSynonyms(e: React.FormEvent) {
+    e.preventDefault();
+    const q = synonymQuery.trim();
+    if (!q) return;
+    if (!aiHealth?.daemonConnected || !state.daemonConnection.token.trim()) {
+      setSynonymList([]);
+      setSynonymMsg('Start & connect lexel-daemon in Settings to search offline harper-thesaurus.');
+      return;
+    }
+    setSynonymMsg('Looking up...');
+    try {
+      const res = await fetchDaemonSynonyms(state.daemonConnection, q);
+      setSynonymList(res.synonyms);
+      setSynonymMsg(res.synonyms.length === 0 ? `No synonyms found for "${q}".` : null);
+    } catch (err) {
+      setSynonymList([]);
+      setSynonymMsg(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function handleImportWeirpack(
@@ -977,6 +1106,7 @@ export function App() {
               onRuleChange={handleRuleChange}
               onOneOfManyChange={handleOneOfManyChange}
               onResetAllRules={handleResetAllRules}
+              onApplyRulePreset={handleApplyRulePreset}
               onUpdateCustomSlop={(customTerms, disabledTerms) =>
                 setState((prev) => ({
                   ...prev,
@@ -1195,6 +1325,19 @@ export function App() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => void handleFixAllSafe()}
+                      className="inline-flex items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[11px] font-semibold"
+                      style={{
+                        backgroundColor: 'var(--lx-bg)',
+                        borderColor: 'var(--lx-border)',
+                        color: 'var(--lx-fg)',
+                      }}
+                      title="Apply safe slop, formatting, and single-suggestion Harper fixes"
+                    >
+                      <span>Fix All Safe</span>
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => void handleTitleCase()}
                       className="inline-flex items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
                       style={{
@@ -1206,6 +1349,44 @@ export function App() {
                       <CaseSensitive className="w-3 h-3" strokeWidth={1.75} aria-hidden="true" />
                       <span>Title Case</span>
                     </button>
+                    <button
+                      type="button"
+                      onClick={handleSentenceCase}
+                      className="inline-flex items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
+                      style={{
+                        backgroundColor: 'var(--lx-bg)',
+                        borderColor: 'var(--lx-border)',
+                        color: 'var(--lx-fg)',
+                      }}
+                    >
+                      <span>Sentence Case</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleNormalizeFormatting}
+                      className="inline-flex items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
+                      style={{
+                        backgroundColor: 'var(--lx-bg)',
+                        borderColor: 'var(--lx-border)',
+                        color: 'var(--lx-fg)',
+                      }}
+                    >
+                      <span>Clean Quotes</span>
+                    </button>
+                    {undoDraftText != null ? (
+                      <button
+                        type="button"
+                        onClick={handleUndoDraftTransform}
+                        className="inline-flex items-center gap-1 rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
+                        style={{
+                          backgroundColor: 'var(--lx-warn-bg)',
+                          borderColor: 'var(--lx-warn)',
+                          color: 'var(--lx-warn)',
+                        }}
+                      >
+                        <span>Undo</span>
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => {
@@ -1328,6 +1509,101 @@ export function App() {
                         </div>
                         <div className="text-sm font-semibold lexel-mono">{textStats.secretCount}</div>
                       </div>
+                      <div>
+                        <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          FK Grade Level
+                        </div>
+                        <div className="text-sm font-semibold lexel-mono">
+                          {textStats.fleschKincaidGrade.toFixed(1)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          Reading Ease
+                        </div>
+                        <div className="text-sm font-semibold lexel-mono">
+                          {textStats.fleschReadingEase.toFixed(0)} / 100
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          Long Sentences
+                        </div>
+                        <div
+                          className="text-sm font-semibold lexel-mono"
+                          style={{
+                            color: textStats.longSentences > 0 ? 'var(--lx-warn)' : 'var(--lx-fg)',
+                          }}
+                        >
+                          {textStats.longSentences}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          Passive Hints
+                        </div>
+                        <div className="text-sm font-semibold lexel-mono">
+                          {textStats.passiveHintCount}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div
+                      className="rounded-[8px] border p-3.5 flex flex-col gap-2"
+                      style={{ borderColor: 'var(--lx-border)', backgroundColor: 'var(--lx-card)' }}
+                    >
+                      <div className="text-xs font-semibold">Offline Thesaurus (harper-thesaurus)</div>
+                      <form onSubmit={(e) => void handleLookupSynonyms(e)} className="flex gap-1.5">
+                        <input
+                          type="text"
+                          value={synonymQuery}
+                          onChange={(e) => setSynonymQuery(e.target.value)}
+                          placeholder="Look up plain alternatives..."
+                          aria-label="Look up word synonyms"
+                          className="flex-1 rounded-[6px] border px-2.5 py-1 text-xs"
+                          style={{
+                            backgroundColor: 'var(--lx-bg)',
+                            borderColor: 'var(--lx-border)',
+                            color: 'var(--lx-fg)',
+                          }}
+                        />
+                        <button
+                          type="submit"
+                          className="rounded-[6px] border px-2.5 py-1 text-xs font-medium"
+                          style={{
+                            backgroundColor: 'var(--lx-surface)',
+                            borderColor: 'var(--lx-border)',
+                            color: 'var(--lx-fg)',
+                          }}
+                        >
+                          Search
+                        </button>
+                      </form>
+                      {synonymMsg ? (
+                        <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          {synonymMsg}
+                        </div>
+                      ) : null}
+                      {synonymList.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {synonymList.map((syn) => (
+                            <button
+                              key={syn}
+                              type="button"
+                              onClick={() => void navigator.clipboard.writeText(syn)}
+                              className="rounded-[4px] border px-2 py-0.5 text-[11px] lexel-mono"
+                              style={{
+                                backgroundColor: 'var(--lx-bg)',
+                                borderColor: 'var(--lx-border)',
+                                color: 'var(--lx-signal)',
+                              }}
+                              title="Copy synonym to clipboard"
+                            >
+                              {syn}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
 
                     <div
@@ -1731,6 +2007,7 @@ export function App() {
         onClose={() => controllerRef.current?.closePopup()}
         onAddToDictionary={handleAddWord}
         onDisableRule={(ruleId) => void handleRuleChange(ruleId, false)}
+        onAllowSlopTerm={handleAllowSlopTerm}
         onOpenSettings={() => setWorkspace('rules')}
         onFixWithAi={(box: IgnorableLintBox) => {
           void runAiTask(box.rule === 'LexelAntiSlop' ? 'deslop' : 'fix_grammar_flow');

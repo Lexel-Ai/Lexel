@@ -5,6 +5,8 @@ import {
   type WeirpackTestFailures,
   unpackWeirpackBytes,
 } from 'harper.js';
+import { packWeirpackFiles } from 'harper.js';
+import { HARPER_RULE_PRESETS, type RulePresetId } from 'lexel-ui';
 import { PackagePlus, Plus, RotateCcw, Search, Trash2, Upload } from 'lucide-react';
 import React, { useMemo, useRef, useState } from 'react';
 import { listSurfaceProfiles } from '../lib/surfaces';
@@ -59,6 +61,7 @@ export interface RulesWorkspaceProps {
   onRuleChange: (ruleId: string, value: boolean | null) => Promise<void>;
   onOneOfManyChange: (names: string[], selected: string | null) => Promise<void>;
   onResetAllRules: () => Promise<void>;
+  onApplyRulePreset?: (presetId: RulePresetId) => Promise<void>;
   onUpdateCustomSlop: (customTerms: string[], disabledTerms: string[]) => void;
   onUpdateCustomSurfaces: (surfaces: SurfaceProfile[]) => void;
   onImportWeirpack: (
@@ -82,6 +85,7 @@ export function RulesWorkspace({
   onRuleChange,
   onOneOfManyChange,
   onResetAllRules,
+  onApplyRulePreset,
   onUpdateCustomSlop,
   onUpdateCustomSurfaces,
   onImportWeirpack,
@@ -92,6 +96,12 @@ export function RulesWorkspace({
   const [search, setSearch] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [weirRuleName, setWeirRuleName] = useState('CustomAvoidSynergy');
+  const [weirExpr, setWeirExpr] = useState('synergy');
+  const [weirReplacement, setWeirReplacement] = useState('coordination');
+  const [weirMessage, setWeirMessage] = useState('Use plain phrasing instead of buzzword.');
+  const [weirTestBad, setWeirTestBad] = useState('We need team synergy now.');
+  const [weirTestGood, setWeirTestGood] = useState('We need team coordination now.');
 
   const [newSlopTerm, setNewSlopTerm] = useState('');
   const [surfaceIdDraft, setSurfaceIdDraft] = useState('');
@@ -284,6 +294,63 @@ export function RulesWorkspace({
     }
   }
 
+  async function handleBuildWeirpack(e: React.FormEvent) {
+    e.preventDefault();
+    setNotice(null);
+    setErrorMsg(null);
+    const cleanName = weirRuleName.replace(/[^A-Za-z0-9_]/g, '') || 'CustomLexelRule';
+    const rawExpr = weirExpr.trim();
+    if (!rawExpr || !weirReplacement.trim()) {
+      setErrorMsg('Provide both a target phrase and a replacement.');
+      return;
+    }
+    const exprClause =
+      rawExpr.includes(' ') && !rawExpr.startsWith('(') ? `(${rawExpr})` : rawExpr;
+    const esc = (v: string) => v.replaceAll('"', '\\"');
+    const lines = [
+      `expr main ${exprClause}`,
+      `let message "${esc(weirMessage.trim() || `Prefer ${weirReplacement.trim()}.`)}"`,
+      `let description "Custom Lexel Weir rule"`,
+      `let kind "Style"`,
+      `let becomes "${esc(weirReplacement.trim())}"`,
+      `let strategy "MatchCase"`,
+    ];
+    if (weirTestBad.trim() && weirTestGood.trim()) {
+      lines.push(`test "${esc(weirTestBad.trim())}" "${esc(weirTestGood.trim())}"`);
+    }
+    try {
+      const files = new Map<string, string>([
+        [
+          'manifest.json',
+          JSON.stringify(
+            {
+              name: `${cleanName}.weirpack`,
+              author: 'Lexel Lab User',
+              version: '0.1.0',
+              description: `Custom rule for ${rawExpr}`,
+              license: 'Apache-2.0',
+            },
+            null,
+            2,
+          ),
+        ],
+        [`${cleanName}.weir`, lines.join('\n')],
+      ]);
+      const buf = packWeirpackFiles(files);
+      const failures = await onImportWeirpack(`${cleanName}.weirpack`, buf, 1);
+      if (failures && Object.keys(failures).length > 0) {
+        const summary = Object.entries(failures)
+          .map(([rule, cases]) => `${rule}: ${cases.length} failing case(s)`)
+          .join('; ');
+        setErrorMsg(`Weirpack tests failed (${summary}). Pack was not enabled.`);
+        return;
+      }
+      setNotice(`Built and verified ${cleanName}.weirpack (embedded Weir tests passed).`);
+    } catch (err) {
+      setErrorMsg(`Failed to build Weirpack: ${(err as Error).message}`);
+    }
+  }
+
   function handleAddCustomSlop(e: React.FormEvent) {
     e.preventDefault();
     const cleaned = newSlopTerm.trim();
@@ -417,6 +484,33 @@ export function RulesWorkspace({
 
         {subTab === 'grammar' ? (
           <div className="flex flex-col gap-3">
+            {onApplyRulePreset ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-medium mr-1" style={{ color: 'var(--lx-fg-muted)' }}>
+                  Rule Presets:
+                </span>
+                {HARPER_RULE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    title={preset.description}
+                    onClick={() => {
+                      void onApplyRulePreset(preset.id).then(() =>
+                        setNotice(`Applied "${preset.label}" rule preset.`),
+                      );
+                    }}
+                    className="rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
+                    style={{
+                      backgroundColor: 'var(--lx-surface)',
+                      borderColor: 'var(--lx-border)',
+                      color: 'var(--lx-fg)',
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="relative flex-1 min-w-[240px]">
                 <Search
@@ -786,6 +880,110 @@ export function RulesWorkspace({
                 <span>Upload .weirpack</span>
               </button>
             </div>
+
+            <form
+              onSubmit={(e) => void handleBuildWeirpack(e)}
+              className="rounded-[8px] border p-4 flex flex-col gap-3"
+              style={{ borderColor: 'var(--lx-border)', backgroundColor: 'var(--lx-card)' }}
+            >
+              <div className="text-xs font-semibold">Build &amp; Verify Custom Weir Rule</div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                <input
+                  type="text"
+                  value={weirRuleName}
+                  onChange={(e) => setWeirRuleName(e.target.value)}
+                  placeholder="Rule ID (e.g. CustomAvoidSynergy)"
+                  aria-label="Weir rule name"
+                  className="rounded-[6px] border px-2.5 py-1.5 text-xs lexel-mono"
+                  style={{
+                    backgroundColor: 'var(--lx-surface)',
+                    borderColor: 'var(--lx-border)',
+                    color: 'var(--lx-fg)',
+                  }}
+                />
+                <input
+                  type="text"
+                  value={weirExpr}
+                  onChange={(e) => setWeirExpr(e.target.value)}
+                  placeholder="Target phrase (e.g. delve into)"
+                  aria-label="Weir target phrase"
+                  className="rounded-[6px] border px-2.5 py-1.5 text-xs"
+                  style={{
+                    backgroundColor: 'var(--lx-surface)',
+                    borderColor: 'var(--lx-border)',
+                    color: 'var(--lx-fg)',
+                  }}
+                />
+                <input
+                  type="text"
+                  value={weirReplacement}
+                  onChange={(e) => setWeirReplacement(e.target.value)}
+                  placeholder="Plain replacement"
+                  aria-label="Weir replacement"
+                  className="rounded-[6px] border px-2.5 py-1.5 text-xs"
+                  style={{
+                    backgroundColor: 'var(--lx-surface)',
+                    borderColor: 'var(--lx-border)',
+                    color: 'var(--lx-fg)',
+                  }}
+                />
+              </div>
+              <input
+                type="text"
+                value={weirMessage}
+                onChange={(e) => setWeirMessage(e.target.value)}
+                placeholder="Hint message"
+                aria-label="Weir hint message"
+                className="rounded-[6px] border px-2.5 py-1.5 text-xs"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                <input
+                  type="text"
+                  value={weirTestBad}
+                  onChange={(e) => setWeirTestBad(e.target.value)}
+                  placeholder="Embedded Weir test (before)"
+                  aria-label="Weir test before"
+                  className="rounded-[6px] border px-2.5 py-1.5 text-xs"
+                  style={{
+                    backgroundColor: 'var(--lx-surface)',
+                    borderColor: 'var(--lx-border)',
+                    color: 'var(--lx-fg)',
+                  }}
+                />
+                <input
+                  type="text"
+                  value={weirTestGood}
+                  onChange={(e) => setWeirTestGood(e.target.value)}
+                  placeholder="Embedded Weir test (after)"
+                  aria-label="Weir test after"
+                  className="rounded-[6px] border px-2.5 py-1.5 text-xs"
+                  style={{
+                    backgroundColor: 'var(--lx-surface)',
+                    borderColor: 'var(--lx-border)',
+                    color: 'var(--lx-fg)',
+                  }}
+                />
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-1.5 rounded-[6px] border px-3 py-1.5 text-xs font-semibold"
+                  style={{
+                    backgroundColor: 'var(--lx-surface)',
+                    borderColor: 'var(--lx-border)',
+                    color: 'var(--lx-fg)',
+                  }}
+                >
+                  <Plus className="w-3.5 h-3.5" strokeWidth={1.75} aria-hidden="true" />
+                  <span>Test &amp; Enable Weirpack</span>
+                </button>
+              </div>
+            </form>
 
             {weirpacks.length === 0 ? (
               <div className="py-8 text-xs" style={{ color: 'var(--lx-fg-muted)' }}>

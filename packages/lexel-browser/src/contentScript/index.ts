@@ -111,6 +111,10 @@ function renderOverlays() {
           await ProtocolClient.setRuleEnabled(ruleId, false);
           await lintController.requestLintUpdate(true);
         },
+        onAllowSlopTerm: async (term) => {
+          await ProtocolClient.allowSlopTerm(term);
+          await lintController.requestLintUpdate(true);
+        },
         onOpenSettings: () => ProtocolClient.openOptions(),
         onFixWithAi: (box) => {
           const rootEl = resolveEditableRoot(box.source) ?? activeField?.element;

@@ -149,6 +149,142 @@
       ]
     },
     {
+      "id": "web_substack",
+      "label": "Substack",
+      "hostPatterns": ["substack.com", "*.substack.com"],
+      "register": "clear_editorial",
+      "minChars": 20,
+      "maxChars": 15000,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": [
+        "happy monday",
+        "welcome back to another",
+        "in this week's issue"
+      ],
+      "promptDirective": "Write sharp editorial prose with concrete examples and clear transitions. Avoid newsletter throat-clearing, buzzwords, and em dashes.",
+      "quickActions": [
+        { "id": "fix_grammar_flow", "label": "Polish prose" },
+        { "id": "deslop", "label": "Remove AI tone" },
+        { "id": "shorten", "label": "Tighten" }
+      ]
+    },
+    {
+      "id": "web_wordpress",
+      "label": "WordPress",
+      "hostPatterns": ["wordpress.com", "*.wordpress.com"],
+      "register": "clear_article",
+      "minChars": 20,
+      "maxChars": 15000,
+      "allowLinks": true,
+      "allowEmojis": true,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": [
+        "in today's digital age",
+        "without further ado"
+      ],
+      "promptDirective": "Write direct, readable blog prose with active voice. Keep links intact and avoid filler intros and em dashes.",
+      "quickActions": [
+        { "id": "fix_grammar_flow", "label": "Polish article" },
+        { "id": "deslop", "label": "Remove AI tone" },
+        { "id": "shorten", "label": "Tighten" }
+      ]
+    },
+    {
+      "id": "web_discourse",
+      "label": "Discourse",
+      "hostPatterns": ["meta.discourse.org"],
+      "register": "technical_forum",
+      "minChars": 10,
+      "maxChars": 6000,
+      "allowLinks": true,
+      "allowEmojis": true,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": [
+        "+1",
+        "bump",
+        "great post"
+      ],
+      "promptDirective": "Write clear forum replies with reproducible details and respectful peer tone. Preserve code blocks and links.",
+      "quickActions": [
+        { "id": "rewrite_surface", "label": "Polish forum reply" },
+        { "id": "deslop", "label": "Remove fluff" },
+        { "id": "shorten", "label": "Make concise" }
+      ]
+    },
+    {
+      "id": "ide_git_commit",
+      "label": "Git Commit",
+      "hostPatterns": [],
+      "register": "imperative_changelog",
+      "minChars": 8,
+      "maxChars": 2000,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": [
+        "wip",
+        "misc fixes",
+        "minor changes",
+        "updated stuff"
+      ],
+      "promptDirective": "Use imperative mood for the subject line under 72 characters without a trailing period. Keep commit scope, file paths, and issue IDs intact.",
+      "quickActions": [
+        { "id": "rewrite_surface", "label": "Polish commit" },
+        { "id": "shorten", "label": "Shorten subject" },
+        { "id": "fix_grammar_flow", "label": "Fix grammar" }
+      ]
+    },
+    {
+      "id": "ide_code_comment",
+      "label": "Code Comment",
+      "hostPatterns": [],
+      "register": "concise_technical",
+      "minChars": 4,
+      "maxChars": 2000,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": [
+        "this function",
+        "helper method to"
+      ],
+      "promptDirective": "Explain why, invariants, or edge cases concisely. Preserve backticks and identifier names untouched.",
+      "quickActions": [
+        { "id": "rewrite_surface", "label": "Concise comment" },
+        { "id": "shorten", "label": "Tighten" },
+        { "id": "fix_grammar_flow", "label": "Fix grammar" }
+      ]
+    },
+    {
+      "id": "docs_markdown",
+      "label": "Docs / Markdown",
+      "hostPatterns": [],
+      "register": "clear_documentation",
+      "minChars": 8,
+      "maxChars": 12000,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": [
+        "in this document we will",
+        "welcome to the documentation"
+      ],
+      "promptDirective": "Write clear, scannable technical documentation in active voice. Preserve code blocks, CLI flags, URLs, and numbers.",
+      "quickActions": [
+        { "id": "fix_grammar_flow", "label": "Fix grammar" },
+        { "id": "deslop", "label": "Remove AI tone" },
+        { "id": "shorten", "label": "Make concise" }
+      ]
+    },
+    {
       "id": "general",
       "label": "General",
       "hostPatterns": ["*"],
