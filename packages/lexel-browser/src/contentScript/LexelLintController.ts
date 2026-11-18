@@ -155,6 +155,7 @@ export class LexelLintController {
   private targets = new Map<Node, { observer?: MutationObserver }>();
   private scrollableAncestors = new Set<HTMLElement>();
   private lintRequest: Promise<unknown> | null = null;
+  private pendingLintUpdate = false;
   private renderRequested = false;
   private lintDelayTimer: number | null = null;
   private lastInputAt = 0;
@@ -302,12 +303,14 @@ export class LexelLintController {
     }
 
     if (this.lintRequest != null) {
+      this.pendingLintUpdate = true;
       if (!immediate) return;
       try {
         await this.lintRequest;
       } catch {
         // Proceed with the explicitly requested refresh after a failed background lint.
       }
+      this.pendingLintUpdate = false;
       await this.requestLintUpdate(true);
       return;
     }
@@ -328,52 +331,56 @@ export class LexelLintController {
         }
 
         const language = getTargetLanguage(target);
-        if (text.length > MAX_LINT_TEXT_LENGTH) {
-          const windows =
-            target instanceof HTMLElement ? getGoogleDocsVisibleWindows(target, text) : [];
-          if (windows.length === 0) {
-            return { target: null as HTMLElement | null, targetIdentity, lints: {} };
-          }
-          const lintsBySource: UnpackedLintGroups = {};
-          for (const span of windows) {
-            const windowText = text.slice(span.start, span.end);
-            const groups = window.structuredClone(
-              await this.lintProvider(windowText, window.location.hostname, {
-                forceAllHeadings: isHeading(target),
-                language,
-              }),
-            );
-            for (const [rule, lints] of Object.entries(groups)) {
-              for (const lint of lints) {
-                lint.span.start += span.start;
-                lint.span.end += span.start;
-                lint.source = text;
+        try {
+          if (text.length > MAX_LINT_TEXT_LENGTH) {
+            const windows =
+              target instanceof HTMLElement ? getGoogleDocsVisibleWindows(target, text) : [];
+            if (windows.length === 0) {
+              return { target: null as HTMLElement | null, targetIdentity, lints: {} };
+            }
+            const lintsBySource: UnpackedLintGroups = {};
+            for (const span of windows) {
+              const windowText = text.slice(span.start, span.end);
+              const groups = window.structuredClone(
+                await this.lintProvider(windowText, window.location.hostname, {
+                  forceAllHeadings: isHeading(target),
+                  language,
+                }),
+              );
+              for (const [rule, lints] of Object.entries(groups)) {
+                for (const lint of lints) {
+                  lint.span.start += span.start;
+                  lint.span.end += span.start;
+                  lint.source = text;
+                }
+                lintsBySource[rule] ??= [];
+                lintsBySource[rule].push(...lints);
               }
-              lintsBySource[rule] ??= [];
-              lintsBySource[rule].push(...lints);
+            }
+            return { target: target as HTMLElement, targetIdentity, lints: lintsBySource };
+          }
+
+          let lintsBySource = await this.lintProvider(text, window.location.hostname, {
+            forceAllHeadings: isHeading(target),
+            language,
+          });
+
+          if (isCM) {
+            lintsBySource = window.structuredClone(lintsBySource);
+            for (const lints of Object.values(lintsBySource)) {
+              for (const lint of lints) {
+                const offsetStart = newLineIndices.findIndex((i) => i > lint.span.start);
+                const offsetEnd = newLineIndices.findIndex((i) => i > lint.span.end);
+                lint.span.start -= offsetStart;
+                lint.span.end -= offsetEnd;
+              }
             }
           }
+
           return { target: target as HTMLElement, targetIdentity, lints: lintsBySource };
+        } catch {
+          return { target: null as HTMLElement | null, targetIdentity, lints: {} };
         }
-
-        let lintsBySource = await this.lintProvider(text, window.location.hostname, {
-          forceAllHeadings: isHeading(target),
-          language,
-        });
-
-        if (isCM) {
-          lintsBySource = window.structuredClone(lintsBySource);
-          for (const lints of Object.values(lintsBySource)) {
-            for (const lint of lints) {
-              const offsetStart = newLineIndices.findIndex((i) => i > lint.span.start);
-              const offsetEnd = newLineIndices.findIndex((i) => i > lint.span.end);
-              lint.span.start -= offsetStart;
-              lint.span.end -= offsetEnd;
-            }
-          }
-        }
-
-        return { target: target as HTMLElement, targetIdentity, lints: lintsBySource };
       }),
     );
 
@@ -389,6 +396,11 @@ export class LexelLintController {
         r.target != null,
     );
     this.requestRender();
+
+    if (this.pendingLintUpdate) {
+      this.pendingLintUpdate = false;
+      void this.requestLintUpdate(false);
+    }
   }
 
   private onScreenTargets(): Node[] {
@@ -493,50 +505,53 @@ export class LexelLintController {
     this.renderRequested = true;
 
     requestAnimationFrame(() => {
-      const boxes = this.lastLints.flatMap(({ target, targetIdentity, lints }) => {
-        if (!target || this.targets.get(target) !== targetIdentity) {
-          return [];
-        }
-        const mapped = isGoogleDocsMirrorTarget(target);
-        const { text, isCM } = this.getTargetText(target);
-        if (text == null) return [];
+      try {
+        const boxes = this.lastLints.flatMap(({ target, targetIdentity, lints }) => {
+          if (!target || this.targets.get(target) !== targetIdentity) {
+            return [];
+          }
+          const mapped = isGoogleDocsMirrorTarget(target);
+          const { text, isCM } = this.getTargetText(target);
+          if (text == null) return [];
 
-        return Object.entries(lints).flatMap(([ruleName, ls]) =>
-          ls.flatMap((lint) => {
-            const currentLint =
-              isCM || mapped
-                ? lint.source === text
-                  ? lint
-                  : null
-                : remapLintToCurrentSource(lint, text);
-            if (currentLint == null) return [];
+          return Object.entries(lints).flatMap(([ruleName, ls]) =>
+            ls.flatMap((lint) => {
+              const currentLint =
+                isCM || mapped
+                  ? lint.source === text
+                    ? lint
+                    : null
+                  : remapLintToCurrentSource(lint, text);
+              if (currentLint == null) return [];
 
-            const lintBoxes = computeLintBoxes(target, currentLint, ruleName, {
-              ignoreLint: this.actions.ignoreLint
-                ? async (hash: string) => {
-                    await this.actions.ignoreLint?.(hash);
-                    await this.requestLintUpdate(true);
+              const lintBoxes = computeLintBoxes(target, currentLint, ruleName, {
+                ignoreLint: this.actions.ignoreLint
+                  ? async (hash: string) => {
+                      await this.actions.ignoreLint?.(hash);
+                      await this.requestLintUpdate(true);
+                    }
+                  : undefined,
+              });
+              for (const box of lintBoxes) {
+                const originalApply = box.applySuggestion;
+                box.applySuggestion = (suggestion) => {
+                  if (this.targets.get(target) === targetIdentity) {
+                    return originalApply(suggestion);
                   }
-                : undefined,
-            });
-            for (const box of lintBoxes) {
-              const originalApply = box.applySuggestion;
-              box.applySuggestion = (suggestion) => {
-                if (this.targets.get(target) === targetIdentity) {
-                  return originalApply(suggestion);
-                }
-              };
-            }
-            return lintBoxes;
-          }),
-        );
-      });
+                };
+              }
+              return lintBoxes;
+            }),
+          );
+        });
 
-      this.lastBoxes = boxes;
-      this.highlights.renderLintBoxes(boxes);
-      this.syncSourceInteractionListeners(boxes);
-      this.reconcileActivePopup(boxes);
-      this.renderRequested = false;
+        this.lastBoxes = boxes;
+        this.highlights.renderLintBoxes(boxes);
+        this.syncSourceInteractionListeners(boxes);
+        this.reconcileActivePopup(boxes);
+      } finally {
+        this.renderRequested = false;
+      }
     });
   }
 

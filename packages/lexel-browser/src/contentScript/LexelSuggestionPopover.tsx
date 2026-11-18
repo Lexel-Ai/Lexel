@@ -20,10 +20,11 @@ export function parseSafeLintParagraphs(html: string): SafeMessageSegment[][] {
   let current: SafeMessageSegment[] = [];
 
   const flushParagraph = () => {
-    if (current.length > 0) {
+    const hasContent = current.some((seg) => seg.type !== 'text' || Boolean(seg.text?.trim()));
+    if (hasContent) {
       paragraphs.push(current);
-      current = [];
     }
+    current = [];
   };
 
   const walk = (node: Node) => {

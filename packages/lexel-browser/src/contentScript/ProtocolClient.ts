@@ -2,6 +2,7 @@ import type { LintOptions } from 'harper.js';
 import type { UnpackedLintGroups } from 'lint-framework';
 import { LRUCache } from 'lru-cache';
 import type { LocalAiHealth } from '../shared/localAiClient';
+import { DEFAULT_AI_SETTINGS } from '../shared/storage';
 import type {
   ActivationKey,
   AiSettings,
@@ -120,12 +121,13 @@ export default class ProtocolClient {
   }
 
   public static async getAiSettings(): Promise<AiSettings> {
-    const res = await send<{ settings: AiSettings }>({ kind: 'getAiSettings' });
-    return res.settings;
+    const res = await send<{ settings?: AiSettings }>({ kind: 'getAiSettings' });
+    return res?.settings ?? DEFAULT_AI_SETTINGS;
   }
 
   public static async getAiHealth(): Promise<LocalAiHealth> {
-    return send<LocalAiHealth>({ kind: 'aiHealth' });
+    const res = await send<LocalAiHealth>({ kind: 'aiHealth' });
+    return res ?? { ok: false, models: [], error: 'Extension background worker did not respond.' };
   }
 
   public static async setAiEnabled(enabled: boolean): Promise<void> {

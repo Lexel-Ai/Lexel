@@ -256,39 +256,56 @@ function scanFields() {
   });
 }
 
-async function hydrateConfig() {
-  const [blocklist, override, theme, aiSettings, hoverEnabled, activationKey] = await Promise.all([
-    ProtocolClient.getPrivacyBlocklist(),
-    ProtocolClient.getSurfaceOverride(window.location.hostname),
-    ProtocolClient.getTheme(),
-    ProtocolClient.getAiSettings(),
-    ProtocolClient.getOpenSuggestionsOnHover(),
-    ProtocolClient.getActivationKey(),
-  ]);
-  blocklistCache = blocklist;
-  surfaceOverrideCache = override;
-  themeCache = theme;
-  aiEnabledCache = aiSettings.enabled;
-  lintController.setOpenSuggestionsOnHover(hoverEnabled);
-  lintController.setActivationKey(activationKey);
+async function hydrateConfig(initializeSummary = false) {
+  try {
+    const [blocklist, override, theme, aiSettings, hoverEnabled, activationKey] =
+      await Promise.all([
+        ProtocolClient.getPrivacyBlocklist().catch(() => []),
+        ProtocolClient.getSurfaceOverride(window.location.hostname).catch(() => null),
+        ProtocolClient.getTheme().catch(() => 'dark' as const),
+        ProtocolClient.getAiSettings().catch(() => ({ enabled: true })),
+        ProtocolClient.getOpenSuggestionsOnHover().catch(() => true),
+        ProtocolClient.getActivationKey().catch(() => 'off' as const),
+      ]);
+    blocklistCache = blocklist;
+    surfaceOverrideCache = override;
+    themeCache = theme;
+    aiEnabledCache = aiSettings.enabled;
+    lintController.setOpenSuggestionsOnHover(hoverEnabled);
+    lintController.setActivationKey(activationKey);
 
-  const ctx = currentSurfaceContext(activeField?.element ?? null);
-  await ProtocolClient.setPageSummary({
-    domain: ctx.domain,
-    surfaceId: ctx.surfaceId,
-    subcontext: ctx.subcontext,
-    harperCount: 0,
-    slopCount: 0,
-    surfaceWarningCount: 0,
-  });
+    if (initializeSummary) {
+      const ctx = currentSurfaceContext(activeField?.element ?? null);
+      await ProtocolClient.setPageSummary({
+        domain: ctx.domain,
+        surfaceId: ctx.surfaceId,
+        subcontext: ctx.subcontext,
+        harperCount: 0,
+        slopCount: 0,
+        surfaceWarningCount: 0,
+      }).catch(() => undefined);
+    }
+  } catch {
+    // Keep defaults if background service worker is still waking up.
+  }
 }
 
 function captureFocusedElement(target: EventTarget | null) {
   const rootEl = resolveEditableRoot(target);
   if (!rootEl) return;
   activeField = makeFieldHandle(rootEl);
-  if (target instanceof HTMLElement) {
-    lintController.addTarget(target);
+  if (rootEl instanceof HTMLTextAreaElement || rootEl instanceof HTMLInputElement) {
+    lintController.addTarget(rootEl);
+  } else {
+    scanFields();
+    if (!lintController.hasTarget(rootEl) && target instanceof HTMLElement) {
+      const hasRegisteredChild = Array.from(rootEl.querySelectorAll('*')).some((el) =>
+        lintController.hasTarget(el),
+      );
+      if (!hasRegisteredChild) {
+        lintController.addTarget(rootEl);
+      }
+    }
   }
   renderOverlays();
 }
@@ -359,7 +376,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
-void hydrateConfig().then(() => {
+void hydrateConfig(true).finally(() => {
   scanFields();
   if (document.activeElement) {
     captureFocusedElement(document.activeElement);
