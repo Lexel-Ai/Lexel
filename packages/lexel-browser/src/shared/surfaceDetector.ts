@@ -114,6 +114,7 @@ export function detectSurfaceFromLocation(
     overrideSurface?: SurfaceId | null;
     focusedElement?: Element | null;
     doc?: Document;
+    customSurfaces?: SurfaceProfile[];
   },
 ): DetectedSurfaceContext {
   let hostname = '';
@@ -154,7 +155,7 @@ export function detectSurfaceFromLocation(
   const composerKind = detectComposerKind(options?.focusedElement ?? null, pathname);
 
   if (options?.overrideSurface) {
-    const profile = getSurfaceProfile(options.overrideSurface);
+    const profile = getSurfaceProfile(options.overrideSurface, options.customSurfaces);
     return {
       surfaceId: profile.id,
       label: profile.label,
@@ -165,7 +166,7 @@ export function detectSurfaceFromLocation(
     };
   }
 
-  for (const profile of SURFACE_PROFILES) {
+  for (const profile of listSurfaceProfiles(options?.customSurfaces)) {
     if (profile.id === 'general') continue;
     if (profile.hostPatterns.some((pat) => matchHostPattern(hostname, pat))) {
       return {

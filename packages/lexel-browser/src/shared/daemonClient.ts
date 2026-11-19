@@ -207,3 +207,24 @@ export function daemonApplyRulePreset(
 ): Promise<NativeDaemonResult<DaemonProfile>> {
   return callNativeDaemon('applyRulePreset', { preset });
 }
+
+export interface DownloadModelReport {
+  id: string;
+  ggufPath: string;
+  bytesDownloaded: number;
+  sha256: string;
+  verified: boolean;
+  alreadyPresent: boolean;
+}
+
+export function daemonDownloadModel(
+  modelId: string,
+): Promise<NativeDaemonResult<DownloadModelReport>> {
+  return callNativeDaemon('downloadModel', { modelId });
+}
+
+export function daemonDeleteModel(
+  modelId: string,
+): Promise<NativeDaemonResult<{ deleted: boolean }>> {
+  return callNativeDaemon('deleteModel', { modelId });
+}

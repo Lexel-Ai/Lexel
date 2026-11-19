@@ -216,4 +216,11 @@ export default class ProtocolClient {
   public static async allowSlopTerm(term: string): Promise<void> {
     await send({ kind: 'allowSlopTerm', term });
   }
+
+  public static async getCustomSurfaces(): Promise<import('../shared/types').SurfaceProfile[]> {
+    const res = await send<{ surfaces?: import('../shared/types').SurfaceProfile[] }>({
+      kind: 'getCustomSurfaces',
+    });
+    return res?.surfaces ?? [];
+  }
 }

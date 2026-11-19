@@ -11,12 +11,13 @@ import {
 import React, { useEffect, useState } from 'react';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { MODEL_MANIFEST_SPECS } from '../shared/models';
-import { detectSurfaceFromLocation, SURFACE_PROFILES } from '../shared/surfaceDetector';
+import { detectSurfaceFromLocation, listSurfaceProfiles } from '../shared/surfaceDetector';
 import type {
   AiSettings,
   DetectedSurfaceContext,
   PageLintSummary,
   SurfaceId,
+  SurfaceProfile,
 } from '../shared/types';
 
 export function PopupApp() {
@@ -29,6 +30,7 @@ export function PopupApp() {
   const [defaultEnable, setDefaultEnable] = useState(true);
   const [surfaceCtx, setSurfaceCtx] = useState<DetectedSurfaceContext | null>(null);
   const [surfaceOverride, setSurfaceOverride] = useState<SurfaceId | null>(null);
+  const [customSurfaces, setCustomSurfaces] = useState<SurfaceProfile[]>([]);
   const [dialect, setDialect] = useState<Dialect>(0);
   const [hoverFixes, setHoverFixes] = useState(true);
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
@@ -53,6 +55,7 @@ export function PopupApp() {
       aiRes,
       healthRes,
       summaryRes,
+      customSurfacesRes,
     ] = await Promise.all([
       chrome.runtime.sendMessage({ kind: 'getTheme' }) as Promise<{ theme: 'dark' | 'light' }>,
       chrome.runtime.sendMessage({ kind: 'getDomainStatus', domain }) as Promise<{
@@ -79,8 +82,12 @@ export function PopupApp() {
             tabId: tab.id,
           }) as Promise<{ summary: PageLintSummary | null }>)
         : Promise.resolve({ summary: null }),
+      chrome.runtime.sendMessage({ kind: 'getCustomSurfaces' }) as Promise<{
+        surfaces?: SurfaceProfile[];
+      }>,
     ]);
 
+    const loadedCustomSurfaces = customSurfacesRes?.surfaces ?? [];
     setTabId(tab?.id ?? null);
     setWindowId(tab?.windowId);
     setTabUrl(url);
@@ -88,10 +95,12 @@ export function PopupApp() {
     setDomainEnabled(domainRes.enabled);
     setDefaultEnable(defaultRes.enabled);
     setSurfaceOverride(overrideRes.surfaceId);
+    setCustomSurfaces(loadedCustomSurfaces);
     setSurfaceCtx(
       detectSurfaceFromLocation(url || domain, {
         blocklist: blocklistRes.domains,
         overrideSurface: overrideRes.surfaceId,
+        customSurfaces: loadedCustomSurfaces,
       }),
     );
     setDialect(dialectRes.dialect);
@@ -154,6 +163,7 @@ export function PopupApp() {
       detectSurfaceFromLocation(tabUrl || surfaceCtx.domain, {
         blocklist: blocklistRes.domains,
         overrideSurface: next,
+        customSurfaces,
       }),
     );
   }
@@ -375,7 +385,7 @@ export function PopupApp() {
                     }}
                   >
                     <option value="auto">Auto ({surfaceCtx.label})</option>
-                    {SURFACE_PROFILES.map((p) => (
+                    {listSurfaceProfiles(customSurfaces).map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.label}
                       </option>

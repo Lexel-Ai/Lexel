@@ -10,7 +10,7 @@ import {
 } from 'lexel-ui';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { getSurfaceProfile } from '../shared/surfaceDetector';
-import type { AiTaskId, DetectedSurfaceContext, RewriteResult } from '../shared/types';
+import type { AiTaskId, DetectedSurfaceContext, RewriteResult, SurfaceProfile } from '../shared/types';
 import { hasSecrets } from '../shared/verifier';
 import ProtocolClient from './ProtocolClient';
 
@@ -28,6 +28,7 @@ export interface AiFloatingPillProps {
   aiEnabled: boolean;
   openSignal: number;
   requestedTask?: { id: AiTaskId; seq: number } | null;
+  customSurfaces?: SurfaceProfile[];
 }
 
 export function AiFloatingPill({
@@ -37,6 +38,7 @@ export function AiFloatingPill({
   aiEnabled,
   openSignal,
   requestedTask,
+  customSurfaces,
 }: AiFloatingPillProps) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -53,7 +55,7 @@ export function AiFloatingPill({
     visible: false,
   });
 
-  const profile = getSurfaceProfile(context.surfaceId);
+  const profile = getSurfaceProfile(context.surfaceId, customSurfaces);
 
   const refreshHealth = useCallback(async () => {
     if (!aiEnabled) {

@@ -217,6 +217,8 @@ export type ExtensionRequest =
   | { kind: 'toggleAi'; enabled: boolean }
   | { kind: 'setMainModel'; model: string }
   | { kind: 'unloadAi' }
+  | { kind: 'downloadModel'; modelId: string }
+  | { kind: 'deleteModel'; modelId: string }
   | { kind: 'aiHealth' }
   | { kind: 'aiListModels' }
   | {

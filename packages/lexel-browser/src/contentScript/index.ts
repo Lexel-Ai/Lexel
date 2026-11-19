@@ -4,7 +4,13 @@ import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import appCss from '../app.css?inline';
 import { detectSurfaceFromLocation, isSensitiveElement } from '../shared/surfaceDetector';
-import type { AiTaskId, DetectedSurfaceContext, Hotkey, SurfaceId } from '../shared/types';
+import type {
+  AiTaskId,
+  DetectedSurfaceContext,
+  Hotkey,
+  SurfaceId,
+  SurfaceProfile,
+} from '../shared/types';
 import { AiFloatingPill, type ActiveFieldHandle } from './AiFloatingPill';
 import { createGoogleDocsBridgeSync, isGoogleDocsPage } from './googleDocs';
 import { type ActiveLintPopup, LexelLintController } from './LexelLintController';
@@ -14,6 +20,7 @@ import tokensCss from 'lexel-ui/tokens.css?inline';
 
 let blocklistCache: string[] = [];
 let surfaceOverrideCache: SurfaceId | null = null;
+let customSurfacesCache: SurfaceProfile[] = [];
 let themeCache: 'dark' | 'light' = 'dark';
 let aiEnabledCache = true;
 let hotkeyCache: Hotkey = { modifiers: ['Alt'], key: 'l' };
@@ -31,6 +38,7 @@ function currentSurfaceContext(el: Element | null): DetectedSurfaceContext {
     overrideSurface: surfaceOverrideCache,
     focusedElement: el,
     doc: document,
+    customSurfaces: customSurfacesCache,
   });
 }
 
@@ -93,6 +101,7 @@ function renderOverlays() {
         aiEnabled: aiEnabledCache,
         openSignal,
         requestedTask,
+        customSurfaces: customSurfacesCache,
       }),
       React.createElement(LexelSuggestionPopover, {
         active: activeLintPopup,
@@ -263,18 +272,28 @@ function scanFields() {
 
 async function hydrateConfig(initializeSummary = false) {
   try {
-    const [blocklist, override, theme, aiSettings, hoverEnabled, activationKey, hotkey] =
-      await Promise.all([
-        ProtocolClient.getPrivacyBlocklist().catch(() => []),
-        ProtocolClient.getSurfaceOverride(window.location.hostname).catch(() => null),
-        ProtocolClient.getTheme().catch(() => 'dark' as const),
-        ProtocolClient.getAiSettings().catch(() => ({ enabled: true })),
-        ProtocolClient.getOpenSuggestionsOnHover().catch(() => true),
-        ProtocolClient.getActivationKey().catch(() => 'off' as const),
-        ProtocolClient.getHotkey().catch(() => ({ modifiers: ['Alt'], key: 'l' }) as Hotkey),
-      ]);
+    const [
+      blocklist,
+      override,
+      customSurfaces,
+      theme,
+      aiSettings,
+      hoverEnabled,
+      activationKey,
+      hotkey,
+    ] = await Promise.all([
+      ProtocolClient.getPrivacyBlocklist().catch(() => []),
+      ProtocolClient.getSurfaceOverride(window.location.hostname).catch(() => null),
+      ProtocolClient.getCustomSurfaces().catch(() => []),
+      ProtocolClient.getTheme().catch(() => 'dark' as const),
+      ProtocolClient.getAiSettings().catch(() => ({ enabled: true })),
+      ProtocolClient.getOpenSuggestionsOnHover().catch(() => true),
+      ProtocolClient.getActivationKey().catch(() => 'off' as const),
+      ProtocolClient.getHotkey().catch(() => ({ modifiers: ['Alt'], key: 'l' }) as Hotkey),
+    ]);
     blocklistCache = blocklist;
     surfaceOverrideCache = override;
+    customSurfacesCache = customSurfaces;
     themeCache = theme;
     aiEnabledCache = aiSettings.enabled;
     hotkeyCache = hotkey;
@@ -359,6 +378,10 @@ const WATCHED_STORAGE_KEYS = new Set([
   'lexel_ai_settings',
   'lexel_surface_overrides',
   'lexel_privacy_blocklist',
+  'lexel_custom_slop_terms',
+  'lexel_disabled_slop_terms',
+  'lexel_custom_surfaces',
+  'lexel_language_mode',
   'openSuggestionsOnHover',
   'activationKey',
   'hotkey',
@@ -368,10 +391,15 @@ const WATCHED_STORAGE_KEYS = new Set([
   'dialect',
   'isolateEnglish',
   'lintConfig',
+  'ignoredLints',
 ]);
 
 chrome.storage?.onChanged.addListener((changes) => {
-  if (Object.keys(changes).some((k) => WATCHED_STORAGE_KEYS.has(k))) {
+  if (
+    Object.keys(changes).some(
+      (k) => WATCHED_STORAGE_KEYS.has(k) || k.startsWith('domainStatus '),
+    )
+  ) {
     void hydrateConfig().then(() => {
       ProtocolClient.clearCache();
       void lintController.update();

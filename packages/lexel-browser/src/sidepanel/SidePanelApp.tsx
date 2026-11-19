@@ -11,8 +11,14 @@ import {
 import React, { useEffect, useState } from 'react';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { MODEL_MANIFEST_SPECS } from '../shared/models';
-import { getSurfaceProfile, SURFACE_PROFILES } from '../shared/surfaceDetector';
-import type { AiSettings, AiTaskId, RewriteResult, SurfaceId } from '../shared/types';
+import { getSurfaceProfile, listSurfaceProfiles } from '../shared/surfaceDetector';
+import type {
+  AiSettings,
+  AiTaskId,
+  RewriteResult,
+  SurfaceId,
+  SurfaceProfile,
+} from '../shared/types';
 import { scanTier0Diagnostics } from '../shared/verifier';
 
 const TASK_OPTIONS: Array<{ id: AiTaskId; label: string }> = [
@@ -40,20 +46,37 @@ export function SidePanelApp() {
   const [copied, setCopied] = useState(false);
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
   const [aiHealth, setAiHealth] = useState<LocalAiHealth | null>(null);
+  const [customSurfaces, setCustomSurfaces] = useState<SurfaceProfile[]>([]);
+  const [slopConfig, setSlopConfig] = useState<{ customTerms: string[]; disabledTerms: string[] }>({
+    customTerms: [],
+    disabledTerms: [],
+  });
 
   useEffect(() => {
     (async () => {
-      const [themeRes, draftRes, aiRes, healthRes] = await Promise.all([
+      const [themeRes, draftRes, aiRes, healthRes, surfacesRes, slopRes] = await Promise.all([
         chrome.runtime.sendMessage({ kind: 'getTheme' }) as Promise<{ theme: 'dark' | 'light' }>,
         chrome.runtime.sendMessage({ kind: 'getActiveDraft' }) as Promise<{
           draft: { text: string; surfaceId: SurfaceId; subcontext: string | null } | null;
         }>,
         chrome.runtime.sendMessage({ kind: 'getAiSettings' }) as Promise<{ settings: AiSettings }>,
         chrome.runtime.sendMessage({ kind: 'aiHealth' }) as Promise<LocalAiHealth>,
+        chrome.runtime.sendMessage({ kind: 'getCustomSurfaces' }) as Promise<{
+          surfaces?: SurfaceProfile[];
+        }>,
+        chrome.runtime.sendMessage({ kind: 'getCustomSlopConfig' }) as Promise<{
+          customTerms?: string[];
+          disabledTerms?: string[];
+        }>,
       ]);
       setTheme(themeRes.theme);
       setAiSettings(aiRes.settings);
       setAiHealth(healthRes);
+      setCustomSurfaces(surfacesRes?.surfaces ?? []);
+      setSlopConfig({
+        customTerms: slopRes?.customTerms ?? [],
+        disabledTerms: slopRes?.disabledTerms ?? [],
+      });
       if (draftRes.draft) {
         setText(draftRes.draft.text);
         setSurfaceId(draftRes.draft.surfaceId);
@@ -62,9 +85,14 @@ export function SidePanelApp() {
     })();
   }, []);
 
-  const profile = getSurfaceProfile(surfaceId);
+  const allSurfaces = listSurfaceProfiles(customSurfaces);
+  const profile = getSurfaceProfile(surfaceId, customSurfaces);
   const tier0 = text.trim()
-    ? scanTier0Diagnostics(text, surfaceId)
+    ? scanTier0Diagnostics(text, surfaceId, {
+        customSlopTerms: slopConfig.customTerms,
+        disabledSlopTerms: slopConfig.disabledTerms,
+        customSurfaces,
+      })
     : { slopLints: [], surfaceLints: [], secretLints: [], secrets: [] };
 
   async function handleRefreshHealth() {
@@ -364,7 +392,7 @@ export function SidePanelApp() {
               color: 'var(--lx-fg)',
             }}
           >
-            {SURFACE_PROFILES.map((s) => (
+            {allSurfaces.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.label}
               </option>

@@ -7,10 +7,12 @@ import {
 } from 'harper.js';
 import { type UnpackedLintGroups, unpackLint } from 'lint-framework';
 import {
-  daemonCreateProfile,
-  daemonDeleteProfile,
   daemonApplyRulePreset,
+  daemonCreateProfile,
+  daemonDeleteModel,
+  daemonDeleteProfile,
   daemonDeleteVoiceExample,
+  daemonDownloadModel,
   daemonListProfiles,
   daemonListVoiceExamples,
   daemonLookupSynonyms,
@@ -90,6 +92,10 @@ import { detectBrowserDialect } from './detectDialect';
 let linter: LocalLinter | null = null;
 let initPromise: Promise<void> | null = null;
 let daemonSyncAttempted = false;
+let lastSyncedProfileStamp: string | null = null;
+let lastSyncCheckAt = 0;
+let inFlightSync: Promise<boolean> | null = null;
+const SYNC_THROTTLE_MS = 5_000;
 
 const DOMAIN_KEY_PREFIX = 'domainStatus ';
 
@@ -119,23 +125,80 @@ async function getStoredLintConfig(instance: LocalLinter): Promise<LintConfig> {
   return JSON.parse(res.lintConfig as string) as LintConfig;
 }
 
-async function syncFromDaemonOnce(force = false): Promise<boolean> {
-  if (daemonSyncAttempted && !force) return false;
-  daemonSyncAttempted = true;
-  const statusRes = await fetchDaemonStatus();
-  if (!statusRes.connected || !statusRes.data) {
+async function applyDaemonSnapshotToExtension(
+  profile: { id: string; updatedAt: number; settings: import('../shared/types').UnifiedDaemonSettings },
+  forceLinterReload = false,
+): Promise<boolean> {
+  const stamp = `${profile.id}:${profile.updatedAt}`;
+  if (!forceLinterReload && lastSyncedProfileStamp === stamp) {
     return false;
   }
-  await applyUnifiedSettingsToStorage(statusRes.data.activeProfile.settings);
-  const voiceRes = await daemonListVoiceExamples();
-  if (voiceRes.connected && voiceRes.data) {
-    await chrome.storage.local.set({ lexel_voice_examples: voiceRes.data.examples });
+
+  const prev = await chrome.storage.local.get([
+    'dialect',
+    'lintConfig',
+    'userDictionary',
+    'ignoredLints',
+  ]);
+  const prevGrammarFingerprint = JSON.stringify([
+    prev.dialect ?? null,
+    prev.lintConfig ?? null,
+    prev.userDictionary ?? null,
+    prev.ignoredLints ?? null,
+  ]);
+
+  await applyUnifiedSettingsToStorage(profile.settings);
+  lastSyncedProfileStamp = stamp;
+
+  const nextGrammarFingerprint = JSON.stringify([
+    profile.settings.dialect,
+    JSON.stringify(profile.settings.lintConfig ?? {}),
+    profile.settings.userDictionary,
+    profile.settings.ignoredLints,
+  ]);
+
+  if (linter && (forceLinterReload || prevGrammarFingerprint !== nextGrammarFingerprint)) {
+    await initLinter(profile.settings.dialect as Dialect);
   }
   return true;
 }
 
+async function syncFromDaemonOnce(force = false): Promise<boolean> {
+  const now = Date.now();
+  if (!force && daemonSyncAttempted && now - lastSyncCheckAt < SYNC_THROTTLE_MS) {
+    return false;
+  }
+  if (inFlightSync) {
+    return inFlightSync;
+  }
+  daemonSyncAttempted = true;
+  lastSyncCheckAt = now;
+
+  inFlightSync = (async () => {
+    const statusRes = await fetchDaemonStatus();
+    if (!statusRes.connected || !statusRes.data) {
+      return false;
+    }
+    const changed = await applyDaemonSnapshotToExtension(statusRes.data.activeProfile, force);
+    if (changed || force) {
+      const voiceRes = await daemonListVoiceExamples();
+      if (voiceRes.connected && voiceRes.data) {
+        await chrome.storage.local.set({ lexel_voice_examples: voiceRes.data.examples });
+      }
+    }
+    return true;
+  })().finally(() => {
+    inFlightSync = null;
+  });
+
+  return inFlightSync;
+}
+
 async function pushPatchToDaemon(patch: Record<string, unknown>): Promise<void> {
-  await daemonPatchSettings(patch).catch(() => undefined);
+  const res = await daemonPatchSettings(patch).catch(() => undefined);
+  if (res?.connected && res.data?.profile) {
+    lastSyncedProfileStamp = `${res.data.profile.id}:${res.data.profile.updatedAt}`;
+  }
 }
 
 function base64ToBytes(base64: string): Uint8Array {
@@ -302,7 +365,7 @@ async function handleAiHealth(): Promise<LocalAiHealth> {
     const payload = daemonStatus.data;
     const rt = payload.runtime;
     const activeSettings = payload.activeProfile.settings;
-    await applyUnifiedSettingsToStorage(activeSettings);
+    await applyDaemonSnapshotToExtension(payload.activeProfile, false);
 
     const effectiveModel = resolveModelNameForTier(
       activeSettings.mainModelTier,
@@ -643,6 +706,26 @@ async function handleRequest(
       await daemonUnloadAi();
       return { ok: true, health: await handleAiHealth() };
     }
+    case 'downloadModel': {
+      const res = await daemonDownloadModel(req.modelId);
+      if (!res.connected || !res.data) {
+        return {
+          ok: false,
+          error: res.error ?? 'Connect Lexel Desktop or lexel-daemon to download GGUF models.',
+        };
+      }
+      return { ok: true, report: res.data, health: await handleAiHealth() };
+    }
+    case 'deleteModel': {
+      const res = await daemonDeleteModel(req.modelId);
+      if (!res.connected || !res.data) {
+        return {
+          ok: false,
+          error: res.error ?? 'Connect Lexel Desktop or lexel-daemon to delete GGUF models.',
+        };
+      }
+      return { ok: true, deleted: res.data.deleted, health: await handleAiHealth() };
+    }
     case 'aiHealth':
       return handleAiHealth();
     case 'aiListModels': {
@@ -955,4 +1038,15 @@ chrome.runtime.onMessage.addListener((message: ExtensionRequest, sender, sendRes
 
 void ensureLinter().catch((err) => {
   console.error('Lexel linter init error:', err);
+});
+
+// Keep extension settings aligned with Lexel Desktop when the user switches back to the browser.
+chrome.windows?.onFocusChanged?.addListener((windowId) => {
+  if (windowId !== chrome.windows.WINDOW_ID_NONE) {
+    void syncFromDaemonOnce(false).catch(() => undefined);
+  }
+});
+
+chrome.tabs?.onActivated?.addListener(() => {
+  void syncFromDaemonOnce(false).catch(() => undefined);
 });

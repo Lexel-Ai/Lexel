@@ -226,6 +226,6 @@ if [[ "${SKIP_BUILD}" -eq 0 ]] && command -v cargo >/dev/null 2>&1; then
       "${DAEMON_BIN}" install-native-host >/dev/null
     fi
     echo "[ok] Native Messaging host installed and main model set to ${MAIN_MODEL}."
-    echo "[info] Lab sync token path: ${LEXEL_DATA_DIR}/daemon.token (run '${DAEMON_BIN} token' to print)"
+    echo "[info] Daemon loopback token path: ${LEXEL_DATA_DIR}/daemon.token (run '${DAEMON_BIN} token' to print)"
   fi
 fi

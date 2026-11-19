@@ -93,8 +93,10 @@ export function OptionsApp() {
   const [voiceExamples, setVoiceExamples] = useState<VoiceExample[]>([]);
   const [newProfileName, setNewProfileName] = useState('');
   const [renameDraft, setRenameDraft] = useState('');
+  const [downloadingModelId, setDownloadingModelId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const extensionId = typeof chrome !== 'undefined' ? chrome.runtime?.id ?? '' : '';
 
   async function loadAll() {
     const [
@@ -292,6 +294,53 @@ export function OptionsApp() {
     };
     if (res.health) setAiHealth(res.health);
     setNotice('Unloaded active model weights from memory.');
+  }
+
+  async function handleDownloadModel(modelId: string) {
+    setErrorMsg(null);
+    setNotice(null);
+    setDownloadingModelId(modelId);
+    try {
+      const res = (await chrome.runtime.sendMessage({
+        kind: 'downloadModel',
+        modelId,
+      })) as {
+        ok?: boolean;
+        error?: string;
+        report?: { id: string; bytesDownloaded: number; alreadyPresent: boolean };
+        health?: LocalAiHealth;
+      };
+      if (!res?.ok) {
+        setErrorMsg(res?.error ?? 'Failed to download model.');
+        return;
+      }
+      if (res.health) setAiHealth(res.health);
+      const mb = res.report ? Math.round(res.report.bytesDownloaded / (1024 * 1024)) : 0;
+      setNotice(
+        res.report?.alreadyPresent
+          ? `${modelId} is already SHA-256 verified on disk (${mb} MB).`
+          : `Downloaded and SHA-256 verified ${modelId} (${mb} MB).`,
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDownloadingModelId(null);
+    }
+  }
+
+  async function handleDeleteModel(modelId: string) {
+    setErrorMsg(null);
+    setNotice(null);
+    const res = (await chrome.runtime.sendMessage({
+      kind: 'deleteModel',
+      modelId,
+    })) as { ok?: boolean; error?: string; health?: LocalAiHealth };
+    if (!res?.ok) {
+      setErrorMsg(res?.error ?? 'Failed to delete model.');
+      return;
+    }
+    if (res.health) setAiHealth(res.health);
+    setNotice(`Removed local GGUF file for ${modelId}.`);
   }
 
   async function handleReconnectDaemon() {
@@ -688,9 +737,9 @@ export function OptionsApp() {
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <h2 className="text-sm font-semibold m-0">Local Account &amp; App Sync</h2>
+                  <h2 className="text-sm font-semibold m-0">Local Account &amp; Desktop Sync</h2>
                   <p className="text-xs m-0 mt-0.5" style={{ color: 'var(--lx-fg-muted)' }}>
-                    One shared SQLite profile links the Browser Extension, Lexel Lab, Desktop, and IDE on this machine.
+                    One shared SQLite profile links this Browser Extension, Lexel Desktop, and CLI on your device.
                   </p>
                 </div>
                 <button
@@ -848,11 +897,35 @@ export function OptionsApp() {
                   }}
                 >
                   <div style={{ color: 'var(--lx-warn)' }}>
-                    Native Messaging bridge to lexel-daemon is not connected yet.
+                    Native Messaging bridge to Lexel Desktop is not connected yet.
                   </div>
                   <p className="m-0" style={{ color: 'var(--lx-fg-muted)' }}>
-                    Run <span className="lexel-mono">make setup</span> in the Lexel repository to download both 0.5B and 1.5B models and build lexel-daemon, then register this extension ID:
+                    Open <strong>Lexel Desktop &rarr; AI &amp; Extension Sync</strong>, paste your Extension ID below, and click <strong>Register Browser Bridge</strong> (or run the CLI command below).
                   </p>
+                  {extensionId ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className="rounded-[4px] border px-2 py-1 lexel-mono text-[11px]"
+                        style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+                      >
+                        Extension ID: {extensionId}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(extensionId);
+                          setNotice('Copied Extension ID. Paste it into Lexel Desktop -> AI & Extension Sync.');
+                        }}
+                        className="rounded-[6px] px-2.5 py-1 text-[11px] font-semibold"
+                        style={{
+                          backgroundColor: 'var(--lx-accent)',
+                          color: 'var(--lx-on-accent)',
+                        }}
+                      >
+                        Copy Extension ID
+                      </button>
+                    </div>
+                  ) : null}
                   <div
                     className="rounded-[4px] border px-2.5 py-1.5 lexel-mono text-[11px] break-all"
                     style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
@@ -861,9 +934,10 @@ export function OptionsApp() {
                   </div>
                   <button
                     type="button"
-                    onClick={() =>
-                      void navigator.clipboard.writeText(aiHealth?.nativeHostCommand ?? 'make setup')
-                    }
+                    onClick={() => {
+                      void navigator.clipboard.writeText(aiHealth?.nativeHostCommand ?? 'make setup');
+                      setNotice('Copied Native Messaging CLI command.');
+                    }}
                     className="rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
                     style={{
                       backgroundColor: 'var(--lx-muted)',
@@ -871,7 +945,7 @@ export function OptionsApp() {
                       color: 'var(--lx-fg)',
                     }}
                   >
-                    Copy Setup Command
+                    Copy CLI Command
                   </button>
                 </div>
               )}
@@ -910,18 +984,51 @@ export function OptionsApp() {
                           {status ? ` · Ollama: ${status.ollamaInstalled ? 'Ready' : 'Auto-imports on toggle'}` : ''}
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleSelectMainModel(spec.id)}
-                        className="self-start rounded-[6px] border px-2.5 py-1 text-xs font-semibold"
-                        style={{
-                          backgroundColor: isSelected ? 'var(--lx-accent)' : 'var(--lx-muted)',
-                          borderColor: 'var(--lx-border)',
-                          color: isSelected ? 'var(--lx-on-accent)' : 'var(--lx-fg)',
-                        }}
-                      >
-                        {isSelected ? 'Selected Main Model' : `Set ${spec.id === 'lexel-0.5b' ? '0.5B' : '1.5B'} as Main`}
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleSelectMainModel(spec.id)}
+                          className="rounded-[6px] border px-2.5 py-1 text-xs font-semibold"
+                          style={{
+                            backgroundColor: isSelected ? 'var(--lx-accent)' : 'var(--lx-muted)',
+                            borderColor: 'var(--lx-border)',
+                            color: isSelected ? 'var(--lx-on-accent)' : 'var(--lx-fg)',
+                          }}
+                        >
+                          {isSelected ? 'Selected Main Model' : `Set ${spec.id === 'lexel-0.5b' ? '0.5B' : '1.5B'} as Main`}
+                        </button>
+                        {aiHealth?.daemonConnected ? (
+                          status?.ggufInstalled && status.ggufSizeValid ? (
+                            <button
+                              type="button"
+                              disabled={downloadingModelId !== null}
+                              onClick={() => void handleDeleteModel(spec.id)}
+                              className="rounded-[6px] border px-2.5 py-1 text-xs"
+                              style={{
+                                backgroundColor: 'var(--lx-surface)',
+                                borderColor: 'var(--lx-border)',
+                                color: 'var(--lx-danger)',
+                              }}
+                            >
+                              Delete GGUF
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={downloadingModelId !== null}
+                              onClick={() => void handleDownloadModel(spec.id)}
+                              className="rounded-[6px] border px-2.5 py-1 text-xs font-medium"
+                              style={{
+                                backgroundColor: 'var(--lx-surface)',
+                                borderColor: 'var(--lx-border)',
+                                color: 'var(--lx-fg)',
+                              }}
+                            >
+                              {downloadingModelId === spec.id ? 'Downloading...' : 'Download GGUF'}
+                            </button>
+                          )
+                        ) : null}
+                      </div>
                     </div>
                   );
                 })}

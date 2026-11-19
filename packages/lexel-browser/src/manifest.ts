@@ -29,8 +29,21 @@ export default defineManifest({
   description: 'Local-first grammar checker powered by Harper and privacy-first anti-slop AI.',
   version: packageData.version,
   manifest_version: 3,
+  icons: {
+    16: 'icons/icon-16.png',
+    32: 'icons/icon-32.png',
+    48: 'icons/icon-48.png',
+    128: 'icons/icon-128.png',
+  },
   action: {
     default_popup: 'popup.html',
+    default_title: 'Lexel',
+    default_icon: {
+      16: 'icons/icon-16.png',
+      32: 'icons/icon-32.png',
+      48: 'icons/icon-48.png',
+      128: 'icons/icon-128.png',
+    },
   },
   side_panel: {
     default_path: 'sidepanel.html',
@@ -39,7 +52,7 @@ export default defineManifest({
   browser_specific_settings: {
     gecko: {
       id: 'lexel@lexel.local',
-      strict_min_version: '146.0',
+      strict_min_version: '128.0',
     },
   },
   background: {
