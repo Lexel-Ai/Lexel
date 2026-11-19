@@ -49,6 +49,8 @@ enum Commands {
         #[command(subcommand)]
         action: WeirpackAction,
     },
+    /// Install fast zero-AI Git commit-msg and/or pre-commit hooks for this repository
+    InstallGitHook(InstallGitHookArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -117,6 +119,29 @@ struct TransformArgs {
     /// Write transformed text back to the input file
     #[arg(long)]
     write: bool,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum HookTarget {
+    CommitMsg,
+    PreCommit,
+    Both,
+}
+
+#[derive(Args)]
+struct InstallGitHookArgs {
+    /// Target Git repository root (defaults to current working directory)
+    #[arg(long, default_value = ".")]
+    repo: PathBuf,
+    /// Which Git hook(s) to install
+    #[arg(long, value_enum, default_value_t = HookTarget::CommitMsg)]
+    hook: HookTarget,
+    /// Failure policy passed to `lexel check --fail-on`
+    #[arg(long, value_enum, default_value_t = FailOn::Slop)]
+    fail_on: FailOn,
+    /// Overwrite an existing non-Lexel Git hook
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Subcommand)]
@@ -604,6 +629,70 @@ fn cmd_check(args: CheckArgs) -> Result<ExitCode> {
     })
 }
 
+fn fail_on_flag(f: FailOn) -> &'static str {
+    match f {
+        FailOn::None => "none",
+        FailOn::Secrets => "secrets",
+        FailOn::Slop => "slop",
+        FailOn::Any => "any",
+    }
+}
+
+fn write_git_hook(path: &Path, body: &str, force: bool) -> Result<()> {
+    if path.exists() && !force {
+        let existing = fs::read_to_string(path).unwrap_or_default();
+        if !existing.contains("# lexel-managed-hook") {
+            bail!(
+                "Hook {} already exists and is not managed by Lexel. Re-run with --force to replace it.",
+                path.display()
+            );
+        }
+    }
+    fs::write(path, body).with_context(|| format!("Failed to write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
+fn cmd_install_git_hook(args: InstallGitHookArgs) -> Result<()> {
+    let git_dir = args.repo.join(".git");
+    if !git_dir.exists() {
+        bail!(
+            "No .git directory found at {}. Pass --repo <path> pointing to a Git repository.",
+            args.repo.display()
+        );
+    }
+    let hooks_dir = git_dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let fail_arg = fail_on_flag(args.fail_on);
+    let mut installed = Vec::new();
+
+    if matches!(args.hook, HookTarget::CommitMsg | HookTarget::Both) {
+        let path = hooks_dir.join("commit-msg");
+        let script = format!(
+            "#!/usr/bin/env sh\n# lexel-managed-hook\nset -e\nif command -v lexel >/dev/null 2>&1; then\n  lexel check --surface ide_git_commit --language git-commit --fail-on {fail_arg} \"$1\"\nfi\n"
+        );
+        write_git_hook(&path, &script, args.force)?;
+        installed.push(path);
+    }
+
+    if matches!(args.hook, HookTarget::PreCommit | HookTarget::Both) {
+        let path = hooks_dir.join("pre-commit");
+        let script = "#!/usr/bin/env sh\n# lexel-managed-hook\nset -e\nif ! command -v lexel >/dev/null 2>&1; then\n  exit 0\nfi\nSTAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\\.(md|mdx|txt|rst|adoc|tex|typ)$' || true)\nif [ -n \"$STAGED\" ]; then\n  echo \"$STAGED\" | xargs lexel check --fail-on secrets\nfi\n";
+        write_git_hook(&path, script, args.force)?;
+        installed.push(path);
+    }
+
+    for p in installed {
+        println!("Installed Lexel Git hook at {}", p.display());
+    }
+    Ok(())
+}
+
 fn cmd_transform(args: TransformArgs, op: &str) -> Result<()> {
     let (_label, content) = read_input_text(args.input.as_deref(), args.text.as_deref())?;
     let transformed = match op {
@@ -712,6 +801,7 @@ fn main() -> Result<ExitCode> {
                 );
             }
         },
+        Commands::InstallGitHook(args) => cmd_install_git_hook(args)?,
     }
     Ok(ExitCode::SUCCESS)
 }

@@ -125,6 +125,53 @@ fn cli_stats_transforms_synonyms_and_weirpack_roundtrip() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
+#[test]
+fn cli_install_git_hook_writes_commit_msg_and_pre_commit_safely() {
+    let tmp = std::env::temp_dir().join(format!("lexel-cli-hook-{}", uuid_stub()));
+    fs::create_dir_all(tmp.join(".git/hooks")).expect("git hooks dir");
+
+    let out = Command::new(lexel_bin())
+        .args([
+            "install-git-hook",
+            "--repo",
+            tmp.to_str().unwrap(),
+            "--hook",
+            "both",
+            "--fail-on",
+            "slop",
+        ])
+        .output()
+        .expect("run install-git-hook");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let commit_msg = fs::read_to_string(tmp.join(".git/hooks/commit-msg")).expect("commit-msg");
+    assert!(commit_msg.contains("# lexel-managed-hook"));
+    assert!(commit_msg.contains("--surface ide_git_commit"));
+    assert!(commit_msg.contains("--fail-on slop"));
+
+    let pre_commit = fs::read_to_string(tmp.join(".git/hooks/pre-commit")).expect("pre-commit");
+    assert!(pre_commit.contains("# lexel-managed-hook"));
+    assert!(pre_commit.contains("--fail-on secrets"));
+
+    // Third-party hook is protected unless --force is supplied.
+    fs::write(
+        tmp.join(".git/hooks/commit-msg"),
+        "#!/bin/sh\necho custom\n",
+    )
+    .expect("custom");
+    let blocked = Command::new(lexel_bin())
+        .args(["install-git-hook", "--repo", tmp.to_str().unwrap()])
+        .output()
+        .expect("run protected install");
+    assert!(!blocked.status.success());
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 fn uuid_stub() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
