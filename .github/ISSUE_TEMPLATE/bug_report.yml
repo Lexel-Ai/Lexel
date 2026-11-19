@@ -1,0 +1,47 @@
+name: Bug Report
+description: Report a bug in Lexel Desktop, the browser extension, daemon, or CLI.
+title: "fix(<scope>): "
+labels: ["bug", "triage"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Lexel Desktop (Tauri app)
+        - Browser Extension (Chrome / Brave / Edge / Firefox)
+        - Local Daemon / Native Messaging
+        - Local AI Runtime (llama-server / Ollama / GGUF download)
+        - CLI / Core Engine (Harper / Anti-Slop / Secrets Guard)
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS, Browser & Lexel Version
+      placeholder: "e.g. Ubuntu 24.04 / Chrome 131 / Lexel 0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected instead. Do not paste private credentials or sensitive personal text.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Error Messages or Logs
+      description: Paste non-sensitive console or terminal output if available.
+      render: text

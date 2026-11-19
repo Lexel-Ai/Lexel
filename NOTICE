@@ -1,0 +1,20 @@
+Lexel
+Copyright 2026 Lexel Contributors
+
+This product includes software developed by the Lexel open-source project
+(https://github.com/Lexel-Ai/Lexel), licensed under the Apache License, Version 2.0.
+
+Upstream Third-Party Components:
+
+1. Harper (https://github.com/automattic/harper)
+   Copyright Automattic Inc. and Harper Contributors
+   Licensed under the Apache License, Version 2.0.
+   Used unmodified as a Git submodule under `vendor/harper` for deterministic
+   grammar checking, spelling dictionaries, multi-language comment parsers,
+   Weirpack rules, and WASM browser linting.
+
+2. Qwen2.5 Instruct GGUF Models (optional user-downloaded weights)
+   Copyright Alibaba Cloud / Qwen Team
+   Licensed under the Apache License, Version 2.0.
+   Downloaded directly by the user on demand with SHA-256 verification defined
+   in `models/manifest.json`.

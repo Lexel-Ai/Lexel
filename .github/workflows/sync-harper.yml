@@ -1,0 +1,71 @@
+name: Sync Upstream Harper
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-harper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Sync vendor/harper and verify workspace
+        id: sync
+        run: |
+          OLD_SHA="$(git -C vendor/harper rev-parse --short HEAD)"
+          bash scripts/sync-harper.sh
+          NEW_SHA="$(git -C vendor/harper rev-parse --short HEAD)"
+          echo "old_sha=${OLD_SHA}" >> "$GITHUB_OUTPUT"
+          echo "new_sha=${NEW_SHA}" >> "$GITHUB_OUTPUT"
+          if [ "${OLD_SHA}" = "${NEW_SHA}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            cargo test --workspace
+            pnpm install --frozen-lockfile
+            pnpm -r typecheck
+            pnpm -r test
+            pnpm -r build
+          fi
+
+      - name: Open sync Pull Request
+        if: steps.sync.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: sync/harper-${{ steps.sync.outputs.new_sha }}
+          commit-message: "sync(sync): sync vendor/harper to ${{ steps.sync.outputs.new_sha }}"
+          title: "sync(sync): sync vendor/harper to ${{ steps.sync.outputs.new_sha }}"
+          body: |
+            Automated weekly upstream sync of `vendor/harper` from `${{ steps.sync.outputs.old_sha }}` to `${{ steps.sync.outputs.new_sha }}`.
+
+            Verification run by workflow:
+            - `cargo test --workspace`
+            - `pnpm -r typecheck`
+            - `pnpm -r test`
+            - `pnpm -r build`
+          delete-branch: true

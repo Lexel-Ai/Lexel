@@ -1,0 +1,40 @@
+name: Feature Request
+description: Propose a new local-first feature or UX improvement.
+title: "feat(<scope>): "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Target Area
+      options:
+        - Lexel Desktop
+        - Browser Extension
+        - Core Grammar & Anti-Slop (Tier 0)
+        - Local AI & Voice Memory (Tier 1 / Tier 2)
+        - CLI / CI Integration
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Workflow Gap
+      description: What writing or developer workflow does this improve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: Explain how it should work while staying 100% local and zero-telemetry.
+    validations:
+      required: true
+  - type: checkboxes
+    id: invariants
+    attributes:
+      label: Privacy & Speed Check
+      options:
+        - label: This feature requires zero cloud APIs and zero telemetry.
+          required: true
+        - label: Passive typing checks (Tier 0) remain zero-AI and fast.
+          required: true

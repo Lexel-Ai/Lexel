@@ -1,6 +1,7 @@
 # Build & Dependencies
 node_modules/
 dist/
+dist-release/
 build/
 target/
 *.tsbuildinfo

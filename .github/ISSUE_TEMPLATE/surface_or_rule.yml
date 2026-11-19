@@ -1,0 +1,29 @@
+name: New Surface Profile or Anti-Slop Rule
+description: Propose a platform surface (ml/personas/surfaces.json) or deterministic anti-slop term (rules/slop_terms.json).
+title: "feat(rules): "
+labels: ["rules", "good first issue"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Contribution Kind
+      options:
+        - Anti-Slop Phrase / Replacement (rules/slop_terms.json)
+        - Platform Surface Profile (ml/personas/surfaces.json)
+        - Custom Harper Weirpack Rule (rules/*.weirpack)
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Rule or Surface Specification
+      description: Provide the phrase + plain-English replacement, or host patterns + character bounds + prompt directive.
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Before / After Examples
+      description: Include at least 2 realistic examples and note any false-positive edge cases.
+    validations:
+      required: true
