@@ -36,7 +36,7 @@ pub use slop::{SlopHit, SlopScanner, ignored_prose_ranges, parse_custom_slop_ent
 pub use surfaces::{SurfaceCatalog, SurfaceProfile, SurfaceViolation};
 pub use verifier::{
     GateCheckSummary, SafeFixResult, apply_safe_deterministic_fixes, sanitize_model_output,
-    verify_rewrite, verify_rewrite_with_surfaces,
+    verify_rewrite, verify_rewrite_with_overrides, verify_rewrite_with_surfaces,
 };
 
 /// Top-level errors returned by `lexel-core`.

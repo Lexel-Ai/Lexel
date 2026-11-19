@@ -64,6 +64,23 @@ async fn http_enforces_bearer_token_and_origin_and_syncs_profiles() {
     let health = client.get(format!("{base}/health")).send().await.unwrap();
     assert_eq!(health.status(), StatusCode::OK);
 
+    // Extension auto-registration rejects non-extension Origin or invalid Chrome IDs.
+    let bad_reg_origin = client
+        .post(format!("{base}/v1/bridge/register-extension"))
+        .header(header::ORIGIN, "http://127.0.0.1:5173")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_reg_origin.status(), StatusCode::FORBIDDEN);
+
+    let bad_chrome_id = client
+        .post(format!("{base}/v1/bridge/register-extension"))
+        .header(header::ORIGIN, "chrome-extension://not-a-valid-32-char-id")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad_chrome_id.status(), StatusCode::FORBIDDEN);
+
     // Protected route rejects missing token.
     let unauth = client
         .get(format!("{base}/v1/status"))

@@ -530,6 +530,30 @@ impl RuntimeManager {
         if bundled.is_file() {
             return Some(bundled);
         }
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            let sibling = dir.join(bin_name);
+            if sibling.is_file() {
+                return Some(sibling);
+            }
+        }
+        if let Some(home) = dirs::home_dir() {
+            for rel in [
+                ".local/bin",
+                ".unsloth/llama.cpp",
+                ".unsloth/llama.cpp/bin",
+                ".unsloth/llama.cpp/build/bin",
+                ".unsloth/studio/llama.cpp",
+                ".unsloth/studio/llama.cpp/bin",
+                ".unsloth/studio/llama.cpp/build/bin",
+            ] {
+                let candidate = home.join(rel).join(bin_name);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
         find_in_path(bin_name)
     }
 }
@@ -546,9 +570,22 @@ fn validate_loopback(raw: &str) -> Result<String, String> {
 }
 
 fn find_in_path(binary: &str) -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path_var) {
-        let candidate = dir.join(binary);
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join(binary);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        let local_candidate = home.join(".local/bin").join(binary);
+        if local_candidate.is_file() {
+            return Some(local_candidate);
+        }
+    }
+    for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
+        let candidate = Path::new(dir).join(binary);
         if candidate.is_file() {
             return Some(candidate);
         }

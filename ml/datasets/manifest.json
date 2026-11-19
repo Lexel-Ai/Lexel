@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-19T17:34:23+00:00",
+  "source_corpora": [
+    "/home/lawand/Prose/deliverables/datasets/wlab_session2_clean/train.jsonl",
+    "/home/lawand/Prose/deliverables/datasets/wlab_session2_clean/heldout.jsonl",
+    "/home/lawand/Prose/deliverables/datasets/wlab_pref_v1/train.jsonl",
+    "/home/lawand/Prose/deliverables/datasets/wlab_pref_v1/heldout.jsonl",
+    "/home/lawand/Prose/data/training/wlab_pref_session3.jsonl",
+    "/home/lawand/Prose/deliverables/datasets/categories/*.jsonl",
+    "/home/lawand/Prose/03-research/corpora/writing-craft/strunk-white-elements-of-style.md",
+    "lexel_curated_multisurface_13x7"
+  ],
+  "files": {
+    "lexel_sft_train.jsonl": {
+      "rows": 308,
+      "sha256": "5cb3b503b35a1bd995f5f4d68d302cadbf9d1314dea1016247cad7b666acd7a4",
+      "bytes": 806095
+    },
+    "lexel_sft_val.jsonl": {
+      "rows": 69,
+      "sha256": "d48b1920cbaa66298cfa79225d9b213f0adb7b146c9135f1b7082cb1a062236e",
+      "bytes": 171310
+    },
+    "lexel_dpo_train.jsonl": {
+      "rows": 488,
+      "sha256": "df7b99a0847f60015d9bfb56b12a92b5a943f61d20780857c4cb1839917f6310",
+      "bytes": 2704636
+    },
+    "lexel_heldout_eval.jsonl": {
+      "rows": 26,
+      "sha256": "75dc1751517b322afa92075a8efe487f777e95e39d5f892bf3d8f009bc1e1084",
+      "bytes": 37097
+    }
+  },
+  "surface_distribution": {
+    "train": {
+      "docs_markdown": 16,
+      "general": 25,
+      "ide_code_comment": 10,
+      "ide_git_commit": 11,
+      "web_discord_slack": 5,
+      "web_discourse": 30,
+      "web_email": 48,
+      "web_github_pr": 18,
+      "web_linkedin": 69,
+      "web_reddit": 10,
+      "web_substack": 32,
+      "web_wordpress": 26,
+      "web_x": 8
+    },
+    "val": {
+      "docs_markdown": 4,
+      "general": 6,
+      "ide_code_comment": 3,
+      "ide_git_commit": 3,
+      "web_discord_slack": 1,
+      "web_discourse": 6,
+      "web_email": 10,
+      "web_github_pr": 4,
+      "web_linkedin": 14,
+      "web_reddit": 3,
+      "web_substack": 7,
+      "web_wordpress": 6,
+      "web_x": 2
+    },
+    "heldout": {
+      "docs_markdown": 2,
+      "general": 2,
+      "ide_code_comment": 2,
+      "ide_git_commit": 2,
+      "web_discord_slack": 2,
+      "web_discourse": 2,
+      "web_email": 2,
+      "web_github_pr": 2,
+      "web_linkedin": 2,
+      "web_reddit": 2,
+      "web_substack": 2,
+      "web_wordpress": 2,
+      "web_x": 2
+    }
+  },
+  "task_distribution": {
+    "deslop": 73,
+    "fix_grammar_flow": 57,
+    "polish_comment": 7,
+    "polish_commit": 8,
+    "reply_draft": 4,
+    "rewrite_surface": 62,
+    "shorten": 97
+  },
+  "dpo_perturbation_distribution": {
+    "code_token_drop": 7,
+    "corporate_slop": 261,
+    "em_dash_injection": 44,
+    "entity_swap": 12,
+    "negation_inversion": 28,
+    "numerical_hallucination": 92,
+    "surface_violation": 44
+  },
+  "crucible_gate_stats": {
+    "total_candidates_screened": 505,
+    "total_passed_all_6_gates": 377,
+    "candidate_pass_rate": 0.7465,
+    "final_split_crucible_pass_rate": 1.0,
+    "gate_breakdown": {
+      "gate1_zero_slop": {
+        "passes": 504,
+        "rate": 0.998
+      },
+      "gate2_numeric_and_token_grounding": {
+        "passes": 504,
+        "rate": 0.998
+      },
+      "gate3_surface_compliance": {
+        "passes": 504,
+        "rate": 0.998
+      },
+      "gate4_active_verb_and_directness": {
+        "passes": 493,
+        "rate": 0.9762
+      },
+      "gate5_lexical_density_and_burstiness": {
+        "passes": 501,
+        "rate": 0.9921
+      },
+      "gate6_integrity_and_leakage": {
+        "passes": 389,
+        "rate": 0.7703
+      }
+    }
+  }
+}

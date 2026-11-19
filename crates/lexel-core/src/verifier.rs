@@ -75,12 +75,41 @@ pub fn verify_rewrite_with_surfaces(
     user_words: &[String],
     custom_surfaces: &[SurfaceProfile],
 ) -> Result<GateCheckSummary, CoreError> {
+    verify_rewrite_with_overrides(
+        source,
+        candidate,
+        surface_id,
+        dialect_code,
+        user_words,
+        custom_surfaces,
+        &[],
+        &[],
+    )
+}
+
+/// Tier 2 deterministic gatekeeper validating AI rewrite candidates with custom surfaces and custom/muted slop terms.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_rewrite_with_overrides(
+    source: &str,
+    candidate: &str,
+    surface_id: &str,
+    dialect_code: u8,
+    user_words: &[String],
+    custom_surfaces: &[SurfaceProfile],
+    custom_slop_terms: &[String],
+    disabled_slop_terms: &[String],
+) -> Result<GateCheckSummary, CoreError> {
     let slop_scanner = SlopScanner::load_embedded()?;
     let catalog = SurfaceCatalog::load_with_custom(custom_surfaces)?;
     let profile = catalog.get(surface_id)?;
     let mut warnings = Vec::new();
 
-    let slop_hits = slop_scanner.scan(candidate, profile.allow_em_dashes);
+    let slop_hits = slop_scanner.scan_with_overrides(
+        candidate,
+        profile.allow_em_dashes,
+        custom_slop_terms,
+        disabled_slop_terms,
+    );
     let zero_slop = slop_hits.is_empty();
     for hit in &slop_hits {
         if hit.is_em_dash {
@@ -323,7 +352,7 @@ pub fn apply_safe_deterministic_fixes(
 
 fn extract_unit_bound_metrics(text: &str) -> Result<Vec<UnitMetric>, CoreError> {
     let re = Regex::new(
-        r"(?i)(?:^|[\s(\[])(#|\$)?(\d+(?:[.,]\d+)?)\s*(%|ms|s|sec|min|hrs?|kb|mb|gb|x|k|m|b)?(?:$|[\s,.;:!?/\)\]])",
+        r"(?i)(?:^|[\s(\[])(#|\$|€|£)?(\d+(?:[.,]\d+)?)\s*(%|ms|s|sec|min|hrs?|kb|mb|gb|px|x|k|m|b)?(?:$|[\s,.;:!?/\)\]])",
     )?;
     let mut metrics = Vec::new();
     for caps in re.captures_iter(text) {
@@ -362,6 +391,7 @@ fn extract_unit_bound_metrics(text: &str) -> Result<Vec<UnitMetric>, CoreError> 
 fn extract_code_and_url_tokens(text: &str) -> Result<Vec<String>, CoreError> {
     let backtick_re = Regex::new(r"`[^`\n]+`")?;
     let url_re = Regex::new(r"(?i)https?://[^\s)>\]]+")?;
+    let flag_re = Regex::new(r"(?:^|\s)(--?[a-zA-Z0-9_-]{2,})")?;
     let mut tokens = Vec::new();
     for m in backtick_re.find_iter(text) {
         let s = m.as_str().to_owned();
@@ -373,6 +403,14 @@ fn extract_code_and_url_tokens(text: &str) -> Result<Vec<String>, CoreError> {
         let s = m.as_str().to_owned();
         if !tokens.contains(&s) {
             tokens.push(s);
+        }
+    }
+    for caps in flag_re.captures_iter(text) {
+        if let Some(m) = caps.get(1) {
+            let s = m.as_str().to_owned();
+            if !tokens.contains(&s) {
+                tokens.push(s);
+            }
         }
     }
     Ok(tokens)

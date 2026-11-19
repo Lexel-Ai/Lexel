@@ -11,7 +11,7 @@ use lexel_core::{
     build_rewrite_messages_with_surfaces, decode_weirpack_base64, encode_weirpack_base64,
     normalize_typography, preset_rule_overrides, sanitize_model_output, scan_invisible_chars,
     scan_secrets, scan_structure_issues, scan_style_guide, structured_lint_config, synonyms_for,
-    to_sentence_case, to_title_case, validate_weirpack_bytes, verify_rewrite_with_surfaces,
+    to_sentence_case, to_title_case, validate_weirpack_bytes, verify_rewrite_with_overrides,
 };
 use lexel_db::{DatabaseBackup, DbError, DraftSnapshot, LexelDb, WritingStatsSummary};
 use serde::{Deserialize, Serialize};
@@ -458,13 +458,15 @@ impl DaemonService {
             .map_err(DaemonError::Runtime)?;
 
         let suggestion = sanitize_model_output(&raw);
-        let gates = verify_rewrite_with_surfaces(
+        let gates = verify_rewrite_with_overrides(
             &req.text,
             &suggestion,
             &req.surface_id,
             profile.settings.dialect,
             &profile.settings.user_dictionary,
             &profile.settings.custom_surfaces,
+            &profile.settings.custom_slop_terms,
+            &profile.settings.disabled_slop_terms,
         )?;
         let latency_ms = started.elapsed().as_millis() as u64;
 

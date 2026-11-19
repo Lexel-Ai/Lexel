@@ -50,6 +50,7 @@ declare module 'obsidian' {
     addCommand(cmd: {
       id: string;
       name: string;
+      callback?: () => void | Promise<void>;
       editorCallback?: (editor: Editor) => void | Promise<void>;
     }): void;
     addSettingTab(tab: PluginSettingTab): void;

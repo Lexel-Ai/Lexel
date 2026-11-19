@@ -16,12 +16,16 @@ export interface ObsidianLexelSettings {
   daemonEndpoint: string;
   daemonToken: string;
   styleGuide: StyleGuideRule[];
+  customSlopTerms?: string[];
+  disabledSlopTerms?: string[];
 }
 
 export const DEFAULT_OBSIDIAN_SETTINGS: ObsidianLexelSettings = {
   daemonEndpoint: 'http://127.0.0.1:42424',
   daemonToken: '',
   styleGuide: [],
+  customSlopTerms: [],
+  disabledSlopTerms: [],
 };
 
 export interface ObsidianNoteReport {
@@ -137,4 +141,48 @@ export async function requestLocalDaemonRewrite(
     return { ok: false, error: body.error ?? `lexel-daemon returned HTTP ${resp.status}` };
   }
   return { ok: true, suggestion: body.suggestion };
+}
+
+/** Pull active profile style guide and anti-slop rules from Lexel Desktop / lexel-daemon. */
+export async function syncObsidianSettingsFromDesktop(
+  settings: ObsidianLexelSettings,
+): Promise<
+  { ok: true; next: ObsidianLexelSettings; profileName: string } | { ok: false; error: string }
+> {
+  const token = settings.daemonToken.trim();
+  if (!token) {
+    return {
+      ok: false,
+      error: 'Set your local daemon token in Lexel Obsidian settings (`lexel-daemon token`).',
+    };
+  }
+  const endpoint = settings.daemonEndpoint.replace(/\/+$/, '');
+  const resp = await fetch(`${endpoint}/v1/settings`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const body = (await resp.json()) as {
+    profile?: { name?: string };
+    settings?: {
+      styleGuide?: StyleGuideRule[];
+      customSlopTerms?: string[];
+      disabledSlopTerms?: string[];
+    };
+    error?: string;
+  };
+  if (!resp.ok || !body.settings) {
+    return { ok: false, error: body.error ?? `Lexel Desktop returned HTTP ${resp.status}` };
+  }
+  return {
+    ok: true,
+    profileName: body.profile?.name ?? 'Default',
+    next: {
+      ...settings,
+      styleGuide: body.settings.styleGuide ?? settings.styleGuide,
+      customSlopTerms: body.settings.customSlopTerms ?? settings.customSlopTerms,
+      disabledSlopTerms: body.settings.disabledSlopTerms ?? settings.disabledSlopTerms,
+    },
+  };
 }

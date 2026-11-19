@@ -40,6 +40,20 @@ async function startClient(): Promise<void> {
   await client.start();
 }
 
+async function triggerAiCommand(task: string, surfaceId = 'general'): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    void vscode.window.showWarningMessage('Open a document before running Lexel Local AI.');
+    return;
+  }
+  await vscode.commands.executeCommand(
+    'lexel.aiRewrite',
+    editor.document.uri.toString(),
+    task,
+    surfaceId,
+  );
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   context.subscriptions.push(
     vscode.commands.registerCommand('lexel.restartServer', async () => {
@@ -55,6 +69,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         kind: 'source.fixAll',
         apply: 'first',
       });
+    }),
+    vscode.commands.registerCommand('lexel.deslopDocument', async () => {
+      await triggerAiCommand('deslop', 'docs_markdown');
+    }),
+    vscode.commands.registerCommand('lexel.fixGrammarFlow', async () => {
+      await triggerAiCommand('fix_grammar_flow', 'docs_markdown');
+    }),
+    vscode.commands.registerCommand('lexel.shortenDocument', async () => {
+      await triggerAiCommand('shorten', 'docs_markdown');
+    }),
+    vscode.commands.registerCommand('lexel.polishCommit', async () => {
+      await triggerAiCommand('rewrite_surface', 'ide_git_commit');
     }),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
       if (event.affectsConfiguration('lexel.enable') || event.affectsConfiguration('lexel.path')) {

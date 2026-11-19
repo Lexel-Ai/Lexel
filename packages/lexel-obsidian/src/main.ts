@@ -14,6 +14,8 @@ import {
   normalizeTypography,
   type ObsidianLexelSettings,
   requestLocalDaemonRewrite,
+  syncObsidianSettingsFromDesktop,
+  toSentenceCase,
   toTitleCase,
 } from './analyzer';
 
@@ -87,8 +89,21 @@ export default class LexelObsidianPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: 'lexel-sentence-case-selection',
+      name: 'Lexel: Convert Selection to Sentence Case',
+      editorCallback: (editor: Editor) => {
+        const sel = editor.getSelection();
+        if (!sel.trim()) {
+          new Notice('Select a sentence or paragraph first.');
+          return;
+        }
+        editor.replaceSelection(toSentenceCase(sel));
+      },
+    });
+
+    this.addCommand({
       id: 'lexel-ai-deslop-selection',
-      name: 'Lexel: Rewrite Selection with Local AI (lexel-daemon)',
+      name: 'Lexel: Deslop Selection with Local AI (Lexel Desktop)',
       editorCallback: async (editor: Editor) => {
         const sel = editor.getSelection();
         const res = await requestLocalDaemonRewrite(this.settings, sel, 'deslop');
@@ -97,7 +112,53 @@ export default class LexelObsidianPlugin extends Plugin {
           return;
         }
         editor.replaceSelection(res.suggestion);
-        new Notice('Applied local AI rewrite.');
+        new Notice('Applied local AI deslop rewrite.');
+      },
+    });
+
+    this.addCommand({
+      id: 'lexel-ai-fix-grammar-selection',
+      name: 'Lexel: Fix Grammar & Flow with Local AI (Lexel Desktop)',
+      editorCallback: async (editor: Editor) => {
+        const sel = editor.getSelection();
+        const res = await requestLocalDaemonRewrite(this.settings, sel, 'fix_grammar_flow');
+        if (!res.ok) {
+          new Notice(res.error);
+          return;
+        }
+        editor.replaceSelection(res.suggestion);
+        new Notice('Applied local AI grammar & flow rewrite.');
+      },
+    });
+
+    this.addCommand({
+      id: 'lexel-ai-shorten-selection',
+      name: 'Lexel: Shorten Selection with Local AI (Lexel Desktop)',
+      editorCallback: async (editor: Editor) => {
+        const sel = editor.getSelection();
+        const res = await requestLocalDaemonRewrite(this.settings, sel, 'shorten');
+        if (!res.ok) {
+          new Notice(res.error);
+          return;
+        }
+        editor.replaceSelection(res.suggestion);
+        new Notice('Applied local AI concise rewrite.');
+      },
+    });
+
+    this.addCommand({
+      id: 'lexel-sync-from-desktop',
+      name: 'Lexel: Sync Rules & Style Guide from Lexel Desktop',
+      callback: async () => {
+        const res = await syncObsidianSettingsFromDesktop(this.settings);
+        if (!res.ok) {
+          new Notice(res.error);
+          return;
+        }
+        this.settings = res.next;
+        await this.saveData(this.settings);
+        this.updateStatusBar();
+        new Notice(`Synced rules and style guide from Lexel Desktop (${res.profileName}).`);
       },
     });
 

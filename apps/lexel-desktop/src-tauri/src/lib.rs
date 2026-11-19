@@ -1,13 +1,15 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use lexel_core::scan_secrets;
 use lexel_daemon::http::build_router_with_notifier;
 use lexel_daemon::models_fs::DownloadModelReport;
 use lexel_daemon::native_messaging::{
-    NATIVE_HOST_NAME, install_native_hosts, native_manifest_targets, run_stdio_loop,
+    NATIVE_HOST_NAME, forward_rpc_to_loopback, install_native_hosts, native_manifest_targets,
+    run_stdio_loop,
 };
 use lexel_daemon::service::{DaemonService, FixAllSafeRequest};
 use lexel_db::{default_data_dir, default_db_path, default_models_dir, default_token_path};
@@ -156,12 +158,22 @@ fn find_daemon_binary(data_dir: &Path) -> Option<PathBuf> {
     std::env::current_exe().ok().filter(|p| p.is_file())
 }
 
+struct ExternalLoopbackFlag(Arc<AtomicBool>);
+
 #[tauri::command]
 async fn daemon_rpc(
     service: State<'_, Arc<DaemonService>>,
+    external_loopback: State<'_, ExternalLoopbackFlag>,
     kind: String,
     payload: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    if external_loopback.0.load(Ordering::Relaxed)
+        && let Ok(token) = service.token()
+        && let Some(forwarded) =
+            forward_rpc_to_loopback(service.http_port, &token, &kind, &payload).await
+    {
+        return forwarded;
+    }
     service
         .dispatch_rpc(&kind, payload)
         .await
@@ -398,6 +410,8 @@ pub fn run() {
     let shared_http_service = Arc::clone(&service);
     let idle_service = Arc::clone(&service);
     let shutdown_service = Arc::clone(&service);
+    let external_loopback_flag = Arc::new(AtomicBool::new(false));
+    let setup_loopback_flag = Arc::clone(&external_loopback_flag);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -411,11 +425,17 @@ pub fn run() {
                 .build(),
         )
         .manage(service)
+        .manage(ExternalLoopbackFlag(external_loopback_flag))
         .setup(move |app| {
             setup_tray(app.handle())?;
 
             if let Err(err) = app.global_shortcut().register(GLOBAL_POLISH_SHORTCUT) {
                 warn!("global shortcut {GLOBAL_POLISH_SHORTCUT} unavailable: {err}");
+            }
+
+            // Ensure default Native Messaging host manifests exist on first Desktop launch.
+            if let Some(daemon_bin) = find_daemon_binary(&shared_http_service.data_dir) {
+                let _ = install_native_hosts(&daemon_bin, &shared_http_service.data_dir, &[]);
             }
 
             // Enforce configured idle auto-unload TTL inside Desktop mode too.
@@ -450,9 +470,10 @@ pub fn run() {
                                 }
                             }
                             Err(err) => {
+                                setup_loopback_flag.store(true, Ordering::Relaxed);
                                 info!(
                                     %addr,
-                                    "loopback daemon port already bound ({err}); reusing external daemon"
+                                    "loopback daemon port already bound ({err}); forwarding RPCs to external daemon"
                                 );
                             }
                         }

@@ -1,23 +1,25 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
 use lexel_core::{
     HarperEngine, SlopScanner, SurfaceCatalog, UnifiedSettings, apply_safe_deterministic_fixes,
     apply_style_guide_fixes, detect_language_from_path, normalize_typography, scan_invisible_chars,
     scan_secrets, scan_structure_issues, scan_style_guide,
 };
-use lexel_db::{LexelDb, default_db_path};
+use lexel_db::{LexelDb, default_db_path, default_token_path};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tower_lsp_server::jsonrpc::Result as RpcResult;
 use tower_lsp_server::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
-    CodeActionProviderCapability, CodeActionResponse, Diagnostic, DiagnosticSeverity,
+    CodeActionProviderCapability, CodeActionResponse, Command, Diagnostic, DiagnosticSeverity,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, InitializeParams, InitializeResult, InitializedParams,
-    NumberOrString, Position, Range, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextEdit, Uri, WorkspaceEdit,
+    DidSaveTextDocumentParams, ExecuteCommandOptions, ExecuteCommandParams, InitializeParams,
+    InitializeResult, InitializedParams, MessageType, NumberOrString, Position, Range,
+    ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
+    Uri, WorkspaceEdit,
 };
 use tower_lsp_server::{Client, LanguageServer, UriExt};
 
@@ -416,7 +418,47 @@ pub fn build_code_actions(
         }));
     }
 
+    if settings.ai_enabled && !text.trim().is_empty() && scan_secrets(text).is_empty() {
+        let (_lang, surface_id) = resolve_language_and_surface(language_id, path);
+        let uri_str = uri.as_str().to_owned();
+        let ai_actions: &[(&str, &str)] = if surface_id == "ide_git_commit" {
+            &[
+                ("Lexel: Polish Commit Message (Local AI)", "rewrite_surface"),
+                ("Lexel: Deslop Commit Message (Local AI)", "deslop"),
+            ]
+        } else {
+            &[
+                ("Lexel: Deslop Document (Local AI)", "deslop"),
+                ("Lexel: Fix Grammar & Flow (Local AI)", "fix_grammar_flow"),
+                ("Lexel: Shorten Concisely (Local AI)", "shorten"),
+            ]
+        };
+
+        for (title, task) in ai_actions {
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: (*title).to_owned(),
+                kind: Some(CodeActionKind::REFACTOR_REWRITE),
+                command: Some(Command {
+                    title: (*title).to_owned(),
+                    command: "lexel.aiRewrite".to_owned(),
+                    arguments: Some(vec![
+                        serde_json::Value::String(uri_str.clone()),
+                        serde_json::Value::String((*task).to_owned()),
+                        serde_json::Value::String(surface_id.to_owned()),
+                    ]),
+                }),
+                ..Default::default()
+            }));
+        }
+    }
+
     actions
+}
+
+struct CachedSettings {
+    settings: UnifiedSettings,
+    db_mtime: Option<SystemTime>,
+    checked_at: Instant,
 }
 
 fn load_active_settings() -> UnifiedSettings {
@@ -430,10 +472,27 @@ fn load_active_settings() -> UnifiedSettings {
     UnifiedSettings::default()
 }
 
+fn read_git_staged_stat(doc_path: Option<&Path>) -> Option<String> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["diff", "--cached", "--stat"]);
+    if let Some(p) = doc_path
+        && let Some(parent) = p.parent()
+    {
+        cmd.current_dir(parent);
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    if text.is_empty() { None } else { Some(text) }
+}
+
 /// Stdio LSP backend synced with local `lexel.db` active profile settings.
 pub struct LexelLanguageServer {
     client: Client,
     docs: Arc<RwLock<HashMap<Uri, OpenDocument>>>,
+    settings_cache: Arc<RwLock<Option<CachedSettings>>>,
 }
 
 impl LexelLanguageServer {
@@ -441,12 +500,46 @@ impl LexelLanguageServer {
         Self {
             client,
             docs: Arc::new(RwLock::new(HashMap::new())),
+            settings_cache: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    async fn cached_settings(&self) -> UnifiedSettings {
+        let now = Instant::now();
+        {
+            let guard = self.settings_cache.read().await;
+            if let Some(cached) = guard.as_ref()
+                && now.duration_since(cached.checked_at) < Duration::from_secs(2)
+            {
+                return cached.settings.clone();
+            }
+        }
+
+        let db_path = default_db_path();
+        let current_mtime = std::fs::metadata(&db_path).and_then(|m| m.modified()).ok();
+
+        {
+            let mut guard = self.settings_cache.write().await;
+            if let Some(cached) = guard.as_mut()
+                && cached.db_mtime == current_mtime
+                && current_mtime.is_some()
+            {
+                cached.checked_at = now;
+                return cached.settings.clone();
+            }
+            let fresh = load_active_settings();
+            *guard = Some(CachedSettings {
+                settings: fresh.clone(),
+                db_mtime: current_mtime,
+                checked_at: now,
+            });
+            fresh
         }
     }
 
     async fn publish_for(&self, uri: Uri, doc: OpenDocument) {
         let path_buf = uri.to_file_path().map(|p| p.into_owned());
-        let settings = load_active_settings();
+        let settings = self.cached_settings().await;
         let diagnostics =
             analyze_document(&doc.text, &doc.language_id, path_buf.as_deref(), &settings);
         self.client
@@ -467,10 +560,15 @@ impl LanguageServer for LexelLanguageServer {
                         code_action_kinds: Some(vec![
                             CodeActionKind::QUICKFIX,
                             CodeActionKind::SOURCE_FIX_ALL,
+                            CodeActionKind::REFACTOR_REWRITE,
                         ]),
                         ..Default::default()
                     },
                 )),
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec!["lexel.aiRewrite".to_owned()],
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -543,7 +641,7 @@ impl LanguageServer for LexelLanguageServer {
             return Ok(None);
         };
         let path_buf = uri.to_file_path().map(|p| p.into_owned());
-        let settings = load_active_settings();
+        let settings = self.cached_settings().await;
         let actions = build_code_actions(
             &uri,
             &doc.text,
@@ -557,5 +655,112 @@ impl LanguageServer for LexelLanguageServer {
         } else {
             Ok(Some(actions))
         }
+    }
+
+    #[allow(clippy::mutable_key_type)]
+    async fn execute_command(
+        &self,
+        params: ExecuteCommandParams,
+    ) -> RpcResult<Option<serde_json::Value>> {
+        if params.command != "lexel.aiRewrite" {
+            return Ok(None);
+        }
+        let mut args = params.arguments.into_iter();
+        let Some(uri_str) = args.next().and_then(|v| v.as_str().map(str::to_owned)) else {
+            return Ok(None);
+        };
+        let task = args
+            .next()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "deslop".to_owned());
+        let surface_id = args
+            .next()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "general".to_owned());
+
+        let Ok(uri) = uri_str.parse::<Uri>() else {
+            return Ok(None);
+        };
+        let Some(doc) = self.docs.read().await.get(&uri).cloned() else {
+            return Ok(None);
+        };
+
+        let token_path = default_token_path();
+        let Ok(raw_token) = std::fs::read_to_string(&token_path) else {
+            self.client
+                .show_message(
+                    MessageType::WARNING,
+                    "Lexel Desktop / lexel-daemon token not found. Start Lexel Desktop first.",
+                )
+                .await;
+            return Ok(None);
+        };
+        let token = raw_token.trim();
+        let path_buf = uri.to_file_path().map(|p| p.into_owned());
+        let thread_context = if surface_id == "ide_git_commit" {
+            read_git_staged_stat(path_buf.as_deref())
+        } else {
+            None
+        };
+
+        let client = reqwest::Client::new();
+        let res = client
+            .post("http://127.0.0.1:42424/v1/rewrite")
+            .bearer_auth(token)
+            .json(&serde_json::json!({
+                "text": doc.text,
+                "task": task,
+                "surfaceId": surface_id,
+                "subcontext": "lsp",
+                "threadContext": thread_context,
+            }))
+            .send()
+            .await;
+
+        match res {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(body) = resp.json::<serde_json::Value>().await
+                    && let Some(suggestion) = body.get("suggestion").and_then(|v| v.as_str())
+                {
+                    let end_pos = byte_offset_to_position(&doc.text, doc.text.len());
+                    let mut changes = HashMap::new();
+                    changes.insert(
+                        uri,
+                        vec![TextEdit {
+                            range: Range::new(Position::new(0, 0), end_pos),
+                            new_text: suggestion.to_owned(),
+                        }],
+                    );
+                    let _ = self
+                        .client
+                        .apply_edit(WorkspaceEdit {
+                            changes: Some(changes),
+                            ..Default::default()
+                        })
+                        .await;
+                }
+            }
+            Ok(resp) => {
+                let err_msg = resp
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()
+                    .and_then(|b| b.get("error").and_then(|e| e.as_str()).map(str::to_owned))
+                    .unwrap_or_else(|| "Lexel local AI rewrite failed.".to_owned());
+                self.client
+                    .show_message(MessageType::WARNING, err_msg)
+                    .await;
+            }
+            Err(_) => {
+                self.client
+                    .show_message(
+                        MessageType::WARNING,
+                        "Could not connect to Lexel Desktop on 127.0.0.1:42424. Open Lexel Desktop to run local AI rewrites.",
+                    )
+                    .await;
+            }
+        }
+
+        Ok(None)
     }
 }

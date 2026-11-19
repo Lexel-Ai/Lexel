@@ -11,6 +11,7 @@ use lexel_db::DatabaseBackup;
 use serde::Deserialize;
 
 use crate::auth::{constant_time_eq, is_allowed_origin};
+use crate::native_messaging::{install_native_hosts, locate_daemon_binary};
 use crate::service::{
     ApplyPresetRequest, BuildWeirpackRequest, DaemonError, DaemonService, FixAllSafeRequest,
     ReadabilityRequest, RewriteRequest, SaveDraftRequest, SaveVoiceRequest, SynonymsRequest,
@@ -150,6 +151,10 @@ pub fn build_router_with_notifier(
 
     Router::new()
         .route("/health", get(get_health))
+        .route(
+            "/v1/bridge/register-extension",
+            post(post_register_extension),
+        )
         .merge(protected)
         .layer(middleware::from_fn(cors_origin_guard))
         .with_state(state)
@@ -251,6 +256,89 @@ async fn get_health(State(state): State<AppState>) -> impl IntoResponse {
         "authRequired": true,
         "httpPort": state.service.http_port,
     }))
+}
+
+/// Zero-friction local browser extension pairing endpoint.
+/// Accepts ONLY browser-enforced `Origin: chrome-extension://<32-char-id>` or `moz-extension://<uuid>`
+/// headers and registers that extension origin in `com.lexel.daemon.json` for Native Messaging.
+async fn post_register_extension(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .unwrap_or("");
+    let lower = origin.to_ascii_lowercase();
+
+    let ext_ids: Vec<String> = if let Some(rest) = lower.strip_prefix("chrome-extension://") {
+        let id = rest.trim_end_matches('/');
+        let valid_chrome_id = id.len() == 32 && id.bytes().all(|b| matches!(b, b'a'..=b'p'));
+        if !valid_chrome_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "Invalid chrome-extension Origin ID."
+                })),
+            )
+                .into_response();
+        }
+        vec![id.to_owned()]
+    } else if let Some(rest) = lower.strip_prefix("moz-extension://") {
+        let id = rest.trim_end_matches('/');
+        let valid_moz_id = id.len() >= 8 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
+        if !valid_moz_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "Invalid moz-extension Origin ID."
+                })),
+            )
+                .into_response();
+        }
+        Vec::new()
+    } else {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Extension auto-registration requires a chrome-extension:// or moz-extension:// Origin."
+            })),
+        )
+            .into_response();
+    };
+
+    let Some(daemon_bin) = locate_daemon_binary(&state.service.data_dir) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "Could not locate lexel-daemon binary for Native Messaging host."
+            })),
+        )
+            .into_response();
+    };
+
+    match install_native_hosts(&daemon_bin, &state.service.data_dir, &ext_ids) {
+        Ok(paths) => {
+            state.notify("bridge");
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "registeredOrigin": lower,
+                    "manifestsWritten": paths.len(),
+                })),
+            )
+                .into_response()
+        }
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Failed to register Native Messaging host: {err}")
+            })),
+        )
+            .into_response(),
+    }
 }
 
 async fn get_status(State(state): State<AppState>) -> Result<impl IntoResponse, DaemonError> {

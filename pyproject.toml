@@ -1,0 +1,39 @@
+[project]
+name = "lexel-crucible"
+version = "0.1.0"
+description = "Lexel Data Crucible, Surgical Counterfactual Mutation, Token-Masked SimPO/DPO, and Kaggle/Unsloth pipeline."
+readme = "ml/kaggle/README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8",
+]
+
+[project.optional-dependencies]
+train = [
+    "unsloth",
+    "torch",
+    "trl",
+    "transformers",
+    "peft",
+    "datasets",
+    "accelerate",
+    "bitsandbytes",
+]
+
+[tool.uv]
+package = false
+override-dependencies = [
+    "unsloth; sys_platform == 'never'",
+    "bitsandbytes; sys_platform == 'never'",
+    "torch; sys_platform == 'never'",
+    "trl; sys_platform == 'never'",
+    "transformers; sys_platform == 'never'",
+    "peft; sys_platform == 'never'",
+    "datasets; sys_platform == 'never'",
+    "accelerate; sys_platform == 'never'",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["ml/crucible/tests"]
+pythonpath = ["."]
+addopts = "-q"

@@ -1,7 +1,10 @@
-.PHONY: sync-harper install install-hooks setup dev-browser build-browser zip-browser dev-desktop build-desktop tauri-dev tauri-build package lint format check typecheck test build rust-check rust-test daemon
+.PHONY: sync-harper install install-app install-hooks setup dev-browser build-browser zip-browser dev-desktop build-desktop tauri-dev tauri-build package lint format check typecheck test build rust-check rust-test daemon ml-test
 
 install:
 	pnpm install
+
+install-app:
+	bash scripts/install.sh
 
 install-hooks:
 	git config core.hooksPath scripts/hooks
@@ -59,6 +62,9 @@ typecheck:
 
 test:
 	pnpm -r test
+
+ml-test:
+	uv run pytest
 
 build:
 	pnpm -r build

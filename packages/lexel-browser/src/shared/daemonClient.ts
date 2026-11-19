@@ -32,17 +32,29 @@ function makeNativeInstallHint(): string {
   return extId ? `lexel-daemon install-native-host --extension-id ${extId}` : 'make setup';
 }
 
-export async function callNativeDaemon<T>(
-  kind: string,
-  payload: Record<string, unknown> = {},
-): Promise<NativeDaemonResult<T>> {
-  if (typeof chrome === 'undefined' || !chrome.runtime?.sendNativeMessage) {
-    return {
-      connected: false,
-      error: 'Native messaging API is unavailable in this environment.',
-    };
+/**
+ * Ask a running Lexel Desktop / lexel-daemon instance on 127.0.0.1:42424 to register this browser
+ * extension's Origin in `com.lexel.daemon.json` so Native Messaging connects with zero manual setup.
+ */
+export async function registerExtensionWithDesktop(port = 42424): Promise<boolean> {
+  if (typeof fetch !== 'function') return false;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 600);
+    const resp = await fetch(`http://127.0.0.1:${port}/v1/bridge/register-extension`, {
+      method: 'POST',
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer));
+    return resp.ok;
+  } catch {
+    return false;
   }
+}
 
+function sendNativeMessageOnce<T>(
+  kind: string,
+  payload: Record<string, unknown>,
+): Promise<NativeDaemonResult<T>> {
   return new Promise((resolve) => {
     try {
       const req = { id: `${Date.now()}`, kind, payload };
@@ -89,6 +101,27 @@ export async function callNativeDaemon<T>(
       });
     }
   });
+}
+
+export async function callNativeDaemon<T>(
+  kind: string,
+  payload: Record<string, unknown> = {},
+): Promise<NativeDaemonResult<T>> {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.sendNativeMessage) {
+    return {
+      connected: false,
+      error: 'Native messaging API is unavailable in this environment.',
+    };
+  }
+
+  const first = await sendNativeMessageOnce<T>(kind, payload);
+  if (!first.connected && (first.forbidden || first.notFound)) {
+    const registered = await registerExtensionWithDesktop();
+    if (registered) {
+      return sendNativeMessageOnce<T>(kind, payload);
+    }
+  }
+  return first;
 }
 
 export function fetchDaemonStatus(): Promise<NativeDaemonResult<DaemonStatusPayload>> {

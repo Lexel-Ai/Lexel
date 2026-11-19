@@ -26,26 +26,34 @@ Cloud writing tools send every draft you type to remote servers and charge month
 | **Local Database** | `crates/lexel-db` | Single-file SQLite + FTS5 storage (`lexel.db`) for profiles, unified settings, custom surfaces, Voice Memory, local numeric writing stats, and opt-in draft snapshots. |
 | **CLI Toolkit** | `crates/lexel-cli` | Zero-AI command-line linter (`lexel check`, `stats`, `synonyms`, `title-case`, `sentence-case`, `normalize`, `weirpack`, `install-git-hook`) with Text, JSON, and SARIF output for CI pipelines. |
 | **Shared UI Kit** | `packages/lexel-ui` | Shared monochrome design tokens, Tier 0 TypeScript engine, and React 19 components used across Desktop, Browser Extension, and Obsidian. |
+| **ML Crucible & Kaggle** | `ml/crucible` & `ml/kaggle` | 6-Gate Data Crucible, unit-bound numeric grounding verifier, Surgical Counterfactual Mutation (SCM), Masked-SimPO / DPO preference alignment, and ready-to-run Unsloth + Kaggle notebooks. |
 
 ## Quick Start for End Users
 
-### 1. Install Lexel Desktop and the Browser Extension
+### 1. One-Command Install (Linux & macOS) or Direct Release Download
 
-Download the latest release assets from [GitHub Releases](https://github.com/Lexel-Ai/Lexel/releases):
+Install **Lexel Desktop**, `lexel-daemon`, `lexel-ls` (LSP), and `lexel` (CLI) with one terminal command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Lexel-Ai/Lexel/main/scripts/install.sh | bash
+```
+
+Or download the latest prebuilt installers from [GitHub Releases](https://github.com/Lexel-Ai/Lexel/releases):
 - **Desktop App:** `.AppImage` / `.deb` (Linux), `.dmg` (macOS), or `.msi` / `.exe` (Windows)
 - **Browser Extension:** `lexel-chrome.zip` (Chrome, Brave, Edge, Chromium) or `lexel-firefox.zip` (Firefox 128+)
 
-Tier 0 grammar, anti-slop, platform checks, and Secrets Guard work immediately in the browser extension without installing anything else.
+Tier 0 grammar, spelling, anti-slop, platform checks, and Secrets Guard work immediately in the browser extension with zero dependencies (0 MB AI RAM).
 
-### 2. Connect Desktop Settings and Local AI to the Browser Extension
+### 2. Centralized Settings in Lexel Desktop & Zero-Friction Extension Sync
 
-1. Launch **Lexel Desktop**. It starts the local SQLite database (`lexel.db`) and shared loopback bridge on `127.0.0.1:42424`.
-2. In your browser extension, open **Settings -> Account & Models** and click **Copy Extension ID**.
-3. In **Lexel Desktop -> AI & Extension Sync**, paste the Extension ID and click **Register Browser Bridge**.
-4. In **Local AI Engine**, click **Download GGUF** for **Lexel 1.5B (Standard)** or **Lexel 0.5B (Lite)**. Downloads support resume and SHA-256 verification.
-5. Make sure a local inference runtime is available: install [Ollama](https://ollama.com) (Lexel starts it and imports your downloaded GGUF automatically) or place `llama-server` in `~/.local/share/lexel/bin/` (or on `PATH`).
+**Lexel Desktop** is the single Control Center for all settings, grammar rules, personal dictionary, anti-slop terms, surface prompts, privacy blocklists, and local AI model downloads:
 
-Once linked, changes made in either Lexel Desktop or the Browser Extension (dialect, Harper rules, custom dictionary, anti-slop terms, custom surface prompts, privacy blocklist, profiles, theme, and AI model) stay synced automatically through `lexel.db`.
+1. Launch **Lexel Desktop** (`lexel-desktop`). It initializes `lexel.db`, registers Native Messaging hosts, and starts the local sync bridge on `127.0.0.1:42424`.
+2. Open the **Lexel Browser Extension** (or click **Connect Desktop** in the extension popup). The extension automatically pairs its browser-enforced `Origin` with Lexel Desktop and syncs your active profile.
+3. In **Lexel Desktop -> AI & Extension Sync**, click **Download GGUF** for **Lexel 1.5B (Standard)** (~1.04 GB) or **Lexel 0.5B (Lite)** (~469 MB). Downloads support HTTP Range resume and SHA-256 verification.
+4. Make sure a local inference runtime is available: install [Ollama](https://ollama.com) (Lexel starts it and imports your downloaded GGUF automatically) or place `llama-server` in `~/.local/share/lexel/bin/` (or `~/.local/bin/`).
+
+If you only install the browser extension without Lexel Desktop, Tier 0 grammar, spelling, and anti-slop checks continue working standalone in WebAssembly, and the extension displays a prompt to install Lexel Desktop whenever you want to customize settings or enable the local AI model.
 
 ## Building from Source
 
@@ -53,7 +61,8 @@ Once linked, changes made in either Lexel Desktop or the Browser Extension (dial
 
 - Rust stable toolchain (Edition 2024)
 - Node.js 22+ and `pnpm` 10.10+
-- For building Tauri desktop installers on Linux: `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`, `patchelf`
+- Python 3.11+ and `uv` (for `ml/crucible/` dataset curation & tests)
+- For building Tauri desktop installers on Ubuntu/Debian Linux: `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev` (or `libappindicator3-dev`), `librsvg2-dev`, `patchelf`
 
 ### Clone and Build
 

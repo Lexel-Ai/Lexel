@@ -473,6 +473,15 @@ async function handleAiRewrite(
       error: 'Secrets Guard blocked this rewrite because sensitive tokens or PII were detected.',
     };
   }
+  if (req.domain) {
+    const blocklist = await getPrivacyBlocklist();
+    if (isDomainBlocked(req.domain, blocklist)) {
+      return {
+        ok: false,
+        error: `AI is blocked on ${req.domain} by your privacy blocklist.`,
+      };
+    }
+  }
   const started = performance.now();
   try {
     const daemonRes = await daemonRewrite({

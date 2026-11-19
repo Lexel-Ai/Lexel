@@ -169,7 +169,7 @@ export function scanTier0DiagnosticsShared(
   }
 
   if (!profile.allowEmDashes) {
-    for (const match of text.matchAll(/\s*—\s*/g)) {
+    for (const match of text.matchAll(/\s*—\s*|\s+--\s+/g)) {
       if (typeof match.index !== 'number') continue;
       const start = match.index;
       const end = start + match[0].length;
@@ -268,18 +268,22 @@ export function scanTier0DiagnosticsShared(
     }
   }
 
-  const lower = text.toLowerCase();
+  const leadingWs = text.length - text.trimStart().length;
+  const trimmedLower = text.slice(leadingWs).toLowerCase();
   for (const opener of profile.bannedOpeners) {
-    const idx = lower.indexOf(opener.toLowerCase());
-    if (idx !== -1 && !overlapsIgnoredRanges(idx, idx + opener.length, ignored)) {
+    const openerLower = opener.toLowerCase();
+    if (
+      trimmedLower.startsWith(openerLower) &&
+      !overlapsIgnoredRanges(leadingWs, leadingWs + opener.length, ignored)
+    ) {
       surfaceLints.push(
         makeLint(
           text,
-          idx,
-          idx + opener.length,
+          leadingWs,
+          leadingWs + opener.length,
           'Style',
           'LexelSurface',
-          `Weak/engagement-bait opener ("${escapeHtml(text.slice(idx, idx + opener.length))}") for ${escapeHtml(profile.label)}.`,
+          `Weak/engagement-bait opener ("${escapeHtml(text.slice(leadingWs, leadingWs + opener.length))}") for ${escapeHtml(profile.label)}.`,
         ),
       );
     }
@@ -466,7 +470,7 @@ export function verifyAiRewriteShared(
     customTerms: options?.customSlopTerms,
     disabledTerms: options?.disabledSlopTerms,
   });
-  const hasEmDash = !profile.allowEmDashes && /—/.test(candidate);
+  const hasEmDash = !profile.allowEmDashes && /(?:—|\s--\s)/.test(candidate);
   const zeroSlop = slopHits.length === 0 && !hasEmDash;
   if (slopHits.length > 0) {
     warnings.push(`Contains AI phrasing: ${slopHits.map((s) => `"${s.term}"`).join(', ')}`);

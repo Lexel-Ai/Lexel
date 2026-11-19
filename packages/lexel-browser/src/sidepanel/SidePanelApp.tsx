@@ -11,7 +11,6 @@ import {
 } from 'lexel-ui';
 import React, { useEffect, useState } from 'react';
 import type { LocalAiHealth } from '../shared/localAiClient';
-import { MODEL_MANIFEST_SPECS } from '../shared/models';
 import { getSurfaceProfile, listSurfaceProfiles } from '../shared/surfaceDetector';
 import type {
   AiSettings,
@@ -105,42 +104,13 @@ export function SidePanelApp() {
       };
 
   async function handleRefreshHealth() {
-    const health = (await chrome.runtime.sendMessage({ kind: 'aiHealth' })) as LocalAiHealth;
+    await chrome.runtime.sendMessage({ kind: 'syncFromDaemon' });
+    const [aiRes, health] = await Promise.all([
+      chrome.runtime.sendMessage({ kind: 'getAiSettings' }) as Promise<{ settings: AiSettings }>,
+      chrome.runtime.sendMessage({ kind: 'aiHealth' }) as Promise<LocalAiHealth>,
+    ]);
+    setAiSettings(aiRes.settings);
     setAiHealth(health);
-  }
-
-  async function handleEnableAi() {
-    if (!aiSettings) return;
-    setAiSettings({ ...aiSettings, enabled: true });
-    const res = (await chrome.runtime.sendMessage({
-      kind: 'toggleAi',
-      enabled: true,
-    })) as { health?: LocalAiHealth; activationError?: string | null };
-    if (res.health) {
-      setAiHealth({
-        ...res.health,
-        error: res.activationError ?? res.health.error,
-      });
-    } else {
-      await handleRefreshHealth();
-    }
-  }
-
-  async function handleModelChange(model: string) {
-    if (!aiSettings) return;
-    const res = (await chrome.runtime.sendMessage({
-      kind: 'setMainModel',
-      model,
-    })) as { health?: LocalAiHealth };
-    const nextAi = (await chrome.runtime.sendMessage({
-      kind: 'getAiSettings',
-    })) as { settings: AiSettings };
-    setAiSettings(nextAi.settings);
-    if (res.health) {
-      setAiHealth(res.health);
-    } else {
-      await handleRefreshHealth();
-    }
   }
 
   async function handleThemeToggle() {
@@ -233,26 +203,24 @@ export function SidePanelApp() {
     setResult(null);
   }
 
-  const aiState: AiHealthState = !aiSettings?.enabled
+  const connected = Boolean(aiHealth?.daemonConnected);
+  const aiState: AiHealthState = !connected
     ? 'offline'
-    : aiHealth?.ok && aiHealth.modelAvailable !== false
-      ? 'ready'
-      : 'error';
+    : !aiSettings?.enabled
+      ? 'offline'
+      : aiHealth?.ok && aiHealth.modelAvailable !== false
+        ? 'ready'
+        : 'error';
 
-  const aiLabel = !aiSettings?.enabled
-    ? 'AI Off'
-    : aiHealth?.ok && aiHealth.modelAvailable !== false
-      ? aiSettings.model
-      : aiHealth?.ok
-        ? 'Model Missing'
-        : 'AI Offline';
-
-  const modelValue =
-    aiSettings?.mainModelTier === 'lexel-0.5b'
-      ? 'lexel-0.5b'
-      : aiSettings?.mainModelTier === 'lexel-1.5b'
-        ? 'lexel-1.5b'
-        : (aiSettings?.model ?? 'lexel-1.5b');
+  const aiLabel = !connected
+    ? 'Tier 0 Only'
+    : !aiSettings?.enabled
+      ? 'AI Off'
+      : aiHealth?.ok && aiHealth.modelAvailable !== false
+        ? aiSettings.model
+        : aiHealth?.ok
+          ? 'Model Missing'
+          : 'AI Offline';
 
   return (
     <div data-theme={theme} className="lexel-root min-h-screen p-4 flex flex-col gap-3">
@@ -269,7 +237,7 @@ export function SidePanelApp() {
           <button
             type="button"
             onClick={() => void chrome.runtime.openOptionsPage()}
-            aria-label="Open Lexel settings"
+            aria-label="Open Lexel Desktop bridge"
             className="inline-flex h-8 w-8 items-center justify-center rounded-[6px] border"
             style={{
               backgroundColor: 'var(--lx-muted)',
@@ -283,7 +251,48 @@ export function SidePanelApp() {
         </div>
       </header>
 
-      {aiSettings && !aiSettings.enabled ? (
+      {!connected ? (
+        <div
+          className="rounded-[8px] border p-2.5 flex flex-col gap-2 text-xs"
+          style={{
+            backgroundColor: 'var(--lx-card)',
+            borderColor: 'var(--lx-border)',
+            color: 'var(--lx-fg-muted)',
+          }}
+        >
+          <div className="leading-snug">
+            <strong style={{ color: 'var(--lx-fg)' }}>Tier 0 Grammar &amp; Anti-Slop Ready.</strong>{' '}
+            Download and connect <strong>Lexel Desktop</strong> to configure settings and run the
+            local AI model.
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void handleRefreshHealth()}
+              className="rounded-[6px] border px-2.5 py-1 text-[11px] font-semibold"
+              style={{
+                backgroundColor: 'var(--lx-accent)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-on-accent)',
+              }}
+            >
+              Connect to Lexel Desktop
+            </button>
+            <button
+              type="button"
+              onClick={() => void chrome.runtime.openOptionsPage()}
+              className="rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
+              style={{
+                backgroundColor: 'var(--lx-muted)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            >
+              Get Lexel Desktop
+            </button>
+          </div>
+        </div>
+      ) : aiSettings && !aiSettings.enabled ? (
         <div
           className="rounded-[8px] border p-2.5 flex items-center justify-between gap-2 text-xs"
           style={{
@@ -292,14 +301,21 @@ export function SidePanelApp() {
             color: 'var(--lx-fg-muted)',
           }}
         >
-          <span>Local AI is off. Grammar checks remain active.</span>
+          <span>
+            Local AI is disabled in <strong>Lexel Desktop</strong>. Enable it in Desktop to run AI
+            rewrites.
+          </span>
           <button
             type="button"
-            onClick={() => void handleEnableAi()}
-            className="rounded-[6px] px-2.5 py-1 text-xs font-semibold shrink-0"
-            style={{ backgroundColor: 'var(--lx-accent)', color: 'var(--lx-on-accent)' }}
+            onClick={() => void handleRefreshHealth()}
+            className="rounded-[6px] border px-2.5 py-1 text-[11px] font-medium shrink-0"
+            style={{
+              backgroundColor: 'var(--lx-muted)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
           >
-            Turn AI On
+            Sync Now
           </button>
         </div>
       ) : aiHealth && (!aiHealth.ok || aiHealth.modelAvailable === false) ? (
@@ -311,7 +327,9 @@ export function SidePanelApp() {
             color: 'var(--lx-warn)',
           }}
         >
-          <div className="leading-snug break-words">{aiHealth.error}</div>
+          <div className="leading-snug break-words">
+            {aiHealth.error ?? 'Download your GGUF model in Lexel Desktop -> AI & Extension Sync.'}
+          </div>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -323,22 +341,8 @@ export function SidePanelApp() {
                 color: 'var(--lx-fg)',
               }}
             >
-              Retry connection
+              Sync with Desktop
             </button>
-            {aiHealth.nativeHostCommand ? (
-              <button
-                type="button"
-                onClick={() => void navigator.clipboard.writeText(aiHealth.nativeHostCommand!)}
-                className="rounded-[6px] border px-2 py-1 text-[11px]"
-                style={{
-                  backgroundColor: 'var(--lx-bg)',
-                  borderColor: 'var(--lx-border)',
-                  color: 'var(--lx-fg-muted)',
-                }}
-              >
-                Copy host command
-              </button>
-            ) : null}
             <button
               type="button"
               onClick={() => void chrome.runtime.openOptionsPage()}
@@ -349,7 +353,7 @@ export function SidePanelApp() {
                 color: 'var(--lx-fg-muted)',
               }}
             >
-              Settings
+              Desktop Bridge Info
             </button>
           </div>
         </div>
@@ -390,7 +394,7 @@ export function SidePanelApp() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
           <span>Surface</span>
           <select
@@ -428,29 +432,6 @@ export function SidePanelApp() {
                 {t.label}
               </option>
             ))}
-          </select>
-        </label>
-
-        <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-          <span>Model</span>
-          <select
-            value={modelValue}
-            onChange={(e) => void handleModelChange(e.target.value)}
-            className="rounded-[6px] border px-2 py-1.5 text-xs"
-            style={{
-              backgroundColor: 'var(--lx-card)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
-          >
-            {MODEL_MANIFEST_SPECS.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-            {aiSettings?.mainModelTier === 'custom' ? (
-              <option value={aiSettings.model}>{aiSettings.model}</option>
-            ) : null}
           </select>
         </label>
       </div>

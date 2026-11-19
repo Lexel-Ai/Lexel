@@ -43,6 +43,22 @@
       {
         "command": "lexel.fixAllSafe",
         "title": "Lexel: Fix All Safe Issues (No AI)"
+      },
+      {
+        "command": "lexel.deslopDocument",
+        "title": "Lexel: Deslop Document (Local AI)"
+      },
+      {
+        "command": "lexel.fixGrammarFlow",
+        "title": "Lexel: Fix Grammar & Flow (Local AI)"
+      },
+      {
+        "command": "lexel.shortenDocument",
+        "title": "Lexel: Shorten Document (Local AI)"
+      },
+      {
+        "command": "lexel.polishCommit",
+        "title": "Lexel: Polish Commit Message (Local AI)"
       }
     ],
     "configuration": {

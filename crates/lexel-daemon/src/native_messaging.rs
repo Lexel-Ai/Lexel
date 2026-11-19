@@ -321,6 +321,71 @@ pub async fn run_stdio_loop(service: Arc<DaemonService>) -> io::Result<()> {
     Ok(())
 }
 
+/// Locate the `lexel-daemon` binary (or current executable supporting `native-messaging`).
+pub fn locate_daemon_binary(data_dir: &Path) -> Option<PathBuf> {
+    let exe_name = if cfg!(windows) {
+        "lexel-daemon.exe"
+    } else {
+        "lexel-daemon"
+    };
+
+    if let Ok(current) = std::env::current_exe()
+        && let Some(dir) = current.parent()
+    {
+        let sibling = dir.join(exe_name);
+        if sibling.is_file() {
+            return Some(sibling);
+        }
+    }
+
+    let local_bin = data_dir.join("bin").join(exe_name);
+    if local_bin.is_file() {
+        return Some(local_bin);
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for rel in ["../../target/release", "../../target/debug"] {
+        let candidate = manifest_dir.join(rel).join(exe_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            let candidate = dir.join(exe_name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    std::env::current_exe().ok().filter(|p| p.is_file())
+}
+
+/// Read existing `allowed_origins` from any installed Chromium Native Messaging manifest so new
+/// extension IDs merge cleanly without dropping previously linked browsers.
+fn read_existing_chrome_origins(data_dir: &Path) -> Vec<String> {
+    let mut existing = Vec::new();
+    for (_browser, path) in native_manifest_targets(data_dir) {
+        if let Ok(raw) = fs::read_to_string(&path)
+            && let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw)
+            && let Some(arr) = val.get("allowed_origins").and_then(|v| v.as_array())
+        {
+            for item in arr {
+                if let Some(s) = item.as_str()
+                    && s.starts_with("chrome-extension://")
+                    && !s.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                    && !existing.iter().any(|e| e == s)
+                {
+                    existing.push(s.to_owned());
+                }
+            }
+        }
+    }
+    existing
+}
+
 /// Install Chrome/Chromium/Brave and Firefox Native Messaging host manifests.
 pub fn install_native_hosts(
     daemon_bin: &Path,
@@ -330,21 +395,24 @@ pub fn install_native_hosts(
     let host_exec = prepare_host_executable(daemon_bin, data_dir)?;
     let host_exec_str = host_exec.display().to_string();
 
-    let chrome_origins: Vec<String> = if chrome_ext_ids.is_empty() {
-        vec!["chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/".to_owned()]
-    } else {
-        chrome_ext_ids
-            .iter()
-            .map(|id| {
-                let clean = id.trim().trim_end_matches('/');
-                if clean.starts_with("chrome-extension://") {
-                    format!("{clean}/")
-                } else {
-                    format!("chrome-extension://{clean}/")
-                }
-            })
-            .collect()
-    };
+    let mut chrome_origins = read_existing_chrome_origins(data_dir);
+    for id in chrome_ext_ids {
+        let clean = id.trim().trim_end_matches('/');
+        if clean.is_empty() {
+            continue;
+        }
+        let origin = if clean.starts_with("chrome-extension://") {
+            format!("{clean}/")
+        } else {
+            format!("chrome-extension://{clean}/")
+        };
+        if !chrome_origins.contains(&origin) {
+            chrome_origins.push(origin);
+        }
+    }
+    if chrome_origins.is_empty() {
+        chrome_origins.push("chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/".to_owned());
+    }
 
     let chrome_manifest = serde_json::json!({
         "name": NATIVE_HOST_NAME,

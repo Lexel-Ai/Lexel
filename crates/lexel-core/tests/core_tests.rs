@@ -5,6 +5,7 @@ use lexel_core::{
     UnifiedSettings, VoiceExample, apply_safe_deterministic_fixes, build_rewrite_messages,
     default_model_manifest, sanitize_model_output, scan_secrets, structured_lint_config,
     synonyms_for, to_title_case, validate_weirpack_bytes, verify_rewrite,
+    verify_rewrite_with_overrides,
 };
 
 #[test]
@@ -71,6 +72,32 @@ fn tier2_verifier_checks_slop_numbers_tokens_and_surface() {
     .expect("verifier");
     assert!(!bad.zero_slop);
     assert!(!bad.numbers_preserved);
+
+    // Custom/disabled slop overrides and CLI flag preservation work in Tier 2 verifier.
+    let overridden = verify_rewrite_with_overrides(
+        "Run `cargo build` with --release on 16px layout.",
+        "Run `cargo build` with --release on 16px layout seamlessly.",
+        "web_github_pr",
+        0,
+        &[],
+        &[],
+        &["circle back".to_owned()],
+        &["seamlessly".to_owned()],
+    )
+    .expect("overridden verifier");
+    assert!(overridden.zero_slop);
+    assert!(overridden.numbers_preserved);
+    assert!(overridden.tokens_preserved);
+
+    let dropped_flag = verify_rewrite(
+        "Run `cargo build` with --release.",
+        "Run `cargo build` now.",
+        "web_github_pr",
+        0,
+        &[],
+    )
+    .expect("dropped flag verifier");
+    assert!(!dropped_flag.tokens_preserved);
 }
 
 #[test]
