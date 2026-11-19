@@ -1,0 +1,10 @@
+{
+  "id": "lexel-writing",
+  "name": "Lexel Local Writing Assistant",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "100% local Markdown anti-slop filter, hidden Unicode cleaner, structure guard, readability goals, and optional lexel-daemon AI rewrite.",
+  "author": "Lexel Contributors",
+  "authorUrl": "https://github.com/Lexel-Ai/Lexel",
+  "isDesktopOnly": false
+}

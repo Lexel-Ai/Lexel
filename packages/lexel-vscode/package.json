@@ -1,0 +1,78 @@
+{
+  "name": "lexel-vscode",
+  "displayName": "Lexel Local Writing Assistant",
+  "description": "100% local grammar, anti-slop, secrets guard, and team style guide linting for VS Code, Cursor, and Windsurf powered by lexel-ls.",
+  "version": "0.1.0",
+  "publisher": "lexel-ai",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:markdown",
+    "onLanguage:plaintext",
+    "onLanguage:git-commit",
+    "onLanguage:rust",
+    "onLanguage:typescript",
+    "onLanguage:typescriptreact",
+    "onLanguage:javascript",
+    "onLanguage:javascriptreact",
+    "onLanguage:python",
+    "onLanguage:go",
+    "onLanguage:c",
+    "onLanguage:cpp",
+    "onLanguage:java",
+    "onLanguage:html",
+    "onLanguage:latex",
+    "onLanguage:typst",
+    "onLanguage:asciidoc",
+    "onLanguage:org"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "lexel.restartServer",
+        "title": "Lexel: Restart Language Server"
+      },
+      {
+        "command": "lexel.fixAllSafe",
+        "title": "Lexel: Fix All Safe Issues (No AI)"
+      }
+    ],
+    "configuration": {
+      "title": "Lexel",
+      "properties": {
+        "lexel.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable live Lexel grammar, anti-slop, secrets guard, and style guide linting."
+        },
+        "lexel.path": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to the lexel-ls binary. Defaults to lexel-ls on PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}

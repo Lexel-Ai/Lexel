@@ -94,8 +94,8 @@ jobs:
       - name: Install JS dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build release CLI and Daemon binaries
-        run: cargo build --release -p lexel-cli -p lexel-daemon
+      - name: Build release CLI, Daemon, and LSP binaries
+        run: cargo build --release -p lexel-cli -p lexel-daemon -p lexel-ls
 
       - name: Build Tauri Desktop bundles
         run: pnpm run tauri:build
@@ -107,14 +107,17 @@ jobs:
           if [ "${RUNNER_OS}" = "Windows" ]; then
             cp target/release/lexel.exe "release-artifacts/lexel-cli-${{ matrix.target }}.exe"
             cp target/release/lexel-daemon.exe "release-artifacts/lexel-daemon-${{ matrix.target }}.exe"
+            cp target/release/lexel-ls.exe "release-artifacts/lexel-ls-${{ matrix.target }}.exe"
             find apps/lexel-desktop/src-tauri/target/release/bundle -type f \( -name "*.msi" -o -name "*.exe" \) -exec cp {} release-artifacts/ \;
           elif [ "${RUNNER_OS}" = "macOS" ]; then
             cp target/release/lexel "release-artifacts/lexel-cli-${{ matrix.target }}"
             cp target/release/lexel-daemon "release-artifacts/lexel-daemon-${{ matrix.target }}"
+            cp target/release/lexel-ls "release-artifacts/lexel-ls-${{ matrix.target }}"
             find apps/lexel-desktop/src-tauri/target/release/bundle -type f -name "*.dmg" -exec cp {} release-artifacts/ \;
           else
             cp target/release/lexel "release-artifacts/lexel-cli-${{ matrix.target }}"
             cp target/release/lexel-daemon "release-artifacts/lexel-daemon-${{ matrix.target }}"
+            cp target/release/lexel-ls "release-artifacts/lexel-ls-${{ matrix.target }}"
             find apps/lexel-desktop/src-tauri/target/release/bundle -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.rpm" \) -exec cp {} release-artifacts/ \;
           fi
           ls -lh release-artifacts

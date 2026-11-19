@@ -16,13 +16,16 @@ Cloud writing tools send every draft you type to remote servers and charge month
 
 | Component | Path | Description |
 | :--- | :--- | :--- |
-| **Lexel Desktop** | `apps/lexel-desktop` | Tauri v2 + React 19 native desktop app (Linux, macOS, Windows). Manages local GGUF model downloads, surface prompts, Harper rules, privacy blocklists, profiles, Voice Memory, Quick Rewrite, and the shared browser sync bridge. |
-| **Browser Extension** | `packages/lexel-browser` | Chrome, Chromium, Brave, Edge, and Firefox Manifest V3 extension with in-page underlines, Google Docs support, floating rewrite pill, Side Panel workbench, and live sync with Lexel Desktop. |
+| **Lexel Desktop** | `apps/lexel-desktop` | Tauri v2 + React 19 native desktop Control Center (Linux, macOS, Windows). Manages GGUF downloads, surface prompts, Harper rules, Managed Websites, Weirpack Studio, Team Style Guide, Personal Text Snippets, global `Cmd/Ctrl+Shift+L` clipboard polish, local writing insights, opt-in draft history, Voice Memory, and the shared browser sync bridge. |
+| **Browser Extension** | `packages/lexel-browser` | Chrome, Chromium, Brave, Edge, and Firefox Manifest V3 extension with in-page underlines, Google Docs support, live snippet expansion, floating rewrite pill, Side Panel workbench, and "Managed by Lexel Desktop" live sync (plus standalone fallback). |
+| **Language Server (LSP)** | `crates/lexel-ls` | Zero-AI LSP server (`lexel-ls --stdio`) synced with `lexel.db` for VS Code, Cursor, Neovim, Zed, Helix, and Emacs (Harper, anti-slop, secrets guard, invisible Unicode, structure guard, style guide, Quick Fixes, and `Fix All Safe`). |
+| **VS Code Extension** | `packages/lexel-vscode` | TypeScript VS Code / Cursor / Windsurf client spawning `lexel-ls` across 18 prose, commit, and source-code languages. |
+| **Obsidian Plugin** | `packages/lexel-obsidian` | Offline Obsidian plugin with live readability/issue status bar, safe deterministic fixes, invisible Unicode cleanup, and optional local `lexel-daemon` AI rewrites. |
 | **Local Daemon** | `crates/lexel-daemon` | Shared Rust service hosting Native Messaging IPC (`com.lexel.daemon`), token-authenticated `127.0.0.1` loopback HTTP API, GGUF downloader with SHA-256 verification, and local inference lifecycle. |
-| **Core Engine** | `crates/lexel-core` | Wraps `vendor/harper` without modifying upstream files. Adds anti-slop scanning, `.weirpack` rules, surface validators, Secrets Guard, readability metrics, and Tier 2 rewrite verification. |
-| **Local Database** | `crates/lexel-db` | Single-file SQLite + FTS5 storage (`lexel.db`) for profiles, unified settings, custom surfaces, and Voice Memory. |
-| **CLI Toolkit** | `crates/lexel-cli` | Zero-AI command-line linter (`lexel check`, `stats`, `synonyms`, `title-case`, `sentence-case`, `normalize`, `weirpack`) with Text, JSON, and SARIF output for CI pipelines. |
-| **Shared UI Kit** | `packages/lexel-ui` | Shared monochrome design tokens, Tier 0 TypeScript engine, and React 19 components used by both Desktop and Browser Extension. |
+| **Core Engine** | `crates/lexel-core` | Wraps `vendor/harper` without modifying upstream files. Adds anti-slop scanning, hidden Unicode watermark cleaner, structure guard, team style guide, writing goals, `.weirpack` builder/validator, surface validators, Secrets Guard, and Tier 2 rewrite verification. |
+| **Local Database** | `crates/lexel-db` | Single-file SQLite + FTS5 storage (`lexel.db`) for profiles, unified settings, custom surfaces, Voice Memory, local numeric writing stats, and opt-in draft snapshots. |
+| **CLI Toolkit** | `crates/lexel-cli` | Zero-AI command-line linter (`lexel check`, `stats`, `synonyms`, `title-case`, `sentence-case`, `normalize`, `weirpack`, `install-git-hook`) with Text, JSON, and SARIF output for CI pipelines. |
+| **Shared UI Kit** | `packages/lexel-ui` | Shared monochrome design tokens, Tier 0 TypeScript engine, and React 19 components used across Desktop, Browser Extension, and Obsidian. |
 
 ## Quick Start for End Users
 
