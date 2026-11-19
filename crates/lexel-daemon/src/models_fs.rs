@@ -1,5 +1,5 @@
 use std::fmt::Write as _;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -23,6 +23,16 @@ pub struct InstalledModelStatus {
     pub ollama_installed: bool,
     pub approx_ram_mb: u64,
     pub size_bytes: u64,
+}
+
+/// Incremental progress update emitted while streaming a GGUF artifact.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadProgress {
+    pub model_id: String,
+    pub bytes_downloaded: u64,
+    pub total_bytes: u64,
+    pub percent: u8,
 }
 
 /// Result returned after downloading or verifying a manifest GGUF model.
@@ -105,12 +115,44 @@ pub async fn download_manifest_model(
     models_dir: &Path,
     model_id: &str,
 ) -> Result<DownloadModelReport, String> {
+    download_manifest_model_with_progress(models_dir, model_id, |_| {}).await
+}
+
+/// Download a manifest model while streaming `DownloadProgress` updates to `on_progress`.
+pub async fn download_manifest_model_with_progress<F>(
+    models_dir: &Path,
+    model_id: &str,
+    on_progress: F,
+) -> Result<DownloadModelReport, String>
+where
+    F: FnMut(DownloadProgress),
+{
     let manifest = ModelManifest::load_embedded().map_err(|e| e.to_string())?;
     let spec = manifest
         .find(model_id)
         .ok_or_else(|| format!("Unknown model id: {model_id}"))?
         .clone();
-    download_model_spec(models_dir, &spec).await
+    download_model_spec_with_progress(models_dir, &spec, on_progress).await
+}
+
+/// Delete a downloaded manifest GGUF file (and any partial `.part` file) to free local disk space.
+pub fn delete_manifest_model(models_dir: &Path, model_id: &str) -> Result<bool, String> {
+    let manifest = ModelManifest::load_embedded().map_err(|e| e.to_string())?;
+    let spec = manifest
+        .find(model_id)
+        .ok_or_else(|| format!("Unknown model id: {model_id}"))?;
+    let dest = models_dir.join(&spec.gguf_filename);
+    let part = models_dir.join(format!("{}.part", spec.gguf_filename));
+    let mut removed = false;
+    if dest.is_file() {
+        fs::remove_file(&dest).map_err(|e| format!("failed to delete model file: {e}"))?;
+        removed = true;
+    }
+    if part.is_file() {
+        let _ = fs::remove_file(&part);
+        removed = true;
+    }
+    Ok(removed)
 }
 
 /// Stream a `ModelSpec` GGUF artifact to `models_dir`, verify its size and SHA-256, and commit atomically.
@@ -118,6 +160,18 @@ pub async fn download_model_spec(
     models_dir: &Path,
     spec: &ModelSpec,
 ) -> Result<DownloadModelReport, String> {
+    download_model_spec_with_progress(models_dir, spec, |_| {}).await
+}
+
+/// Stream (or resume) a `ModelSpec` GGUF artifact with progress callbacks and SHA-256 verification.
+pub async fn download_model_spec_with_progress<F>(
+    models_dir: &Path,
+    spec: &ModelSpec,
+    mut on_progress: F,
+) -> Result<DownloadModelReport, String>
+where
+    F: FnMut(DownloadProgress),
+{
     fs::create_dir_all(models_dir)
         .map_err(|e| format!("failed to create models directory: {e}"))?;
     let dest = models_dir.join(&spec.gguf_filename);
@@ -128,6 +182,12 @@ pub async fn download_model_spec(
         && let Ok(existing_sha) = compute_file_sha256(&dest)
         && existing_sha.eq_ignore_ascii_case(&spec.sha256)
     {
+        on_progress(DownloadProgress {
+            model_id: spec.id.clone(),
+            bytes_downloaded: meta.len(),
+            total_bytes: spec.size_bytes.max(meta.len()),
+            percent: 100,
+        });
         return Ok(DownloadModelReport {
             id: spec.id.clone(),
             gguf_path: dest.display().to_string(),
@@ -139,28 +199,73 @@ pub async fn download_model_spec(
     }
 
     let part_path = models_dir.join(format!("{}.part", spec.gguf_filename));
+    let existing_part_len = fs::metadata(&part_path)
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let resume_from =
+        if existing_part_len > 0 && (spec.size_bytes == 0 || existing_part_len < spec.size_bytes) {
+            existing_part_len
+        } else {
+            0
+        };
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3600))
         .build()
         .map_err(|e| format!("failed to construct HTTP client: {e}"))?;
 
-    let mut response = client
-        .get(&spec.gguf_url)
+    let mut req = client.get(&spec.gguf_url);
+    if resume_from > 0 {
+        req = req.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
+    }
+
+    let mut response = req
         .send()
         .await
         .map_err(|e| format!("model download failed: {e}"))?;
 
-    if !response.status().is_success() {
+    let resumed = resume_from > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    if !resumed && !response.status().is_success() {
         return Err(format!(
             "model download returned HTTP {}",
             response.status()
         ));
     }
 
-    let mut file =
-        File::create(&part_path).map_err(|e| format!("failed to create temp model file: {e}"))?;
+    let expected_total = if spec.size_bytes > 0 {
+        spec.size_bytes
+    } else {
+        response
+            .content_length()
+            .map(|len| if resumed { resume_from + len } else { len })
+            .unwrap_or(0)
+    };
+
     let mut hasher = Sha256::new();
     let mut total_bytes: u64 = 0;
+
+    let mut file = if resumed {
+        hash_existing_file(&part_path, &mut hasher)
+            .map_err(|e| format!("failed to hash partial model file: {e}"))?;
+        total_bytes = resume_from;
+        OpenOptions::new()
+            .append(true)
+            .open(&part_path)
+            .map_err(|e| format!("failed to open partial model file for resume: {e}"))?
+    } else {
+        File::create(&part_path).map_err(|e| format!("failed to create temp model file: {e}"))?
+    };
+
+    let initial_pct = compute_percent(total_bytes, expected_total);
+    on_progress(DownloadProgress {
+        model_id: spec.id.clone(),
+        bytes_downloaded: total_bytes,
+        total_bytes: expected_total,
+        percent: initial_pct,
+    });
+    let mut last_reported_percent = Some(initial_pct);
 
     while let Some(chunk) = response
         .chunk()
@@ -168,15 +273,24 @@ pub async fn download_model_spec(
         .map_err(|e| format!("stream error downloading model: {e}"))?
     {
         if let Err(e) = file.write_all(&chunk) {
-            let _ = fs::remove_file(&part_path);
             return Err(format!("failed to write model chunk: {e}"));
         }
         hasher.update(&chunk);
         total_bytes += chunk.len() as u64;
+
+        let pct = compute_percent(total_bytes, expected_total);
+        if last_reported_percent != Some(pct) {
+            last_reported_percent = Some(pct);
+            on_progress(DownloadProgress {
+                model_id: spec.id.clone(),
+                bytes_downloaded: total_bytes,
+                total_bytes: expected_total.max(total_bytes),
+                percent: pct,
+            });
+        }
     }
 
     if let Err(e) = file.flush() {
-        let _ = fs::remove_file(&part_path);
         return Err(format!("failed to flush model file: {e}"));
     }
     drop(file);
@@ -203,6 +317,13 @@ pub async fn download_model_spec(
         format!("failed to move verified model into place: {e}")
     })?;
 
+    on_progress(DownloadProgress {
+        model_id: spec.id.clone(),
+        bytes_downloaded: total_bytes,
+        total_bytes: expected_total.max(total_bytes),
+        percent: 100,
+    });
+
     Ok(DownloadModelReport {
         id: spec.id.clone(),
         gguf_path: dest.display().to_string(),
@@ -211,6 +332,26 @@ pub async fn download_model_spec(
         verified: true,
         already_present: false,
     })
+}
+
+fn compute_percent(downloaded: u64, total: u64) -> u8 {
+    if total == 0 {
+        return 0;
+    }
+    ((downloaded.saturating_mul(100)) / total).min(100) as u8
+}
+
+fn hash_existing_file(path: &Path, hasher: &mut Sha256) -> std::io::Result<()> {
+    let mut file = File::open(path)?;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(())
 }
 
 fn compute_file_sha256(path: &Path) -> std::io::Result<String> {

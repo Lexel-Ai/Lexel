@@ -17,7 +17,8 @@ use tracing::info;
 
 use crate::auth::ensure_token;
 use crate::models_fs::{
-    DownloadModelReport, InstalledModelStatus, download_manifest_model, inspect_installed_models,
+    DownloadModelReport, DownloadProgress, InstalledModelStatus, delete_manifest_model,
+    download_manifest_model_with_progress, inspect_installed_models,
 };
 use crate::runtime::{RuntimeManager, RuntimeSnapshot};
 
@@ -326,9 +327,26 @@ impl DaemonService {
     }
 
     pub async fn download_model(&self, model_id: &str) -> Result<DownloadModelReport, DaemonError> {
-        download_manifest_model(self.runtime.models_dir(), model_id)
+        self.download_model_with_progress(model_id, |_| {}).await
+    }
+
+    pub async fn download_model_with_progress<F>(
+        &self,
+        model_id: &str,
+        on_progress: F,
+    ) -> Result<DownloadModelReport, DaemonError>
+    where
+        F: FnMut(DownloadProgress),
+    {
+        download_manifest_model_with_progress(self.runtime.models_dir(), model_id, on_progress)
             .await
             .map_err(DaemonError::Runtime)
+    }
+
+    pub async fn delete_model(&self, model_id: &str) -> Result<bool, DaemonError> {
+        let profile = self.active_profile()?;
+        self.runtime.unload(&profile.settings).await;
+        delete_manifest_model(self.runtime.models_dir(), model_id).map_err(DaemonError::Runtime)
     }
 
     pub async fn maybe_idle_unload(&self) {
@@ -729,6 +747,14 @@ impl DaemonService {
                     .unwrap_or("lexel-1.5b");
                 Ok(serde_json::to_value(self.download_model(model_id).await?)
                     .map_err(DbError::from)?)
+            }
+            "deleteModel" => {
+                let model_id = payload
+                    .get("modelId")
+                    .or_else(|| payload.get("model"))
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| DaemonError::BadRequest("missing modelId".to_owned()))?;
+                Ok(serde_json::json!({ "deleted": self.delete_model(model_id).await? }))
             }
             "rewrite" | "aiRewrite" => {
                 let req: RewriteRequest = serde_json::from_value(payload).map_err(DbError::from)?;

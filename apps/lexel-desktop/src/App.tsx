@@ -10,6 +10,7 @@ import {
   getDesktopEnvInfo,
   getNativeHostStatus,
   isTauriRuntime,
+  subscribeToStateChanges,
 } from './lib/desktopClient';
 import type {
   DaemonStatusPayload,
@@ -61,6 +62,33 @@ export function App() {
 
   useEffect(() => {
     void refreshAll();
+  }, [refreshAll]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void subscribeToStateChanges(() => {
+      if (active) {
+        void refreshAll();
+      }
+    }).then((fn) => {
+      if (active) {
+        unlisten = fn;
+      } else {
+        fn();
+      }
+    });
+
+    const onFocus = () => {
+      void refreshAll();
+    };
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      active = false;
+      window.removeEventListener('focus', onFocus);
+      unlisten?.();
+    };
   }, [refreshAll]);
 
   const theme = status?.activeProfile.settings.theme ?? 'dark';

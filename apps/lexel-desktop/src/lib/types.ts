@@ -8,6 +8,11 @@ import type {
 export type MainModelTier = 'lexel-0.5b' | 'lexel-1.5b' | 'custom';
 export type RuntimeKind = 'auto' | 'llama_server' | 'ollama' | 'openai_compat';
 
+export interface Hotkey {
+  modifiers: Array<'Ctrl' | 'Shift' | 'Alt'>;
+  key: string;
+}
+
 export interface InstalledModelStatus {
   id: string;
   tier: string;
@@ -53,6 +58,7 @@ export interface UnifiedDaemonSettings {
   activationKey: 'off' | 'shift' | 'control';
   lintDelayMs: number;
   defaultEnable: boolean;
+  hotkey?: Hotkey;
   lintConfig: Record<string, boolean | null>;
   userDictionary: string[];
   ignoredLints: string;
@@ -86,8 +92,15 @@ export interface DaemonStatusPayload {
   models: InstalledModelStatus[];
 }
 
+export interface ToggleAiResponse {
+  activeProfile: DaemonProfile;
+  activated: boolean;
+  activationError: string | null;
+  runtime: DaemonRuntimeSnapshot;
+}
+
 export interface HarperRuleInfo {
-  name: string;
+  id: string;
   description: string;
   defaultEnabled: boolean;
   enabled: boolean;
@@ -101,34 +114,36 @@ export interface HarperRulesPayload {
 }
 
 export interface HarperDiagnosticItem {
-  span: { start: number; end: number };
+  rule: string;
+  lintKind: string;
   message: string;
   problemText: string;
-  lintKind: string;
+  start: number;
+  end: number;
   suggestions: string[];
 }
 
 export interface RustSlopHit {
+  term: string;
   start: number;
   end: number;
-  term: string;
-  replacement: string | null;
-  category: string;
+  isEmDash: boolean;
+  suggestion?: string | null;
 }
 
 export interface RustSurfaceViolation {
-  start: number;
-  end: number;
   kind: string;
   message: string;
-  problemText: string;
+  start: number;
+  end: number;
 }
 
 export interface RustSecretMatch {
+  kind: string;
+  label: string;
   start: number;
   end: number;
-  kind: string;
-  masked: string;
+  maskedPreview: string;
 }
 
 export interface Tier0CheckResponse {
@@ -194,6 +209,13 @@ export interface DownloadModelReport {
   sha256: string;
   verified: boolean;
   alreadyPresent: boolean;
+}
+
+export interface DownloadProgress {
+  modelId: string;
+  bytesDownloaded: number;
+  totalBytes: number;
+  percent: number;
 }
 
 export type DesktopTabId = 'studio' | 'surfaces' | 'rules' | 'system';

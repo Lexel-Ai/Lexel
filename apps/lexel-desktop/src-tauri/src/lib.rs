@@ -1,15 +1,19 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
-use lexel_daemon::http::build_router;
-use lexel_daemon::native_messaging::{NATIVE_HOST_NAME, install_native_hosts};
+use lexel_daemon::http::build_router_with_notifier;
+use lexel_daemon::models_fs::DownloadModelReport;
+use lexel_daemon::native_messaging::{
+    NATIVE_HOST_NAME, install_native_hosts, native_manifest_targets, run_stdio_loop,
+};
 use lexel_daemon::service::DaemonService;
 use lexel_db::{default_data_dir, default_db_path, default_models_dir, default_token_path};
 use serde::Serialize;
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 
@@ -49,7 +53,43 @@ pub struct NativeHostStatusReport {
     pub targets: Vec<NativeHostTargetStatus>,
 }
 
-fn find_daemon_binary() -> Option<PathBuf> {
+/// Detect when Chrome/Firefox launches this executable directly as a Native Messaging host.
+pub fn should_run_native_messaging_stdio() -> bool {
+    std::env::args().skip(1).any(|arg| {
+        arg == "native-messaging"
+            || arg == "--native-messaging"
+            || arg.starts_with("chrome-extension://")
+            || arg.starts_with("moz-extension://")
+            || arg.ends_with("com.lexel.daemon.json")
+    })
+}
+
+/// Run headless Native Messaging stdio IPC without initializing a desktop window.
+pub fn run_headless_native_messaging() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to start Tokio runtime for native messaging");
+    rt.block_on(async {
+        let data_dir = default_data_dir();
+        let service = Arc::new(
+            DaemonService::open(
+                data_dir,
+                default_db_path(),
+                default_models_dir(),
+                default_token_path(),
+                DEFAULT_HTTP_PORT,
+            )
+            .expect("failed to open lexel.db for native messaging"),
+        );
+        let _ = service.token();
+        if let Err(err) = run_stdio_loop(service).await {
+            error!("native messaging stdio loop failed: {err}");
+        }
+    });
+}
+
+fn find_daemon_binary(data_dir: &Path) -> Option<PathBuf> {
     let exe_name = if cfg!(windows) {
         "lexel-daemon.exe"
     } else {
@@ -63,6 +103,11 @@ fn find_daemon_binary() -> Option<PathBuf> {
         if sibling.is_file() {
             return Some(sibling);
         }
+    }
+
+    let local_bin = data_dir.join("bin").join(exe_name);
+    if local_bin.is_file() {
+        return Some(local_bin);
     }
 
     // Fallback to workspace target builds when running in `cargo tauri dev`.
@@ -83,68 +128,8 @@ fn find_daemon_binary() -> Option<PathBuf> {
         }
     }
 
-    None
-}
-
-fn native_manifest_targets() -> Vec<(&'static str, PathBuf)> {
-    let Some(home) = dirs::home_dir() else {
-        return Vec::new();
-    };
-    let filename = format!("{NATIVE_HOST_NAME}.json");
-
-    #[cfg(target_os = "macos")]
-    {
-        let app_sup = home.join("Library/Application Support");
-        vec![
-            (
-                "Google Chrome",
-                app_sup
-                    .join("Google/Chrome/NativeMessagingHosts")
-                    .join(&filename),
-            ),
-            (
-                "Chromium",
-                app_sup
-                    .join("Chromium/NativeMessagingHosts")
-                    .join(&filename),
-            ),
-            (
-                "Brave",
-                app_sup
-                    .join("BraveSoftware/Brave-Browser/NativeMessagingHosts")
-                    .join(&filename),
-            ),
-            (
-                "Firefox",
-                app_sup.join("Mozilla/NativeMessagingHosts").join(&filename),
-            ),
-        ]
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let cfg = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
-        vec![
-            (
-                "Google Chrome",
-                cfg.join("google-chrome/NativeMessagingHosts")
-                    .join(&filename),
-            ),
-            (
-                "Chromium",
-                cfg.join("chromium/NativeMessagingHosts").join(&filename),
-            ),
-            (
-                "Brave",
-                cfg.join("BraveSoftware/Brave-Browser/NativeMessagingHosts")
-                    .join(&filename),
-            ),
-            (
-                "Firefox",
-                home.join(".mozilla/native-messaging-hosts").join(&filename),
-            ),
-        ]
-    }
+    // Fall back to the standalone Desktop binary itself, which supports headless `native-messaging`.
+    std::env::current_exe().ok().filter(|p| p.is_file())
 }
 
 #[tauri::command]
@@ -160,6 +145,20 @@ async fn daemon_rpc(
 }
 
 #[tauri::command]
+async fn download_model_with_progress(
+    app: AppHandle,
+    service: State<'_, Arc<DaemonService>>,
+    model_id: String,
+) -> Result<DownloadModelReport, String> {
+    service
+        .download_model_with_progress(&model_id, |progress| {
+            let _ = app.emit("lexel://model-download-progress", progress);
+        })
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn desktop_env_info(service: State<'_, Arc<DaemonService>>) -> DesktopEnvInfo {
     DesktopEnvInfo {
         platform: std::env::consts::OS,
@@ -167,13 +166,13 @@ fn desktop_env_info(service: State<'_, Arc<DaemonService>>) -> DesktopEnvInfo {
         data_dir: service.data_dir.display().to_string(),
         db_path: default_db_path().display().to_string(),
         models_dir: default_models_dir().display().to_string(),
-        daemon_bin: find_daemon_binary().map(|p| p.display().to_string()),
+        daemon_bin: find_daemon_binary(&service.data_dir).map(|p| p.display().to_string()),
     }
 }
 
 #[tauri::command]
-fn native_host_status() -> NativeHostStatusReport {
-    let targets = native_manifest_targets()
+fn native_host_status(service: State<'_, Arc<DaemonService>>) -> NativeHostStatusReport {
+    let targets = native_manifest_targets(&service.data_dir)
         .into_iter()
         .map(|(browser, path)| NativeHostTargetStatus {
             browser: browser.to_owned(),
@@ -184,7 +183,7 @@ fn native_host_status() -> NativeHostStatusReport {
 
     NativeHostStatusReport {
         host_name: NATIVE_HOST_NAME,
-        daemon_bin: find_daemon_binary().map(|p| p.display().to_string()),
+        daemon_bin: find_daemon_binary(&service.data_dir).map(|p| p.display().to_string()),
         targets,
     }
 }
@@ -194,9 +193,8 @@ fn install_native_messaging(
     service: State<'_, Arc<DaemonService>>,
     extension_ids: Vec<String>,
 ) -> Result<NativeHostInstallReport, String> {
-    let daemon_bin = find_daemon_binary().ok_or_else(|| {
-        "Could not locate `lexel-daemon` binary. Run `cargo build -p lexel-daemon` first."
-            .to_owned()
+    let daemon_bin = find_daemon_binary(&service.data_dir).ok_or_else(|| {
+        "Could not locate `lexel-daemon` binary or Desktop executable.".to_owned()
     })?;
     let clean_ids: Vec<String> = extension_ids
         .into_iter()
@@ -233,12 +231,15 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             "open-main" => show_main_window(app),
             "unload-ai" => {
                 let service: Arc<DaemonService> = app.state::<Arc<DaemonService>>().inner().clone();
+                let handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(err) = service
                         .dispatch_rpc("unloadAi", serde_json::json!({}))
                         .await
                     {
                         error!("failed to unload local AI from tray: {err}");
+                    } else {
+                        let _ = handle.emit("lexel://state-changed", "ai");
                     }
                 });
             }
@@ -271,15 +272,29 @@ pub fn run() {
     );
 
     let shared_http_service = Arc::clone(&service);
+    let idle_service = Arc::clone(&service);
+    let shutdown_service = Arc::clone(&service);
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(service)
         .setup(move |app| {
             setup_tray(app.handle())?;
 
-            // Host the single shared loopback daemon so Chrome/Firefox Native Messaging
-            // forwards AI rewrites here and reuses the one GGUF model in RAM.
+            // Enforce configured idle auto-unload TTL inside Desktop mode too.
+            let idle_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(15));
+                loop {
+                    ticker.tick().await;
+                    idle_service.maybe_idle_unload().await;
+                    let _ = &idle_handle;
+                }
+            });
+
+            // Host the shared loopback daemon so Chrome/Firefox Native Messaging shares one model
+            // in RAM and notifies the Desktop UI immediately on external setting changes.
             let daemon_service = Arc::clone(&shared_http_service);
+            let event_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 match daemon_service.token() {
                     Ok(token) => {
@@ -287,7 +302,11 @@ pub fn run() {
                         match TcpListener::bind(addr).await {
                             Ok(listener) => {
                                 info!(%addr, "Lexel Desktop hosting shared daemon HTTP bridge");
-                                let router = build_router(daemon_service, token);
+                                let notifier = Arc::new(move |kind: &str| {
+                                    let _ = event_handle.emit("lexel://state-changed", kind);
+                                });
+                                let router =
+                                    build_router_with_notifier(daemon_service, token, Some(notifier));
                                 if let Err(err) = axum::serve(listener, router).await {
                                     warn!("shared daemon server exited: {err}");
                                 }
@@ -309,10 +328,17 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             daemon_rpc,
+            download_model_with_progress,
             desktop_env_info,
             native_host_status,
             install_native_messaging,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Lexel Desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Lexel Desktop");
+
+    app.run(move |_app_handle, event| {
+        if let RunEvent::Exit = event {
+            tauri::async_runtime::block_on(shutdown_service.shutdown());
+        }
+    });
 }

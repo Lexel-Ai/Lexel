@@ -47,7 +47,7 @@ enum Commands {
     },
     /// Set the active profile's main AI model (0.5b, 1.5b, or custom).
     SetMainModel { model: String },
-    /// Print (or create) the local Bearer token used to pair Lexel Lab or CLI tools.
+    /// Print (or create) the local Bearer token used to pair CLI tools or local HTTP clients.
     Token,
     /// Print daemon, model, and active profile status as JSON.
     Status,

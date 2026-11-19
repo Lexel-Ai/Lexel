@@ -60,34 +60,135 @@ pub fn write_frame<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> {
     writer.flush()
 }
 
-/// Forward runtime-stateful RPC commands to a running Desktop/daemon loopback server
-/// so the browser extension shares one loaded AI model in RAM instead of spawning a second one.
+/// Forward runtime-stateful and mutating RPC commands to a running Desktop/daemon loopback server
+/// so the browser extension shares one loaded AI model in RAM and triggers live UI updates in Desktop.
 pub async fn forward_rpc_to_loopback(
     http_port: u16,
     token: &str,
     kind: &str,
     payload: &serde_json::Value,
 ) -> Option<Result<serde_json::Value, String>> {
-    let (method, path) = match kind {
-        "status" => (reqwest::Method::GET, "/v1/status"),
-        "toggleAi" => (reqwest::Method::POST, "/v1/ai/toggle"),
-        "setMainModel" => (reqwest::Method::POST, "/v1/ai/main-model"),
-        "unloadAi" => (reqwest::Method::POST, "/v1/ai/unload"),
-        "downloadModel" => (reqwest::Method::POST, "/v1/models/download"),
-        "rewrite" | "aiRewrite" => (reqwest::Method::POST, "/v1/rewrite"),
-        _ => return None,
-    };
+    let (method, path, body_payload): (reqwest::Method, String, Option<serde_json::Value>) =
+        match kind {
+            "status" => (reqwest::Method::GET, "/v1/status".to_owned(), None),
+            "toggleAi" => (
+                reqwest::Method::POST,
+                "/v1/ai/toggle".to_owned(),
+                Some(payload.clone()),
+            ),
+            "setMainModel" => (
+                reqwest::Method::POST,
+                "/v1/ai/main-model".to_owned(),
+                Some(payload.clone()),
+            ),
+            "unloadAi" => (reqwest::Method::POST, "/v1/ai/unload".to_owned(), None),
+            "downloadModel" => (
+                reqwest::Method::POST,
+                "/v1/models/download".to_owned(),
+                Some(payload.clone()),
+            ),
+            "deleteModel" => {
+                let id = payload
+                    .get("modelId")
+                    .or_else(|| payload.get("model"))
+                    .and_then(|v| v.as_str())?;
+                (reqwest::Method::DELETE, format!("/v1/models/{id}"), None)
+            }
+            "rewrite" | "aiRewrite" => (
+                reqwest::Method::POST,
+                "/v1/rewrite".to_owned(),
+                Some(payload.clone()),
+            ),
+            "patchSettings" => {
+                let patch = payload
+                    .get("patch")
+                    .cloned()
+                    .unwrap_or_else(|| payload.clone());
+                (
+                    reqwest::Method::PATCH,
+                    "/v1/settings".to_owned(),
+                    Some(patch),
+                )
+            }
+            "updateSettings" => {
+                let settings = payload
+                    .get("settings")
+                    .cloned()
+                    .unwrap_or_else(|| payload.clone());
+                (
+                    reqwest::Method::PUT,
+                    "/v1/settings".to_owned(),
+                    Some(settings),
+                )
+            }
+            "createProfile" => (
+                reqwest::Method::POST,
+                "/v1/profiles".to_owned(),
+                Some(payload.clone()),
+            ),
+            "switchProfile" => (
+                reqwest::Method::POST,
+                "/v1/profiles/switch".to_owned(),
+                Some(payload.clone()),
+            ),
+            "renameProfile" => {
+                let id = payload.get("profileId").and_then(|v| v.as_str())?;
+                (
+                    reqwest::Method::PATCH,
+                    format!("/v1/profiles/{id}"),
+                    Some(payload.clone()),
+                )
+            }
+            "deleteProfile" => {
+                let id = payload.get("profileId").and_then(|v| v.as_str())?;
+                (reqwest::Method::DELETE, format!("/v1/profiles/{id}"), None)
+            }
+            "applyRulePreset" => (
+                reqwest::Method::POST,
+                "/v1/harper/apply-preset".to_owned(),
+                Some(payload.clone()),
+            ),
+            "saveVoiceExample" => {
+                let ex = payload
+                    .get("example")
+                    .cloned()
+                    .unwrap_or_else(|| payload.clone());
+                (
+                    reqwest::Method::POST,
+                    "/v1/voice-examples".to_owned(),
+                    Some(ex),
+                )
+            }
+            "deleteVoiceExample" => {
+                let id = payload.get("id").and_then(|v| v.as_str())?;
+                (
+                    reqwest::Method::DELETE,
+                    format!("/v1/voice-examples/{id}"),
+                    None,
+                )
+            }
+            "importBackup" => {
+                let backup = payload
+                    .get("backup")
+                    .cloned()
+                    .unwrap_or_else(|| payload.clone());
+                (reqwest::Method::POST, "/v1/import".to_owned(), Some(backup))
+            }
+            "purgeAll" => (reqwest::Method::POST, "/v1/purge".to_owned(), None),
+            _ => return None,
+        };
 
+    let timeout_secs = if kind == "downloadModel" { 3600 } else { 120 };
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_millis(250))
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .build()
         .ok()?;
 
     let url = format!("http://127.0.0.1:{http_port}{path}");
-    let mut req = client.request(method.clone(), &url).bearer_auth(token);
-    if method == reqwest::Method::POST {
-        req = req.json(payload);
+    let mut req = client.request(method, &url).bearer_auth(token);
+    if let Some(body) = body_payload {
+        req = req.json(&body);
     }
 
     let resp = match req.send().await {
@@ -214,18 +315,173 @@ pub fn install_native_hosts(
     });
 
     let mut written = Vec::new();
-    for dir in chromium_manifest_dirs() {
-        if let Some(path) = write_manifest(&dir, &chrome_manifest)? {
-            written.push(path);
+
+    #[cfg(target_os = "windows")]
+    {
+        let manifest_dir = data_dir.join("native-messaging");
+        fs::create_dir_all(&manifest_dir)?;
+        let chrome_path = manifest_dir.join(format!("{NATIVE_HOST_NAME}.chrome.json"));
+        let firefox_path = manifest_dir.join(format!("{NATIVE_HOST_NAME}.firefox.json"));
+        fs::write(
+            &chrome_path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&chrome_manifest).map_err(io::Error::other)?
+            ),
+        )?;
+        fs::write(
+            &firefox_path,
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&firefox_manifest).map_err(io::Error::other)?
+            ),
+        )?;
+        written.push(chrome_path.clone());
+        written.push(firefox_path.clone());
+
+        let chrome_str = chrome_path.display().to_string();
+        let firefox_str = firefox_path.display().to_string();
+        for key in [
+            format!(r"HKCU\Software\Google\Chrome\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
+            format!(r"HKCU\Software\Chromium\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
+            format!(
+                r"HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\{NATIVE_HOST_NAME}"
+            ),
+            format!(r"HKCU\Software\Microsoft\Edge\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
+        ] {
+            register_windows_native_host(&key, &chrome_str)?;
         }
+        register_windows_native_host(
+            &format!(r"HKCU\Software\Mozilla\NativeMessagingHosts\{NATIVE_HOST_NAME}"),
+            &firefox_str,
+        )?;
     }
-    for dir in firefox_manifest_dirs() {
-        if let Some(path) = write_manifest(&dir, &firefox_manifest)? {
-            written.push(path);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for dir in chromium_manifest_dirs() {
+            if let Some(path) = write_manifest(&dir, &chrome_manifest)? {
+                written.push(path);
+            }
+        }
+        for dir in firefox_manifest_dirs() {
+            if let Some(path) = write_manifest(&dir, &firefox_manifest)? {
+                written.push(path);
+            }
         }
     }
 
     Ok(written)
+}
+
+/// Return the canonical `(browser_label, manifest_path)` list inspected for Native Messaging status.
+pub fn native_manifest_targets(data_dir: &Path) -> Vec<(&'static str, PathBuf)> {
+    #[cfg(target_os = "windows")]
+    {
+        let manifest_dir = data_dir.join("native-messaging");
+        let chrome_path = manifest_dir.join(format!("{NATIVE_HOST_NAME}.chrome.json"));
+        let firefox_path = manifest_dir.join(format!("{NATIVE_HOST_NAME}.firefox.json"));
+        vec![
+            ("Google Chrome", chrome_path.clone()),
+            ("Chromium", chrome_path.clone()),
+            ("Brave", chrome_path.clone()),
+            ("Microsoft Edge", chrome_path),
+            ("Firefox", firefox_path),
+        ]
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = data_dir;
+        let Some(home) = dirs::home_dir() else {
+            return Vec::new();
+        };
+        let filename = format!("{NATIVE_HOST_NAME}.json");
+        #[cfg(target_os = "macos")]
+        {
+            let app_sup = home.join("Library/Application Support");
+            vec![
+                (
+                    "Google Chrome",
+                    app_sup
+                        .join("Google/Chrome/NativeMessagingHosts")
+                        .join(&filename),
+                ),
+                (
+                    "Chromium",
+                    app_sup
+                        .join("Chromium/NativeMessagingHosts")
+                        .join(&filename),
+                ),
+                (
+                    "Brave",
+                    app_sup
+                        .join("BraveSoftware/Brave-Browser/NativeMessagingHosts")
+                        .join(&filename),
+                ),
+                (
+                    "Microsoft Edge",
+                    app_sup
+                        .join("Microsoft Edge/NativeMessagingHosts")
+                        .join(&filename),
+                ),
+                (
+                    "Firefox",
+                    app_sup.join("Mozilla/NativeMessagingHosts").join(&filename),
+                ),
+            ]
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let cfg = dirs::config_dir().unwrap_or_else(|| home.join(".config"));
+            vec![
+                (
+                    "Google Chrome",
+                    cfg.join("google-chrome/NativeMessagingHosts")
+                        .join(&filename),
+                ),
+                (
+                    "Chromium",
+                    cfg.join("chromium/NativeMessagingHosts").join(&filename),
+                ),
+                (
+                    "Brave",
+                    cfg.join("BraveSoftware/Brave-Browser/NativeMessagingHosts")
+                        .join(&filename),
+                ),
+                (
+                    "Microsoft Edge",
+                    cfg.join("microsoft-edge/NativeMessagingHosts")
+                        .join(&filename),
+                ),
+                (
+                    "Firefox",
+                    home.join(".mozilla/native-messaging-hosts").join(&filename),
+                ),
+            ]
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn register_windows_native_host(reg_key: &str, manifest_path: &str) -> io::Result<()> {
+    let status = std::process::Command::new("reg")
+        .args([
+            "add",
+            reg_key,
+            "/ve",
+            "/t",
+            "REG_SZ",
+            "/d",
+            manifest_path,
+            "/f",
+        ])
+        .status()?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "reg add failed for {reg_key} with status {status}"
+        )));
+    }
+    Ok(())
 }
 
 fn prepare_host_executable(daemon_bin: &Path, data_dir: &Path) -> io::Result<PathBuf> {
@@ -244,13 +500,26 @@ fn prepare_host_executable(daemon_bin: &Path, data_dir: &Path) -> io::Result<Pat
         fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))?;
         Ok(wrapper)
     }
-    #[cfg(not(unix))]
+    #[cfg(target_os = "windows")]
+    {
+        let bin_dir = data_dir.join("bin");
+        fs::create_dir_all(&bin_dir)?;
+        let wrapper = bin_dir.join("lexel-native-host.cmd");
+        let script = format!(
+            "@echo off\r\n\"{}\" native-messaging %*\r\n",
+            abs_bin.display()
+        );
+        fs::write(&wrapper, script)?;
+        Ok(wrapper)
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         let _ = data_dir;
         Ok(abs_bin)
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn write_manifest(dir: &Path, payload: &serde_json::Value) -> io::Result<Option<PathBuf>> {
     fs::create_dir_all(dir)?;
     let path = dir.join(format!("{NATIVE_HOST_NAME}.json"));
@@ -259,6 +528,7 @@ fn write_manifest(dir: &Path, payload: &serde_json::Value) -> io::Result<Option<
     Ok(Some(path))
 }
 
+#[cfg(not(target_os = "windows"))]
 fn chromium_manifest_dirs() -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
@@ -270,6 +540,7 @@ fn chromium_manifest_dirs() -> Vec<PathBuf> {
             app_sup.join("Google/Chrome/NativeMessagingHosts"),
             app_sup.join("Chromium/NativeMessagingHosts"),
             app_sup.join("BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+            app_sup.join("Microsoft Edge/NativeMessagingHosts"),
         ]
     }
     #[cfg(not(target_os = "macos"))]
@@ -279,10 +550,12 @@ fn chromium_manifest_dirs() -> Vec<PathBuf> {
             cfg.join("google-chrome/NativeMessagingHosts"),
             cfg.join("chromium/NativeMessagingHosts"),
             cfg.join("BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+            cfg.join("microsoft-edge/NativeMessagingHosts"),
         ]
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn firefox_manifest_dirs() -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();

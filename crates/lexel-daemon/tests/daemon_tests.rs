@@ -280,12 +280,21 @@ async fn downloads_verifies_sha256_and_forwards_runtime_rpc_to_running_daemon() 
     assert!(err.contains("SHA-256 verification failed"));
     assert!(!models_dir.join("bad.gguf").exists());
 
-    // Loopback forwarding reaches live daemon when up and returns None when down.
+    // Loopback forwarding reaches live daemon when up, fires state-change notifications on writes,
+    // and returns None when down.
     let token = ensure_token(&token_path).expect("token");
     let service = Arc::new(
         DaemonService::open_in_memory(tmp.clone(), models_dir, token_path, 42424).expect("service"),
     );
-    let rpc_router = build_router(Arc::clone(&service), token.clone());
+    let notified = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let notified_clone = Arc::clone(&notified);
+    let rpc_router = lexel_daemon::http::build_router_with_notifier(
+        Arc::clone(&service),
+        token.clone(),
+        Some(Arc::new(move |kind: &str| {
+            notified_clone.lock().unwrap().push(kind.to_owned());
+        })),
+    );
     let rpc_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let rpc_port = rpc_listener.local_addr().unwrap().port();
     let rpc_server = tokio::spawn(async move {
@@ -297,6 +306,19 @@ async fn downloads_verifies_sha256_and_forwards_runtime_rpc_to_running_daemon() 
         .expect("daemon should answer")
         .expect("forwarded status ok");
     assert_eq!(forwarded["activeProfile"]["name"], "Default");
+
+    let patched = forward_rpc_to_loopback(
+        rpc_port,
+        &token,
+        "patchSettings",
+        &serde_json::json!({ "patch": { "theme": "light", "dialect": 1 } }),
+    )
+    .await
+    .expect("daemon should answer patchSettings")
+    .expect("forwarded patchSettings ok");
+    assert_eq!(patched["settings"]["theme"], "light");
+    assert_eq!(patched["settings"]["dialect"], 1);
+    assert!(notified.lock().unwrap().iter().any(|k| k == "settings"));
 
     rpc_server.abort();
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;

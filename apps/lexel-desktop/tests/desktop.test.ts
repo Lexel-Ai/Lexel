@@ -57,11 +57,18 @@ describe('lexel-desktop client & catalog', () => {
 
   it('runs deterministic Tier 0 check, safe rewrite, and Native Host inspection', async () => {
     const diag = await daemonRpc<Tier0CheckResponse>('tier0Check', {
-      text: 'In todays fast-paced landscape — delve into #rust',
+      text: 'In todays fast-paced landscape — delve into #rust with sk-proj-abc1234567890abcdef123456',
       surfaceId: 'web_reddit',
     });
     expect(diag.slop.length).toBeGreaterThanOrEqual(2);
+    expect(diag.slop.some((s) => s.isEmDash)).toBe(true);
     expect(diag.surface.length).toBeGreaterThanOrEqual(1);
+    expect(diag.secrets.length).toBe(1);
+    expect(diag.secrets[0].maskedPreview).toContain('***');
+
+    const rules = await daemonRpc<{ rules: Array<{ id: string; enabled: boolean }> }>('harperRules');
+    expect(rules.rules.length).toBeGreaterThan(0);
+    expect(rules.rules[0].id).toBeTruthy();
 
     const rewrite = await rewriteWithTask({
       text: 'We delve into latency.',
@@ -76,6 +83,7 @@ describe('lexel-desktop client & catalog', () => {
     expect(env.dbPath).toContain('lexel.db');
     const native = await getNativeHostStatus();
     expect(native.hostName).toBe('com.lexel.daemon');
+    expect(native.targets.some((t) => t.browser === 'Microsoft Edge')).toBe(true);
     expect(HARPER_RULE_PRESETS.length).toBeGreaterThanOrEqual(3);
     await expect(downloadModel('lexel-0.5b')).rejects.toThrow(/native Lexel Desktop app/i);
   });

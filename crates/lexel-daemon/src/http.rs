@@ -17,10 +17,21 @@ use crate::service::{
     TitleCaseRequest,
 };
 
+pub type StateChangeHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 #[derive(Clone)]
 struct AppState {
     service: Arc<DaemonService>,
     token: String,
+    on_change: Option<StateChangeHook>,
+}
+
+impl AppState {
+    fn notify(&self, event: &str) {
+        if let Some(hook) = &self.on_change {
+            hook(event);
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,7 +83,20 @@ fn default_true() -> bool {
 
 /// Build the token-authenticated, strict-Origin loopback Axum router.
 pub fn build_router(service: Arc<DaemonService>, token: String) -> Router {
-    let state = AppState { service, token };
+    build_router_with_notifier(service, token, None)
+}
+
+/// Build the loopback Axum router with an optional hook fired after any mutating state change.
+pub fn build_router_with_notifier(
+    service: Arc<DaemonService>,
+    token: String,
+    on_change: Option<StateChangeHook>,
+) -> Router {
+    let state = AppState {
+        service,
+        token,
+        on_change,
+    };
 
     let protected = Router::new()
         .route("/v1/status", get(get_status))
@@ -90,6 +114,7 @@ pub fn build_router(service: Arc<DaemonService>, token: String) -> Router {
         .route("/v1/ai/main-model", post(post_ai_main_model))
         .route("/v1/ai/unload", post(post_ai_unload))
         .route("/v1/models/download", post(post_download_model))
+        .route("/v1/models/{id}", delete(delete_model))
         .route("/v1/rewrite", post(post_rewrite))
         .route("/v1/harper/rules", get(get_harper_rules))
         .route("/v1/harper/structured-rules", get(get_structured_rules))
@@ -243,6 +268,7 @@ async fn post_profile(
         state
             .service
             .create_profile(&body.name, body.clone_from_active, body.activate)?;
+    state.notify("profiles");
     Ok(Json(profile))
 }
 
@@ -250,7 +276,9 @@ async fn post_switch_profile(
     State(state): State<AppState>,
     Json(body): Json<SwitchProfileBody>,
 ) -> Result<impl IntoResponse, DaemonError> {
-    Ok(Json(state.service.switch_profile(&body.profile_id)?))
+    let profile = state.service.switch_profile(&body.profile_id)?;
+    state.notify("profiles");
+    Ok(Json(profile))
 }
 
 async fn patch_profile(
@@ -258,14 +286,18 @@ async fn patch_profile(
     Path(id): Path<String>,
     Json(body): Json<RenameProfileBody>,
 ) -> Result<impl IntoResponse, DaemonError> {
-    Ok(Json(state.service.rename_profile(&id, &body.name)?))
+    let profile = state.service.rename_profile(&id, &body.name)?;
+    state.notify("profiles");
+    Ok(Json(profile))
 }
 
 async fn delete_profile(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, DaemonError> {
-    Ok(Json(state.service.delete_profile(&id)?))
+    let profile = state.service.delete_profile(&id)?;
+    state.notify("profiles");
+    Ok(Json(profile))
 }
 
 async fn get_settings(State(state): State<AppState>) -> Result<impl IntoResponse, DaemonError> {
@@ -281,6 +313,7 @@ async fn put_settings(
     Json(settings): Json<UnifiedSettings>,
 ) -> Result<impl IntoResponse, DaemonError> {
     let profile = state.service.update_settings(&settings)?;
+    state.notify("settings");
     Ok(Json(serde_json::json!({
         "profile": profile,
         "settings": profile.settings,
@@ -292,6 +325,7 @@ async fn patch_settings(
     Json(patch): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, DaemonError> {
     let profile = state.service.patch_settings(patch)?;
+    state.notify("settings");
     Ok(Json(serde_json::json!({
         "profile": profile,
         "settings": profile.settings,
@@ -302,18 +336,24 @@ async fn post_ai_toggle(
     State(state): State<AppState>,
     Json(body): Json<ToggleAiBody>,
 ) -> Result<impl IntoResponse, DaemonError> {
-    Ok(Json(state.service.toggle_ai(body.enabled).await?))
+    let res = state.service.toggle_ai(body.enabled).await?;
+    state.notify("ai");
+    Ok(Json(res))
 }
 
 async fn post_ai_main_model(
     State(state): State<AppState>,
     Json(body): Json<SetMainModelBody>,
 ) -> Result<impl IntoResponse, DaemonError> {
-    Ok(Json(state.service.set_main_model(&body.model).await?))
+    let res = state.service.set_main_model(&body.model).await?;
+    state.notify("ai");
+    Ok(Json(res))
 }
 
 async fn post_ai_unload(State(state): State<AppState>) -> Result<impl IntoResponse, DaemonError> {
-    Ok(Json(state.service.unload_ai().await?))
+    let res = state.service.unload_ai().await?;
+    state.notify("ai");
+    Ok(Json(res))
 }
 
 async fn post_rewrite(
@@ -337,7 +377,9 @@ async fn post_harper_apply_preset(
     State(state): State<AppState>,
     Json(body): Json<ApplyPresetRequest>,
 ) -> Result<impl IntoResponse, DaemonError> {
-    Ok(Json(state.service.apply_rule_preset(&body.preset)?))
+    let res = state.service.apply_rule_preset(&body.preset)?;
+    state.notify("settings");
+    Ok(Json(res))
 }
 
 async fn post_tier0_check(
@@ -417,6 +459,7 @@ async fn post_voice_example(
     Json(body): Json<SaveVoiceRequest>,
 ) -> Result<impl IntoResponse, DaemonError> {
     let example = state.service.save_voice_example(body)?;
+    state.notify("voice");
     Ok(Json(serde_json::json!({ "example": example })))
 }
 
@@ -425,6 +468,7 @@ async fn delete_voice_example(
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, DaemonError> {
     let deleted = state.service.delete_voice_example(&id)?;
+    state.notify("voice");
     Ok(Json(serde_json::json!({ "deleted": deleted })))
 }
 
@@ -436,16 +480,31 @@ async fn post_import(
     State(state): State<AppState>,
     Json(backup): Json<DatabaseBackup>,
 ) -> Result<impl IntoResponse, DaemonError> {
-    Ok(Json(state.service.import_backup(backup)?))
+    let res = state.service.import_backup(backup)?;
+    state.notify("backup");
+    Ok(Json(res))
 }
 
 async fn post_purge(State(state): State<AppState>) -> Result<impl IntoResponse, DaemonError> {
-    Ok(Json(state.service.purge_all().await?))
+    let res = state.service.purge_all().await?;
+    state.notify("purge");
+    Ok(Json(res))
 }
 
 async fn post_download_model(
     State(state): State<AppState>,
     Json(body): Json<DownloadModelBody>,
 ) -> Result<impl IntoResponse, DaemonError> {
-    Ok(Json(state.service.download_model(&body.model_id).await?))
+    let res = state.service.download_model(&body.model_id).await?;
+    state.notify("models");
+    Ok(Json(res))
+}
+
+async fn delete_model(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, DaemonError> {
+    let deleted = state.service.delete_model(&id).await?;
+    state.notify("models");
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
 }

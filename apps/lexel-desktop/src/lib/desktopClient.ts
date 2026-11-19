@@ -1,7 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
   applyRulePreset,
   applySafeDeterministicFixesShared,
+  normalizeTypography,
   resolveSurfaceProfileShared,
   scanSecretsAndPii,
   scanTier0DiagnosticsShared,
@@ -17,6 +19,7 @@ import type {
   DaemonStatusPayload,
   DesktopEnvInfo,
   DownloadModelReport,
+  DownloadProgress,
   HarperRulesPayload,
   NativeHostInstallReport,
   NativeHostStatusReport,
@@ -63,21 +66,30 @@ export function createDefaultSettings(): UnifiedDaemonSettings {
     runtime: 'auto',
     ollamaEndpoint: 'http://127.0.0.1:11434',
     openaiCompatEndpoint: 'http://127.0.0.1:8080',
-    temperature: 0.25,
+    temperature: 0.3,
     maxTokens: 280,
-    idleUnloadSecs: 300,
+    idleUnloadSecs: 180,
     keepWarm: false,
     saveVoiceMemory: true,
     dialect: 0,
     isolateEnglish: false,
     openSuggestionsOnHover: true,
     activationKey: 'off',
-    lintDelayMs: 60,
+    lintDelayMs: 0,
     defaultEnable: true,
+    hotkey: { modifiers: ['Alt'], key: 'l' },
     lintConfig: {},
     userDictionary: ['Lexel', 'Harper', 'Weirpack'],
     ignoredLints: '',
-    privacyBlocklist: ['mail.google.com', '*.bankofamerica.com'],
+    privacyBlocklist: [
+      '1password.com',
+      'bitwarden.com',
+      'accounts.google.com',
+      'chase.com',
+      'bankofamerica.com',
+      'paypal.com',
+      'stripe.com',
+    ],
     domainStatuses: {},
     surfaceOverrides: {},
     languageMode: 'plaintext',
@@ -212,6 +224,18 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
       savePreviewStore(store);
       return found;
     }
+    case 'renameProfile': {
+      const targetId = String(payload.profileId ?? '');
+      const name = String(payload.name ?? '').trim();
+      const found = store.profiles.find((p) => p.id === targetId);
+      if (!found) throw new Error(`Profile not found: ${targetId}`);
+      if (name) {
+        found.name = name;
+        found.updatedAt = Date.now();
+        savePreviewStore(store);
+      }
+      return found;
+    }
     case 'deleteProfile': {
       if (store.profiles.length <= 1) throw new Error('Cannot delete the last profile.');
       const targetId = String(payload.profileId ?? '');
@@ -220,7 +244,7 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
         store.activeProfileId = store.profiles[0].id;
       }
       savePreviewStore(store);
-      return { deleted: true };
+      return getActiveProfile(store);
     }
     case 'toggleAi': {
       active.settings.aiEnabled = Boolean(payload.enabled);
@@ -242,6 +266,9 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
             : 'custom';
       if (active.settings.mainModelTier === 'custom') {
         active.settings.customModel = model;
+      } else {
+        active.settings.customModel =
+          active.settings.mainModelTier === 'lexel-0.5b' ? 'qwen2.5:0.5b' : 'qwen2.5:1.5b';
       }
       savePreviewStore(store);
       return {
@@ -254,11 +281,12 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
     case 'unloadAi':
       return buildPreviewStatus(store).runtime;
     case 'downloadModel':
+    case 'deleteModel':
       throw new Error(
-        'Model downloads require the native Lexel Desktop app or `make setup`.',
+        'Model file management requires the native Lexel Desktop app or `make setup`.',
       );
     case 'harperRules': {
-      const sampleNames = [
+      const sampleRules = [
         ['SpellCheck', 'Checks spelling against Harper dictionary and user lexicon.', true],
         ['AnA', 'Checks indefinite articles a/an before nouns.', true],
         ['AvoidContractions', 'Prefers expanded words over contractions in formal prose.', false],
@@ -266,10 +294,10 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
         ['LongSentences', 'Flags overly long sentences that reduce readability.', false],
       ] as const;
       return {
-        rules: sampleNames.map(([name, description, defaultEnabled]) => {
-          const override = active.settings.lintConfig[name];
+        rules: sampleRules.map(([id, description, defaultEnabled]) => {
+          const override = active.settings.lintConfig[id];
           return {
-            name,
+            id,
             description,
             defaultEnabled,
             enabled: override === undefined || override === null ? defaultEnabled : override,
@@ -303,21 +331,21 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
           start: s.span.start,
           end: s.span.end,
           term: s.problem_text,
-          replacement: s.suggestions[0]?.replacement_text ?? null,
-          category: 'slop',
+          isEmDash: s.problem_text.includes('—') || s.problem_text.includes('--'),
+          suggestion: s.suggestions[0]?.replacement_text ?? null,
         })),
         surface: diag.surfaceLints.map((v) => ({
           start: v.span.start,
           end: v.span.end,
           kind: v.lint_kind_pretty,
           message: v.message_html,
-          problemText: v.problem_text,
         })),
         secrets: secrets.map((s) => ({
           start: s.start,
           end: s.end,
           kind: s.kind,
-          masked: s.maskedPreview,
+          label: s.label,
+          maskedPreview: s.maskedPreview,
         })),
         safeFixedText: safe.text,
         safeFixesCount: safe.fixesApplied,
@@ -338,6 +366,10 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
       return { text: toTitleCase(String(payload.text ?? '')) };
     case 'sentenceCase':
       return { text: toSentenceCase(String(payload.text ?? '')) };
+    case 'normalizeTypography':
+      return normalizeTypography(String(payload.text ?? ''));
+    case 'synonyms':
+      return { synonyms: [] };
     case 'rewrite': {
       const text = String(payload.text ?? '');
       const surfaceId = String(payload.surfaceId ?? 'general');
@@ -465,6 +497,7 @@ export async function getNativeHostStatus(): Promise<NativeHostStatusReport> {
       { browser: 'Google Chrome', manifestPath: '~/.config/google-chrome/NativeMessagingHosts/com.lexel.daemon.json', installed: false },
       { browser: 'Chromium', manifestPath: '~/.config/chromium/NativeMessagingHosts/com.lexel.daemon.json', installed: false },
       { browser: 'Brave', manifestPath: '~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.lexel.daemon.json', installed: false },
+      { browser: 'Microsoft Edge', manifestPath: '~/.config/microsoft-edge/NativeMessagingHosts/com.lexel.daemon.json', installed: false },
       { browser: 'Firefox', manifestPath: '~/.mozilla/native-messaging-hosts/com.lexel.daemon.json', installed: false },
     ],
   };
@@ -480,7 +513,36 @@ export async function installNativeMessaging(
 }
 
 export function downloadModel(modelId: string): Promise<DownloadModelReport> {
+  if (isTauriRuntime()) {
+    return invoke<DownloadModelReport>('download_model_with_progress', { modelId });
+  }
   return daemonRpc<DownloadModelReport>('downloadModel', { modelId });
+}
+
+export function deleteModel(modelId: string): Promise<{ deleted: boolean }> {
+  return daemonRpc<{ deleted: boolean }>('deleteModel', { modelId });
+}
+
+export async function subscribeToModelProgress(
+  onProgress: (progress: DownloadProgress) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  return listen<DownloadProgress>('lexel://model-download-progress', (event) => {
+    onProgress(event.payload);
+  });
+}
+
+export async function subscribeToStateChanges(
+  onChange: (kind: string) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  return listen<string>('lexel://state-changed', (event) => {
+    onChange(event.payload);
+  });
 }
 
 export function rewriteWithTask(params: {

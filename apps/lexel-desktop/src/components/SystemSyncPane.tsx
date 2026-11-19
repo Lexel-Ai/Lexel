@@ -1,17 +1,21 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   daemonRpc,
+  deleteModel,
   downloadModel,
   installNativeMessaging,
   isTauriRuntime,
   MODEL_SPECS,
+  subscribeToModelProgress,
 } from '../lib/desktopClient';
 import type {
   DaemonStatusPayload,
   DesktopEnvInfo,
+  DownloadProgress,
   MainModelTier,
   NativeHostStatusReport,
   RuntimeKind,
+  ToggleAiResponse,
   UnifiedDaemonSettings,
   VoiceExample,
 } from '../lib/types';
@@ -36,9 +40,42 @@ export function SystemSyncPane({
   const settings = status.activeProfile.settings;
   const [extensionIdsInput, setExtensionIdsInput] = useState('');
   const [newProfileName, setNewProfileName] = useState('');
+  const [renameDraft, setRenameDraft] = useState(status.activeProfile.name);
   const [downloadingModelId, setDownloadingModelId] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [confirmPurge, setConfirmPurge] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRenameDraft(status.activeProfile.name);
+  }, [status.activeProfile.id, status.activeProfile.name]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void subscribeToModelProgress((progress) => {
+      if (active) {
+        setDownloadProgress(progress);
+      }
+    }).then((fn) => {
+      if (active) {
+        unlisten = fn;
+      } else {
+        fn();
+      }
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const hasAnyRuntime =
+    status.runtime.llamaServerAvailable ||
+    status.runtime.ollamaBinaryAvailable ||
+    status.runtime.ollamaRunning;
+  const hasAnyModel = status.models.some((m) => (m.ggufInstalled && m.ggufSizeValid) || m.ollamaInstalled);
 
   async function handleInstallNativeMessaging() {
     setActionError(null);
@@ -51,7 +88,7 @@ export function SystemSyncPane({
       const report = await installNativeMessaging(ids);
       await onRefreshAll();
       setActionMessage(
-        `Registered Native Messaging host (${report.writtenManifests.length} manifests written).`,
+        `Registered Native Messaging host (${report.writtenManifests.length} manifest(s) written using ${report.daemonBin}).`,
       );
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
@@ -60,21 +97,41 @@ export function SystemSyncPane({
 
   async function handleToggleAi(enabled: boolean) {
     setActionError(null);
-    await daemonRpc('toggleAi', { enabled });
-    await onRefreshAll();
+    setActionMessage(null);
+    try {
+      const res = await daemonRpc<ToggleAiResponse>('toggleAi', { enabled });
+      await onRefreshAll();
+      if (res.activationError) {
+        setActionError(res.activationError);
+      } else if (enabled) {
+        setActionMessage(`Local AI enabled (${res.runtime.activeBackend}).`);
+      } else {
+        setActionMessage('Local AI disabled and unloaded from RAM.');
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function handleModelTier(tier: MainModelTier) {
     setActionError(null);
-    if (tier === 'custom') {
-      await daemonRpc('setMainModel', { model: settings.customModel || 'qwen2.5:1.5b' });
-    } else {
-      await daemonRpc('setMainModel', { model: tier });
+    setActionMessage(null);
+    try {
+      const target = tier === 'custom' ? settings.customModel || 'qwen2.5:1.5b' : tier;
+      const res = await daemonRpc<ToggleAiResponse>('setMainModel', { model: target });
+      await onRefreshAll();
+      if (res.activationError) {
+        setActionError(res.activationError);
+      } else {
+        setActionMessage(`Active model switched to ${target}.`);
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
     }
-    await onRefreshAll();
   }
 
   async function handleUnloadAi() {
+    setActionError(null);
     await daemonRpc('unloadAi', {});
     await onRefreshAll();
     setActionMessage('Unloaded local AI model from RAM.');
@@ -84,6 +141,7 @@ export function SystemSyncPane({
     setActionError(null);
     setActionMessage(null);
     setDownloadingModelId(modelId);
+    setDownloadProgress({ modelId, bytesDownloaded: 0, totalBytes: 0, percent: 0 });
     try {
       const report = await downloadModel(modelId);
       await onRefreshAll();
@@ -97,6 +155,19 @@ export function SystemSyncPane({
       setActionError(err instanceof Error ? err.message : String(err));
     } finally {
       setDownloadingModelId(null);
+      setDownloadProgress(null);
+    }
+  }
+
+  async function handleDeleteModel(modelId: string) {
+    setActionError(null);
+    setActionMessage(null);
+    try {
+      await deleteModel(modelId);
+      await onRefreshAll();
+      setActionMessage(`Removed local GGUF artifact for ${modelId}.`);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -107,6 +178,27 @@ export function SystemSyncPane({
     await daemonRpc('createProfile', { name, cloneFromActive: true, activate: true });
     setNewProfileName('');
     await onRefreshAll();
+    setActionMessage(`Created and switched to profile "${name}".`);
+  }
+
+  async function handleRenameProfile(e: React.FormEvent) {
+    e.preventDefault();
+    const name = renameDraft.trim();
+    if (!name) return;
+    await daemonRpc('renameProfile', { profileId: status.activeProfile.id, name });
+    await onRefreshAll();
+    setActionMessage(`Renamed active profile to "${name}".`);
+  }
+
+  async function handleDeleteProfile(profileId: string) {
+    setActionError(null);
+    try {
+      await daemonRpc('deleteProfile', { profileId });
+      await onRefreshAll();
+      setActionMessage('Deleted profile.');
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function handleExportBackup() {
@@ -134,12 +226,20 @@ export function SystemSyncPane({
     e.target.value = '';
   }
 
+  async function handlePurgeAll() {
+    setActionError(null);
+    await daemonRpc('purgeAll', {});
+    setConfirmPurge(false);
+    await onRefreshAll();
+    setActionMessage('Purged all local profiles and Voice Memory back to a clean default.');
+  }
+
   return (
     <div className="space-y-4">
       <header>
         <h1 className="text-[18px] font-semibold">Local AI, Extension Sync &amp; Profiles</h1>
         <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-          Connect your Chrome/Firefox extension to this desktop database and manage local GGUF inference.
+          Connect your browser extension to lexel.db, download verified GGUF weights, and tune local inference.
         </p>
       </header>
 
@@ -178,11 +278,11 @@ export function SystemSyncPane({
           <div>
             <h2 className="text-[14px] font-semibold">Browser Extension Bridge (Native Messaging)</h2>
             <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-              Writes <code className="lexel-mono">com.lexel.daemon.json</code> so the browser extension syncs rules, prompts, and local AI from <code className="lexel-mono">{envInfo?.dbPath ?? 'lexel.db'}</code>.
+              Writes <code className="lexel-mono">com.lexel.daemon.json</code> so Chrome, Brave, Edge, and Firefox sync rules, prompts, and local AI from <code className="lexel-mono">{envInfo?.dbPath ?? 'lexel.db'}</code>.
             </p>
           </div>
           <span className="text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
-            {isTauriRuntime() ? 'Tauri Rust IPC' : 'Browser Preview'}
+            {isTauriRuntime() ? `Loopback :${status.httpPort}` : 'Browser Preview'}
           </span>
         </div>
 
@@ -193,14 +293,14 @@ export function SystemSyncPane({
               className="flex items-center justify-between rounded-[6px] border px-2.5 py-2 text-[12px]"
               style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
             >
-              <div>
+              <div className="min-w-0">
                 <div className="font-medium">{target.browser}</div>
                 <div className="truncate max-w-[260px] text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
                   {target.manifestPath}
                 </div>
               </div>
               <span
-                className="rounded-[4px] px-1.5 py-0.5 text-[11px] lexel-mono"
+                className="shrink-0 rounded-[4px] px-1.5 py-0.5 text-[11px] lexel-mono"
                 style={{
                   backgroundColor: target.installed ? 'var(--lx-signal-bg)' : 'var(--lx-muted)',
                   color: target.installed ? 'var(--lx-signal)' : 'var(--lx-fg-muted)',
@@ -219,14 +319,14 @@ export function SystemSyncPane({
               className="mb-1 block text-[11px] font-medium"
               style={{ color: 'var(--lx-fg-muted)' }}
             >
-              Optional Chrome/Chromium Unpacked Extension ID(s)
+              Chrome / Chromium / Brave / Edge Extension ID(s)
             </label>
             <input
               id="chrome-ext-ids"
               type="text"
               value={extensionIdsInput}
               onChange={(e) => setExtensionIdsInput(e.target.value)}
-              placeholder="Paste Chrome extension ID if testing unpacked build..."
+              placeholder="Paste extension ID from chrome://extensions or Lexel Settings..."
               className="w-full rounded-[6px] border px-2.5 py-1.5 text-[12px] lexel-mono"
               style={{
                 backgroundColor: 'var(--lx-surface)',
@@ -284,6 +384,56 @@ export function SystemSyncPane({
             </button>
           </div>
         </div>
+
+        <div
+          className="grid gap-2 rounded-[6px] border p-2.5 text-[11px] sm:grid-cols-3"
+          style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+        >
+          <div>
+            <div style={{ color: 'var(--lx-fg-muted)' }}>llama-server</div>
+            <div className="lexel-mono font-medium">
+              {status.runtime.llamaServerAvailable ? 'Detected' : 'Not on PATH'}
+            </div>
+          </div>
+          <div>
+            <div style={{ color: 'var(--lx-fg-muted)' }}>Ollama</div>
+            <div className="lexel-mono font-medium">
+              {status.runtime.ollamaRunning
+                ? `Running (${status.runtime.ollamaModels.length} models)`
+                : status.runtime.ollamaBinaryAvailable
+                  ? 'Installed (auto-starts on rewrite)'
+                  : 'Not installed'}
+            </div>
+          </div>
+          <div>
+            <div style={{ color: 'var(--lx-fg-muted)' }}>Readiness</div>
+            <div
+              className="lexel-mono font-medium"
+              style={{ color: hasAnyRuntime && hasAnyModel ? 'var(--lx-signal)' : 'var(--lx-warn)' }}
+            >
+              {hasAnyRuntime && hasAnyModel
+                ? 'Ready for local rewrites'
+                : !hasAnyModel
+                  ? 'Download a GGUF model below'
+                  : 'Install Ollama or llama-server'}
+            </div>
+          </div>
+        </div>
+
+        {!hasAnyRuntime && isTauriRuntime() && (
+          <div
+            className="rounded-[6px] border px-3 py-2 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-warn-bg)',
+              borderColor: 'var(--lx-warn)',
+              color: 'var(--lx-warn)',
+            }}
+          >
+            No local inference engine was detected yet. Install Ollama (ollama.com) or place{' '}
+            <code className="lexel-mono">llama-server</code> in{' '}
+            <code className="lexel-mono">{envInfo?.dataDir ?? '~/.local/share/lexel'}/bin/</code>, then click Enable Local AI.
+          </div>
+        )}
 
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
@@ -347,6 +497,14 @@ export function SystemSyncPane({
           {status.models.map((m) => {
             const ready = m.ggufInstalled && m.ggufSizeValid;
             const downloading = downloadingModelId === m.id;
+            const activePct =
+              downloading && downloadProgress?.modelId === m.id ? downloadProgress.percent : 0;
+            const downloadedMb =
+              downloading && downloadProgress?.modelId === m.id
+                ? Math.round(downloadProgress.bytesDownloaded / (1024 * 1024))
+                : 0;
+            const totalMb = Math.round(m.sizeBytes / (1024 * 1024));
+
             return (
               <div
                 key={m.id}
@@ -356,19 +514,57 @@ export function SystemSyncPane({
                 <div>
                   <div className="flex items-center justify-between font-medium">
                     <span>{m.label}</span>
-                    <span className="text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
+                    <span
+                      className="text-[11px] lexel-mono"
+                      style={{ color: ready || m.ollamaInstalled ? 'var(--lx-signal)' : 'var(--lx-fg-muted)' }}
+                    >
                       {ready ? 'GGUF verified' : m.ollamaInstalled ? 'Ollama ready' : 'Not downloaded'}
                     </span>
                   </div>
                   <div className="mt-0.5 text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
-                    {m.ggufFilename} ({Math.round(m.sizeBytes / (1024 * 1024))} MB)
+                    {m.ggufFilename} ({totalMb} MB)
                   </div>
                 </div>
+
+                {downloading && (
+                  <div className="space-y-1">
+                    <div
+                      className="h-1.5 w-full overflow-hidden rounded-[4px]"
+                      style={{ backgroundColor: 'var(--lx-muted)' }}
+                    >
+                      <div
+                        className="h-full"
+                        style={{
+                          width: `${activePct}%`,
+                          backgroundColor: 'var(--lx-signal)',
+                        }}
+                      />
+                    </div>
+                    <div className="text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
+                      {downloadedMb} / {totalMb} MB ({activePct}%)
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between gap-2 pt-1">
                   <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
                     {m.description}
                   </span>
-                  {!ready && (
+                  {ready ? (
+                    <button
+                      type="button"
+                      disabled={downloadingModelId !== null}
+                      onClick={() => void handleDeleteModel(m.id)}
+                      className="shrink-0 rounded-[6px] border px-2 py-1 text-[11px]"
+                      style={{
+                        backgroundColor: 'var(--lx-card)',
+                        borderColor: 'var(--lx-border)',
+                        color: 'var(--lx-danger)',
+                      }}
+                    >
+                      Delete GGUF
+                    </button>
+                  ) : (
                     <button
                       type="button"
                       disabled={downloadingModelId !== null}
@@ -380,7 +576,7 @@ export function SystemSyncPane({
                         color: 'var(--lx-fg)',
                       }}
                     >
-                      {downloading ? 'Downloading...' : 'Download GGUF'}
+                      {downloading ? `Downloading ${activePct}%` : 'Download GGUF'}
                     </button>
                   )}
                 </div>
@@ -388,11 +584,197 @@ export function SystemSyncPane({
             );
           })}
         </div>
+
+        <div className="grid gap-3 border-t pt-3 sm:grid-cols-3" style={{ borderColor: 'var(--lx-border)' }}>
+          <div>
+            <label
+              htmlFor="ai-temperature"
+              className="mb-1 block text-[11px] font-medium"
+              style={{ color: 'var(--lx-fg-muted)' }}
+            >
+              Temperature ({settings.temperature.toFixed(2)})
+            </label>
+            <input
+              id="ai-temperature"
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={settings.temperature}
+              onChange={(e) =>
+                void onPatchSettings({ temperature: Number.parseFloat(e.target.value) })
+              }
+              className="w-full"
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="ai-max-tokens"
+              className="mb-1 block text-[11px] font-medium"
+              style={{ color: 'var(--lx-fg-muted)' }}
+            >
+              Max Tokens
+            </label>
+            <input
+              id="ai-max-tokens"
+              type="number"
+              min={64}
+              max={1024}
+              step={16}
+              value={settings.maxTokens}
+              onChange={(e) =>
+                void onPatchSettings({
+                  maxTokens: Math.max(64, Number.parseInt(e.target.value || '280', 10)),
+                })
+              }
+              className="w-full rounded-[6px] border px-2.5 py-1 text-[12px] lexel-mono"
+              style={{
+                backgroundColor: 'var(--lx-surface)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="ai-idle-unload"
+              className="mb-1 block text-[11px] font-medium"
+              style={{ color: 'var(--lx-fg-muted)' }}
+            >
+              Idle Auto-Unload (sec)
+            </label>
+            <input
+              id="ai-idle-unload"
+              type="number"
+              min={0}
+              max={3600}
+              step={30}
+              value={settings.idleUnloadSecs}
+              onChange={(e) =>
+                void onPatchSettings({
+                  idleUnloadSecs: Math.max(0, Number.parseInt(e.target.value || '180', 10)),
+                })
+              }
+              className="w-full rounded-[6px] border px-2.5 py-1 text-[12px] lexel-mono"
+              style={{
+                backgroundColor: 'var(--lx-surface)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label
+              htmlFor="ai-ollama-endpoint"
+              className="mb-1 block text-[11px] font-medium"
+              style={{ color: 'var(--lx-fg-muted)' }}
+            >
+              Ollama Loopback Endpoint
+            </label>
+            <input
+              id="ai-ollama-endpoint"
+              type="text"
+              defaultValue={settings.ollamaEndpoint}
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                if (v && v !== settings.ollamaEndpoint) {
+                  void onPatchSettings({ ollamaEndpoint: v });
+                }
+              }}
+              className="w-full rounded-[6px] border px-2.5 py-1 text-[12px] lexel-mono"
+              style={{
+                backgroundColor: 'var(--lx-surface)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="ai-openai-endpoint"
+              className="mb-1 block text-[11px] font-medium"
+              style={{ color: 'var(--lx-fg-muted)' }}
+            >
+              OpenAI-Compatible Loopback Endpoint
+            </label>
+            <input
+              id="ai-openai-endpoint"
+              type="text"
+              defaultValue={settings.openaiCompatEndpoint}
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                if (v && v !== settings.openaiCompatEndpoint) {
+                  void onPatchSettings({ openaiCompatEndpoint: v });
+                }
+              }}
+              className="w-full rounded-[6px] border px-2.5 py-1 text-[12px] lexel-mono"
+              style={{
+                backgroundColor: 'var(--lx-surface)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            />
+          </div>
+        </div>
+
+        {settings.mainModelTier === 'custom' && (
+          <div>
+            <label
+              htmlFor="ai-custom-model"
+              className="mb-1 block text-[11px] font-medium"
+              style={{ color: 'var(--lx-fg-muted)' }}
+            >
+              Custom Model Tag or GGUF Path
+            </label>
+            <input
+              id="ai-custom-model"
+              type="text"
+              defaultValue={settings.customModel}
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                if (v && v !== settings.customModel) {
+                  void daemonRpc('setMainModel', { model: v }).then(() => onRefreshAll());
+                }
+              }}
+              className="w-full rounded-[6px] border px-2.5 py-1 text-[12px] lexel-mono"
+              style={{
+                backgroundColor: 'var(--lx-surface)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            />
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-4 text-[12px]">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={settings.keepWarm}
+              onChange={(e) => void onPatchSettings({ keepWarm: e.target.checked })}
+            />
+            Keep model warm in RAM (disable idle auto-unload)
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={settings.saveVoiceMemory}
+              onChange={(e) => void onPatchSettings({ saveVoiceMemory: e.target.checked })}
+            />
+            Save accepted rewrites to local Voice Memory
+          </label>
+        </div>
       </section>
 
       <div className="grid gap-4 md:grid-cols-2">
         <section
-          className="space-y-2 rounded-[8px] border p-3"
+          className="space-y-3 rounded-[8px] border p-3"
           style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
         >
           <h2 className="text-[13px] font-semibold">Profiles &amp; Backups</h2>
@@ -423,6 +805,56 @@ export function SystemSyncPane({
             </button>
           </form>
 
+          <form onSubmit={handleRenameProfile} className="flex gap-2">
+            <input
+              type="text"
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              aria-label="Rename active profile"
+              className="min-w-0 flex-1 rounded-[6px] border px-2.5 py-1 text-[12px]"
+              style={{
+                backgroundColor: 'var(--lx-surface)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            />
+            <button
+              type="submit"
+              className="rounded-[6px] border px-2.5 py-1 text-[12px]"
+              style={{
+                backgroundColor: 'var(--lx-surface)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            >
+              Rename
+            </button>
+          </form>
+
+          {status.profiles.length > 1 && (
+            <div className="space-y-1">
+              {status.profiles.map((p) => (
+                <div
+                  key={p.id}
+                  className="flex items-center justify-between rounded-[6px] border px-2 py-1 text-[11px]"
+                  style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+                >
+                  <span>
+                    {p.name} {p.isActive ? '(active)' : ''}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteProfile(p.id)}
+                    className="rounded px-1.5 py-0.5 text-[11px]"
+                    style={{ color: 'var(--lx-danger)' }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-2 pt-1">
             <button
               type="button"
@@ -452,6 +884,33 @@ export function SystemSyncPane({
                 className="hidden"
               />
             </label>
+            {!confirmPurge ? (
+              <button
+                type="button"
+                onClick={() => setConfirmPurge(true)}
+                className="rounded-[6px] border px-2.5 py-1 text-[12px]"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-danger)',
+                }}
+              >
+                Purge Local Data
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void handlePurgeAll()}
+                className="rounded-[6px] border px-2.5 py-1 text-[12px] font-semibold"
+                style={{
+                  backgroundColor: 'var(--lx-danger-bg)',
+                  borderColor: 'var(--lx-danger)',
+                  color: 'var(--lx-danger)',
+                }}
+              >
+                Confirm Purge All
+              </button>
+            )}
           </div>
         </section>
 
@@ -460,10 +919,10 @@ export function SystemSyncPane({
           style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
         >
           <h2 className="text-[13px] font-semibold">Voice Memory ({voiceExamples.length})</h2>
-          <div className="max-h-40 space-y-1.5 overflow-y-auto">
+          <div className="max-h-56 space-y-1.5 overflow-y-auto">
             {voiceExamples.length === 0 ? (
               <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                No saved style pairs yet. Accept a rewrite to store an example.
+                No saved style pairs yet. Accept a rewrite in Quick Rewrite or the browser extension to build local style memory.
               </p>
             ) : (
               voiceExamples.map((ex) => (

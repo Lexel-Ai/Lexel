@@ -39,6 +39,10 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
   const [text, setText] = useState(
     'In todays fast-paced landscape, we delve into why local AI rewrites should stay fast — and keep latency under 18ms for #42.',
   );
+  const [undoText, setUndoText] = useState<string | null>(null);
+  const [synonymWord, setSynonymWord] = useState('');
+  const [synonyms, setSynonyms] = useState<string[]>([]);
+  const [synonymNotice, setSynonymNotice] = useState<string | null>(null);
   const [tier0, setTier0] = useState<Tier0CheckResponse | null>(null);
   const [rewrite, setRewrite] = useState<RewriteResponse | null>(null);
   const [busy, setBusy] = useState(false);
@@ -74,7 +78,10 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
         surfaceId,
         language: settings.languageMode,
       });
-      setText(fixed.text);
+      if (fixed.text !== text) {
+        setUndoText(text);
+        setText(fixed.text);
+      }
       setNotice(
         fixed.fixesApplied > 0
           ? `Applied ${fixed.fixesApplied} deterministic fix${fixed.fixesApplied === 1 ? '' : 'es'}.`
@@ -88,6 +95,46 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
       setTier0(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function runDeterministicTransform(kind: 'titleCase' | 'sentenceCase' | 'normalizeTypography') {
+    if (!text.trim()) return;
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await daemonRpc<{ text: string; fixesApplied?: number }>(kind, { text });
+      if (res.text && res.text !== text) {
+        setUndoText(text);
+        setText(res.text);
+        setNotice(
+          kind === 'titleCase'
+            ? 'Converted draft to Chicago Title Case.'
+            : kind === 'sentenceCase'
+              ? 'Converted draft to Sentence Case.'
+              : 'Normalized quotes, ellipses, and spacing.',
+        );
+      } else {
+        setNotice('Draft already matches that format.');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleSynonymLookup(e: React.FormEvent) {
+    e.preventDefault();
+    const word = synonymWord.trim();
+    if (!word) return;
+    setSynonymNotice(null);
+    try {
+      const res = await daemonRpc<{ synonyms: string[] }>('synonyms', { word });
+      setSynonyms(res.synonyms ?? []);
+      if (!res.synonyms || res.synonyms.length === 0) {
+        setSynonymNotice(`No local thesaurus entries found for "${word}".`);
+      }
+    } catch (err) {
+      setSynonymNotice(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -112,6 +159,7 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
 
   async function handleAcceptRewrite() {
     if (!rewrite) return;
+    setUndoText(text);
     setText(rewrite.suggestion);
     if (settings.saveVoiceMemory) {
       await daemonRpc('saveVoiceExample', {
@@ -142,10 +190,15 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
         <div>
           <h1 className="text-[18px] font-semibold">Quick Rewrite</h1>
           <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-            Draft, check with native Rust Harper + Anti-Slop, and run surface-scoped AI rewrites.
+            Draft, check with native Rust Harper + Anti-Slop, and run surface-scoped local AI rewrites.
           </p>
         </div>
-        <SurfaceBadge label={activeSurface.label} subcontext={subcontext.trim() || null} />
+        <SurfaceBadge
+          label={activeSurface.label}
+          subcontext={subcontext.trim() || null}
+          charCount={text.length}
+          maxChars={activeSurface.maxChars}
+        />
       </header>
 
       <div
@@ -237,10 +290,12 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
         className="rounded-[8px] border p-3"
         style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
       >
-        <div className="mb-2 flex items-center justify-between text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
-          <span>Draft ({metrics.words} words, {text.length} chars, grade {metrics.fleschKincaidGrade})</span>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
           <span>
-            Prompt directive: {activeSurface.maxChars ? `${activeSurface.maxChars} chars max` : 'unbounded'}
+            Draft ({metrics.words} words, {text.length} chars, grade {metrics.fleschKincaidGrade.toFixed(1)}, ease {metrics.fleschReadingEase.toFixed(0)})
+          </span>
+          <span>
+            Limit: {activeSurface.maxChars ? `${activeSurface.maxChars} chars` : 'unbounded'}
           </span>
         </div>
 
@@ -284,9 +339,62 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
           </button>
           <button
             type="button"
+            onClick={() => void runDeterministicTransform('titleCase')}
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          >
+            Title Case
+          </button>
+          <button
+            type="button"
+            onClick={() => void runDeterministicTransform('sentenceCase')}
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          >
+            Sentence Case
+          </button>
+          <button
+            type="button"
+            onClick={() => void runDeterministicTransform('normalizeTypography')}
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          >
+            Clean Quotes
+          </button>
+          {undoText !== null && (
+            <button
+              type="button"
+              onClick={() => {
+                setText(undoText);
+                setUndoText(null);
+              }}
+              className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+              style={{
+                backgroundColor: 'var(--lx-warn-bg)',
+                borderColor: 'var(--lx-warn)',
+                color: 'var(--lx-warn)',
+              }}
+            >
+              Undo
+            </button>
+          )}
+          <button
+            type="button"
             onClick={runAiRewrite}
             disabled={busy || !settings.aiEnabled}
-            className="rounded-[6px] px-3.5 py-1.5 text-[12px] font-semibold"
+            className="ml-auto rounded-[6px] px-3.5 py-1.5 text-[12px] font-semibold"
             style={{
               backgroundColor: 'var(--lx-accent)',
               color: 'var(--lx-on-accent)',
@@ -296,6 +404,70 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
           </button>
         </div>
       </div>
+
+      <section
+        className="space-y-2 rounded-[8px] border p-3"
+        style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+      >
+        <form onSubmit={handleSynonymLookup} className="flex flex-wrap items-center gap-2">
+          <label
+            htmlFor="desktop-synonym-input"
+            className="text-[12px] font-medium"
+            style={{ color: 'var(--lx-fg-muted)' }}
+          >
+            Offline Thesaurus
+          </label>
+          <input
+            id="desktop-synonym-input"
+            type="text"
+            value={synonymWord}
+            onChange={(e) => setSynonymWord(e.target.value)}
+            placeholder="Look up plain-English alternatives..."
+            className="min-w-[200px] flex-1 rounded-[6px] border px-2.5 py-1 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          />
+          <button
+            type="submit"
+            className="rounded-[6px] border px-2.5 py-1 text-[12px] font-medium"
+            style={{
+              backgroundColor: 'var(--lx-muted)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          >
+            Find Synonyms
+          </button>
+        </form>
+        {synonymNotice && (
+          <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+            {synonymNotice}
+          </div>
+        )}
+        {synonyms.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {synonyms.map((word) => (
+              <button
+                key={word}
+                type="button"
+                onClick={() => void navigator.clipboard?.writeText(word)}
+                title="Copy synonym"
+                className="rounded-[4px] border px-2 py-0.5 text-[11px] lexel-mono"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-signal)',
+                }}
+              >
+                {word}
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
 
       {error && (
         <div
@@ -358,18 +530,36 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
               </p>
             )}
 
+          {tier0.secrets.map((secret, idx) => (
+            <div
+              key={`secret-${idx}-${secret.start}`}
+              role="alert"
+              className="flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+              style={{
+                backgroundColor: 'var(--lx-danger-bg)',
+                borderColor: 'var(--lx-danger)',
+                color: 'var(--lx-danger)',
+              }}
+            >
+              <span>
+                <strong>{secret.label}</strong> detected ({secret.maskedPreview}). Remove before AI rewrite.
+              </span>
+              <span className="lexel-mono text-[11px]">{secret.kind}</span>
+            </div>
+          ))}
+
           {tier0.slop.map((hit, idx) => (
             <div
               key={`slop-${idx}-${hit.start}`}
-              className="flex items-center justify-between rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+              className="flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
               style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
             >
               <span>
-                <strong className="lexel-mono">{hit.term}</strong> flagged ({hit.category})
+                <strong className="lexel-mono">{hit.term}</strong> flagged ({hit.isEmDash ? 'em_dash' : 'slop'})
               </span>
-              {hit.replacement && (
+              {hit.suggestion && (
                 <span className="lexel-mono text-[11px]" style={{ color: 'var(--lx-signal)' }}>
-                  suggest: {hit.replacement}
+                  suggest: {hit.suggestion}
                 </span>
               )}
             </div>
@@ -379,7 +569,11 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
             <div
               key={`surface-${idx}-${item.start}`}
               className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
-              style={{ backgroundColor: 'var(--lx-warn-bg)', borderColor: 'var(--lx-warn)', color: 'var(--lx-warn)' }}
+              style={{
+                backgroundColor: 'var(--lx-warn-bg)',
+                borderColor: 'var(--lx-warn)',
+                color: 'var(--lx-warn)',
+              }}
             >
               {item.message}
             </div>
@@ -387,7 +581,7 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
 
           {tier0.harper.map((item, idx) => (
             <div
-              key={`harper-${idx}-${item.span.start}`}
+              key={`harper-${idx}-${item.start}-${item.end}`}
               className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
               style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
             >

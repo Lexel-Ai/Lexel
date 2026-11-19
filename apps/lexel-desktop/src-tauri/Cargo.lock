@@ -4007,6 +4007,7 @@ dependencies = [
  "reqwest 0.13.5",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -4032,6 +4033,7 @@ dependencies = [
 name = "lexel-desktop"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "dirs 7.0.0",
  "lexel-core",
  "lexel-daemon",
@@ -4040,6 +4042,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]
