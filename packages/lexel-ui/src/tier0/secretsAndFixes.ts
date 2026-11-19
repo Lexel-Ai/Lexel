@@ -1,5 +1,16 @@
 import slopConfig from '../../../../rules/slop_terms.json';
-import type { ReadabilityMetrics, RulePresetDefinition, RulePresetId, Tier0Lint } from './types';
+import type {
+  InvisibleCharHit,
+  ReadabilityMetrics,
+  RulePresetDefinition,
+  RulePresetId,
+  StructureIssue,
+  StyleGuideHit,
+  StyleGuideRule,
+  SurfaceGradeTarget,
+  TextSnippet,
+  Tier0Lint,
+} from './types';
 
 export interface SecretMatch {
   kind: string;
@@ -365,7 +376,13 @@ export function applySafeFixesForProfile(
 
   let fixesApplied = 0;
   const categories = new Set<string>();
-  const segments = splitProseAndIgnored(text);
+  const strippedInv = stripInvisibleChars(text);
+  const workingText = strippedInv.text;
+  if (strippedInv.fixesApplied > 0) {
+    fixesApplied += strippedInv.fixesApplied;
+    categories.add('invisible_chars');
+  }
+  const segments = splitProseAndIgnored(workingText);
 
   const transformed = segments
     .map(({ slice, ignored }) => {
@@ -537,11 +554,12 @@ export function toSentenceCase(text: string): string {
     .join('');
 }
 
-/** Normalize curly quotes, ellipses, non-breaking spaces, and redundant blank lines outside code blocks. */
+/** Normalize curly quotes, ellipses, non-breaking spaces, invisible Unicode watermarks, and redundant blank lines outside code blocks. */
 export function normalizeTypography(text: string): SafeFixResult {
-  let fixesApplied = 0;
-  const categories = new Set<string>();
-  const parts = splitProseAndIgnored(text);
+  const strippedInv = stripInvisibleChars(text);
+  let fixesApplied = strippedInv.fixesApplied;
+  const categories = new Set<string>(strippedInv.categories);
+  const parts = splitProseAndIgnored(strippedInv.text);
 
   const out = parts
     .map(({ slice, ignored }) => {
@@ -655,7 +673,7 @@ function countSyllablesWord(rawWord: string): number {
   return Math.max(1, groups ? groups.length : 1);
 }
 
-/** Compute offline Flesch-Kincaid readability, reading time, and passive voice hint counts. */
+/** Compute offline Flesch-Kincaid readability, reading/speaking time, passive voice, hedging density, and rhythm variety. */
 export function computeReadabilityMetrics(text: string): ReadabilityMetrics {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -667,9 +685,13 @@ export function computeReadabilityMetrics(text: string): ReadabilityMetrics {
       longSentences: 0,
       avgWordsPerSentence: 0,
       readingTimeSec: 0,
+      speakingTimeSec: 0,
       fleschReadingEase: 0,
       fleschKincaidGrade: 0,
       passiveHintCount: 0,
+      hedgingCount: 0,
+      hedgingPercent: 0,
+      sentenceVarietyScore: 0,
     };
   }
 
@@ -685,11 +707,13 @@ export function computeReadabilityMetrics(text: string): ReadabilityMetrics {
     .split(/[.!?]+(?:\s+|$)/)
     .map((s) => s.trim())
     .filter(Boolean);
+  const sentenceLengths = sentenceChunks.map((s) => s.split(/\s+/).filter(Boolean).length);
   const sentences = Math.max(sentenceChunks.length, words > 0 ? 1 : 0);
-  const longSentences = sentenceChunks.filter((s) => s.split(/\s+/).length >= 25).length;
+  const longSentences = sentenceLengths.filter((len) => len >= 25).length;
 
   const avgWordsPerSentence = words > 0 ? Number((words / sentences).toFixed(1)) : 0;
   const readingTimeSec = words > 0 ? Math.max(1, Math.round((words / 200) * 60)) : 0;
+  const speakingTimeSec = words > 0 ? Math.max(1, Math.round((words / 130) * 60)) : 0;
 
   const wordsPerSentence = words / sentences;
   const syllablesPerWord = words > 0 ? syllables / words : 0;
@@ -699,6 +723,19 @@ export function computeReadabilityMetrics(text: string): ReadabilityMetrics {
   const passiveMatches = trimmed.match(
     /\b(?:am|is|are|was|were|be|been|being)\s+[a-z]{3,}(?:ed|en)\b/gi,
   );
+  const hedgingMatches = trimmed.match(
+    /\b(?:just|actually|basically|honestly|somewhat|arguably|perhaps|maybe|seemingly|kind of|sort of|i think|i feel)\b/gi,
+  );
+  const hedgingCount = hedgingMatches ? hedgingMatches.length : 0;
+  const hedgingPercent = words > 0 ? Number(((hedgingCount / words) * 100).toFixed(1)) : 0;
+
+  let sentenceVarietyScore = words > 0 ? 100 : 0;
+  if (sentenceLengths.length > 1) {
+    const mean = sentenceLengths.reduce((acc, n) => acc + n, 0) / sentenceLengths.length;
+    const variance =
+      sentenceLengths.reduce((acc, n) => acc + (n - mean) ** 2, 0) / sentenceLengths.length;
+    sentenceVarietyScore = Math.round(Math.min(1, Math.sqrt(variance) / 6) * 100);
+  }
 
   return {
     chars: text.length,
@@ -708,10 +745,333 @@ export function computeReadabilityMetrics(text: string): ReadabilityMetrics {
     longSentences,
     avgWordsPerSentence,
     readingTimeSec,
+    speakingTimeSec,
     fleschReadingEase: Number(Math.max(0, Math.min(100, rawEase)).toFixed(1)),
     fleschKincaidGrade: Number(Math.max(0, rawGrade).toFixed(1)),
     passiveHintCount: passiveMatches ? passiveMatches.length : 0,
+    hedgingCount,
+    hedgingPercent,
+    sentenceVarietyScore,
   };
+}
+
+/** Return the target Flesch-Kincaid grade window for a surface ID. */
+export function getSurfaceGradeTarget(surfaceId: string): SurfaceGradeTarget {
+  switch (surfaceId) {
+    case 'web_x':
+      return { minGrade: 5, maxGrade: 9, audienceLabel: 'Punchy social' };
+    case 'web_discord_slack':
+      return { minGrade: 5, maxGrade: 10, audienceLabel: 'Fast team chat' };
+    case 'web_email':
+      return { minGrade: 6, maxGrade: 11, audienceLabel: 'Clear business email' };
+    case 'web_linkedin':
+    case 'web_reddit':
+    case 'web_discourse':
+      return { minGrade: 6, maxGrade: 12, audienceLabel: 'Conversational prose' };
+    case 'web_github_pr':
+    case 'ide_git_commit':
+    case 'ide_code_comment':
+    case 'docs_markdown':
+      return { minGrade: 7, maxGrade: 14, audienceLabel: 'Technical engineering' };
+    default:
+      return { minGrade: 6, maxGrade: 12, audienceLabel: 'Clear general prose' };
+  }
+}
+
+const INVISIBLE_CHAR_INFO: Readonly<Record<number, { label: string; replacement: string }>> = {
+  0x200b: { label: 'Zero-width space', replacement: '' },
+  0x200c: { label: 'Zero-width non-joiner', replacement: '' },
+  0x200d: { label: 'Zero-width joiner', replacement: '' },
+  0x2060: { label: 'Word joiner', replacement: '' },
+  0xfeff: { label: 'Byte-order mark / ZWNBSP', replacement: '' },
+  0x00ad: { label: 'Soft hyphen', replacement: '' },
+  0x202f: { label: 'Narrow no-break space', replacement: ' ' },
+  0x200e: { label: 'Directional mark', replacement: '' },
+  0x200f: { label: 'Directional mark', replacement: '' },
+  0x202a: { label: 'Bidi control override', replacement: '' },
+  0x202b: { label: 'Bidi control override', replacement: '' },
+  0x202c: { label: 'Bidi control override', replacement: '' },
+  0x202d: { label: 'Bidi control override', replacement: '' },
+  0x202e: { label: 'Bidi control override', replacement: '' },
+  0x2066: { label: 'Bidi control override', replacement: '' },
+  0x2067: { label: 'Bidi control override', replacement: '' },
+  0x2068: { label: 'Bidi control override', replacement: '' },
+  0x2069: { label: 'Bidi control override', replacement: '' },
+};
+
+/** Detect hidden AI watermark characters, zero-width controls, soft hyphens, and bidi overrides. */
+export function scanInvisibleChars(text: string): InvisibleCharHit[] {
+  const hits: InvisibleCharHit[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const cp = text.charCodeAt(i);
+    const info = INVISIBLE_CHAR_INFO[cp];
+    if (!info) continue;
+    hits.push({
+      codepoint: `U+${cp.toString(16).toUpperCase().padStart(4, '0')}`,
+      label: info.label,
+      start: i,
+      end: i + 1,
+      replacement: info.replacement,
+    });
+  }
+  return hits;
+}
+
+/** Deterministically remove hidden Unicode watermark characters and normalize narrow NBSP. */
+export function stripInvisibleChars(text: string): SafeFixResult {
+  let out = '';
+  let fixesApplied = 0;
+  for (let i = 0; i < text.length; i++) {
+    const cp = text.charCodeAt(i);
+    const info = INVISIBLE_CHAR_INFO[cp];
+    if (info) {
+      out += info.replacement;
+      fixesApplied += 1;
+    } else {
+      out += text[i];
+    }
+  }
+  return {
+    text: fixesApplied > 0 ? out : text,
+    fixesApplied,
+    categories: fixesApplied > 0 ? ['invisible_chars'] : [],
+  };
+}
+
+/** Detect unclosed delimiters/quotes/backticks, duplicate adjacent words, and mixed quote styles. */
+export function scanStructureIssues(text: string): StructureIssue[] {
+  const issues: StructureIssue[] = [];
+  const ignored = ignoredProseRanges(text);
+
+  for (const match of text.matchAll(/\b([A-Za-z]{2,})([ \t]+)\1\b/gi)) {
+    if (typeof match.index !== 'number') continue;
+    const start = match.index;
+    const end = start + match[0].length;
+    if (overlapsIgnoredRanges(start, end, ignored)) continue;
+    issues.push({
+      kind: 'duplicate_word',
+      message: `Duplicate word "${match[1]}". Remove repeated word.`,
+      problemText: match[0],
+      start,
+      end,
+      suggestion: match[1],
+    });
+  }
+
+  const fencedRanges: Array<[number, number]> = [];
+  for (const match of text.matchAll(/```[\s\S]*?(?:```|$)/g)) {
+    if (typeof match.index === 'number') {
+      fencedRanges.push([match.index, match.index + match[0].length]);
+    }
+  }
+
+  const parens: number[] = [];
+  const brackets: number[] = [];
+  const dquotes: number[] = [];
+  const backticks: number[] = [];
+  let hasCurly = false;
+  let firstCurlyIdx = -1;
+  let hasStraight = false;
+
+  for (let i = 0; i < text.length; i++) {
+    if (overlapsIgnoredRanges(i, i + 1, fencedRanges)) continue;
+    const ch = text[i];
+    if (ch === '(') parens.push(i);
+    else if (ch === ')') {
+      if (parens.length === 0) {
+        issues.push({
+          kind: 'unbalanced_delimiter',
+          message: "Unexpected closing parenthesis ')'.",
+          problemText: ')',
+          start: i,
+          end: i + 1,
+        });
+      } else {
+        parens.pop();
+      }
+    } else if (ch === '[') brackets.push(i);
+    else if (ch === ']') {
+      if (brackets.length === 0) {
+        issues.push({
+          kind: 'unbalanced_delimiter',
+          message: "Unexpected closing bracket ']'.",
+          problemText: ']',
+          start: i,
+          end: i + 1,
+        });
+      } else {
+        brackets.pop();
+      }
+    } else if (ch === '"') {
+      hasStraight = true;
+      dquotes.push(i);
+    } else if (ch === '“' || ch === '”') {
+      hasCurly = true;
+      if (firstCurlyIdx === -1) firstCurlyIdx = i;
+    } else if (ch === '`') {
+      backticks.push(i);
+    }
+  }
+
+  if (parens.length > 0) {
+    const idx = parens[parens.length - 1];
+    issues.push({
+      kind: 'unbalanced_delimiter',
+      message: "Unclosed parenthesis '('.",
+      problemText: '(',
+      start: idx,
+      end: idx + 1,
+    });
+  }
+  if (brackets.length > 0) {
+    const idx = brackets[brackets.length - 1];
+    issues.push({
+      kind: 'unbalanced_delimiter',
+      message: "Unclosed bracket '['.",
+      problemText: '[',
+      start: idx,
+      end: idx + 1,
+    });
+  }
+  if (dquotes.length % 2 === 1) {
+    const idx = dquotes[dquotes.length - 1];
+    issues.push({
+      kind: 'unbalanced_quote',
+      message: "Unclosed double quote '\"'.",
+      problemText: '"',
+      start: idx,
+      end: idx + 1,
+    });
+  }
+  if (backticks.length % 2 === 1) {
+    const idx = backticks[backticks.length - 1];
+    issues.push({
+      kind: 'unbalanced_backtick',
+      message: "Unclosed inline code backtick '`'.",
+      problemText: '`',
+      start: idx,
+      end: idx + 1,
+    });
+  }
+  if (hasCurly && hasStraight && firstCurlyIdx >= 0) {
+    issues.push({
+      kind: 'mixed_quotes',
+      message: 'Mixed curly and straight double quotes. Normalize quote style.',
+      problemText: text[firstCurlyIdx],
+      start: firstCurlyIdx,
+      end: firstCurlyIdx + 1,
+      suggestion: '"',
+    });
+  }
+
+  issues.sort((a, b) => a.start - b.start || a.end - b.end);
+  return issues;
+}
+
+/** Scan text for team/brand style guide terminology violations outside code and quote blocks. */
+export function scanStyleGuide(text: string, rules?: readonly StyleGuideRule[]): StyleGuideHit[] {
+  if (!text.trim() || !rules || rules.length === 0) return [];
+  const ignored = ignoredProseRanges(text);
+  const hits: StyleGuideHit[] = [];
+
+  for (const rule of rules) {
+    const term = rule.term.trim();
+    const preferred = rule.preferred.trim();
+    if (!term || !preferred) continue;
+    const startB = /^[a-z0-9]/i.test(term) ? '\\b' : '';
+    const endB = /[a-z0-9]$/i.test(term) ? '\\b' : '';
+    const flags = rule.caseSensitive ? 'g' : 'gi';
+    const re = new RegExp(`${startB}${escapeRegExp(term)}${endB}`, flags);
+    for (const match of text.matchAll(re)) {
+      if (typeof match.index !== 'number') continue;
+      const start = match.index;
+      const end = start + match[0].length;
+      if (overlapsIgnoredRanges(start, end, ignored)) continue;
+      if (match[0] === preferred) continue;
+      hits.push({
+        term: match[0],
+        preferred,
+        note: rule.note ?? null,
+        start,
+        end,
+      });
+    }
+  }
+
+  hits.sort((a, b) => a.start - b.start || a.end - b.end);
+  return hits;
+}
+
+/** Deterministically apply brand/team style guide replacements outside code and quote blocks. */
+export function applyStyleGuideFixes(
+  text: string,
+  rules?: readonly StyleGuideRule[],
+): SafeFixResult {
+  if (!text.trim() || !rules || rules.length === 0) {
+    return { text, fixesApplied: 0, categories: [] };
+  }
+  const sorted = [...rules].sort((a, b) => b.term.length - a.term.length);
+  let fixesApplied = 0;
+  const segments = splitProseAndIgnored(text);
+
+  const rebuilt = segments
+    .map(({ slice, ignored }) => {
+      if (ignored) return slice;
+      let current = slice;
+      for (const rule of sorted) {
+        const term = rule.term.trim();
+        const preferred = rule.preferred.trim();
+        if (!term || !preferred) continue;
+        const startB = /^[a-z0-9]/i.test(term) ? '\\b' : '';
+        const endB = /[a-z0-9]$/i.test(term) ? '\\b' : '';
+        const re = new RegExp(
+          `${startB}${escapeRegExp(term)}${endB}`,
+          rule.caseSensitive ? 'g' : 'gi',
+        );
+        current = current.replace(re, (matched) => {
+          if (matched === preferred) return matched;
+          fixesApplied += 1;
+          return preferred;
+        });
+      }
+      return current;
+    })
+    .join('');
+
+  return {
+    text: fixesApplied > 0 ? rebuilt : text,
+    fixesApplied,
+    categories: fixesApplied > 0 ? ['style_guide'] : [],
+  };
+}
+
+/** Match a personal snippet trigger immediately before the cursor and return the expanded text + new caret offset. */
+export function expandSnippetAtCursor(
+  text: string,
+  cursor: number,
+  snippets?: readonly TextSnippet[],
+): { text: string; cursor: number; expandedTrigger: string } | null {
+  if (!snippets || snippets.length === 0 || cursor <= 0 || cursor > text.length) {
+    return null;
+  }
+  const before = text.slice(0, cursor);
+  const sorted = [...snippets]
+    .filter((s) => s.trigger.trim().length >= 2)
+    .sort((a, b) => b.trigger.length - a.trigger.length);
+
+  for (const snippet of sorted) {
+    const trigger = snippet.trigger.trim();
+    if (!before.endsWith(trigger)) continue;
+    const prefixStart = cursor - trigger.length;
+    if (prefixStart > 0 && !/\s/.test(before[prefixStart - 1])) continue;
+    const nextText = `${text.slice(0, prefixStart)}${snippet.expansion}${text.slice(cursor)}`;
+    return {
+      text: nextText,
+      cursor: prefixStart + snippet.expansion.length,
+      expandedTrigger: trigger,
+    };
+  }
+  return null;
 }
 
 export const HARPER_RULE_PRESETS: ReadonlyArray<RulePresetDefinition> = [

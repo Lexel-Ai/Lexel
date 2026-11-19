@@ -1,4 +1,5 @@
 import '@webcomponents/custom-elements';
+import { expandSnippetAtCursor } from 'lexel-ui';
 import tokensCss from 'lexel-ui/tokens.css?inline';
 import { getClosestBlockAncestor, isVisible, leafNodes } from 'lint-framework';
 import React from 'react';
@@ -11,6 +12,7 @@ import type {
   Hotkey,
   SurfaceId,
   SurfaceProfile,
+  TextSnippet,
 } from '../shared/types';
 import { type ActiveFieldHandle, AiFloatingPill } from './AiFloatingPill';
 import { createGoogleDocsBridgeSync, isGoogleDocsPage } from './googleDocs';
@@ -21,6 +23,7 @@ import ProtocolClient from './ProtocolClient';
 let blocklistCache: string[] = [];
 let surfaceOverrideCache: SurfaceId | null = null;
 let customSurfacesCache: SurfaceProfile[] = [];
+let snippetsCache: TextSnippet[] = [];
 let themeCache: 'dark' | 'light' = 'dark';
 let aiEnabledCache = true;
 let hotkeyCache: Hotkey = { modifiers: ['Alt'], key: 'l' };
@@ -280,6 +283,7 @@ async function hydrateConfig(initializeSummary = false) {
       blocklist,
       override,
       customSurfaces,
+      snippets,
       theme,
       aiSettings,
       hoverEnabled,
@@ -289,6 +293,7 @@ async function hydrateConfig(initializeSummary = false) {
       ProtocolClient.getPrivacyBlocklist().catch(() => []),
       ProtocolClient.getSurfaceOverride(window.location.hostname).catch(() => null),
       ProtocolClient.getCustomSurfaces().catch(() => []),
+      ProtocolClient.getSnippets().catch(() => []),
       ProtocolClient.getTheme().catch(() => 'dark' as const),
       ProtocolClient.getAiSettings().catch(() => ({ enabled: true })),
       ProtocolClient.getOpenSuggestionsOnHover().catch(() => true),
@@ -298,6 +303,7 @@ async function hydrateConfig(initializeSummary = false) {
     blocklistCache = blocklist;
     surfaceOverrideCache = override;
     customSurfacesCache = customSurfaces;
+    snippetsCache = snippets;
     themeCache = theme;
     aiEnabledCache = aiSettings.enabled;
     hotkeyCache = hotkey;
@@ -360,8 +366,60 @@ document.addEventListener(
   true,
 );
 
+function tryExpandSnippetOnKey(event: KeyboardEvent): boolean {
+  if (snippetsCache.length === 0 || !activeField) return false;
+  if (event.ctrlKey || event.metaKey || event.altKey) return false;
+  if (event.key !== ' ' && event.key !== 'Tab' && event.key !== 'Enter') return false;
+
+  const el = activeField.element;
+  if (isSensitiveElement(el)) return false;
+  const ctx = currentSurfaceContext(el);
+  if (ctx.isBlocked) return false;
+
+  const trailing = event.key === 'Enter' ? '\n' : ' ';
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    if (start == null || end == null || start !== end) return false;
+    const expanded = expandSnippetAtCursor(el.value, start, snippetsCache);
+    if (!expanded) return false;
+    event.preventDefault();
+    const nextText = `${expanded.text.slice(0, expanded.cursor)}${trailing}${expanded.text.slice(expanded.cursor)}`;
+    const nextCaret = expanded.cursor + trailing.length;
+    setElementValueSafely(el, nextText);
+    el.setSelectionRange(nextCaret, nextCaret);
+    void lintController.update();
+    return true;
+  }
+
+  if (el.isContentEditable) {
+    const sel = window.getSelection();
+    if (!sel || !sel.isCollapsed || sel.rangeCount === 0) return false;
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    if (node.nodeType !== Node.TEXT_NODE) return false;
+    const textContent = node.textContent ?? '';
+    const expanded = expandSnippetAtCursor(textContent, range.startOffset, snippetsCache);
+    if (!expanded) return false;
+    event.preventDefault();
+    const deleteRange = document.createRange();
+    deleteRange.setStart(node, range.startOffset - expanded.expandedTrigger.length);
+    deleteRange.setEnd(node, range.startOffset);
+    sel.removeAllRanges();
+    sel.addRange(deleteRange);
+    const replacement = `${expanded.text.slice(range.startOffset - expanded.expandedTrigger.length, expanded.cursor)}${trailing}`;
+    if (!document.execCommand('insertText', false, replacement)) {
+      node.textContent = `${expanded.text.slice(0, expanded.cursor)}${trailing}${expanded.text.slice(expanded.cursor)}`;
+    }
+    void lintController.update();
+    return true;
+  }
+  return false;
+}
+
 document.addEventListener('keydown', (event) => {
   if (!activeField) return;
+  if (tryExpandSnippetOnKey(event)) return;
   const needCtrl = hotkeyCache.modifiers.includes('Ctrl');
   const needShift = hotkeyCache.modifiers.includes('Shift');
   const needAlt = hotkeyCache.modifiers.includes('Alt');
@@ -385,6 +443,9 @@ const WATCHED_STORAGE_KEYS = new Set([
   'lexel_custom_slop_terms',
   'lexel_disabled_slop_terms',
   'lexel_custom_surfaces',
+  'lexel_weirpacks',
+  'lexel_style_guide',
+  'lexel_snippets',
   'lexel_language_mode',
   'openSuggestionsOnHover',
   'activationKey',

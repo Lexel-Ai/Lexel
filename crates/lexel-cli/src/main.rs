@@ -7,10 +7,11 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use lexel_core::{
-    HarperDiagnostic, HarperEngine, ReadabilityReport, RulePreset, SlopScanner, SurfaceCatalog,
-    analyze_readability, apply_safe_deterministic_fixes, build_antislop_weirpack_bytes,
-    detect_language_from_path, normalize_typography, preset_rule_overrides, scan_secrets,
-    synonyms_for, to_sentence_case, to_title_case, validate_weirpack_bytes,
+    HarperDiagnostic, HarperEngine, ReadabilityReport, RulePreset, SlopScanner, StyleGuideRule,
+    SurfaceCatalog, analyze_readability, apply_safe_deterministic_fixes, apply_style_guide_fixes,
+    build_antislop_weirpack_bytes, detect_language_from_path, normalize_typography,
+    preset_rule_overrides, scan_invisible_chars, scan_secrets, scan_structure_issues,
+    scan_style_guide, synonyms_for, to_sentence_case, to_title_case, validate_weirpack_bytes,
 };
 use serde::Serialize;
 
@@ -79,6 +80,9 @@ struct CheckArgs {
     preset: String,
     #[arg(long = "weirpack")]
     weirpacks: Vec<PathBuf>,
+    /// Optional JSON file containing team style guide rules (`[{ term, preferred, caseSensitive?, note? }]`)
+    #[arg(long = "style-guide")]
+    style_guide: Option<PathBuf>,
     /// Apply deterministic anti-slop, em-dash, and surface cleanup
     #[arg(long)]
     fix_safe: bool,
@@ -223,6 +227,7 @@ struct CheckContext {
     engine: HarperEngine,
     scanner: SlopScanner,
     catalog: SurfaceCatalog,
+    style_guide: Vec<StyleGuideRule>,
 }
 
 struct CheckInput<'a> {
@@ -247,6 +252,9 @@ fn run_check_on_text(
         let safe = apply_safe_deterministic_fixes(&text, surface_id, &[], &[], &[])?;
         total_fixed += safe.fixes_applied;
         text = safe.text;
+        let styled = apply_style_guide_fixes(&text, &ctx.style_guide);
+        total_fixed += styled.fixes_applied;
+        text = styled.text;
     }
     if args.fix_all {
         let harper_safe = ctx.engine.apply_safe_harper_fixes(&text, language);
@@ -332,6 +340,56 @@ fn run_check_on_text(
         });
     }
 
+    for inv in scan_invisible_chars(&text) {
+        let (line, column) = byte_offset_to_line_col(&text, inv.start);
+        findings.push(Finding {
+            source: "LexelInvisibleChars".to_owned(),
+            rule: inv.codepoint.clone(),
+            severity: "warning".to_owned(),
+            message: format!(
+                "Hidden Unicode character {} ({}).",
+                inv.label, inv.codepoint
+            ),
+            line,
+            column,
+            suggestion: Some(inv.replacement),
+        });
+    }
+
+    for issue in scan_structure_issues(&text) {
+        let (line, column) = byte_offset_to_line_col(&text, issue.start);
+        findings.push(Finding {
+            source: "LexelStructure".to_owned(),
+            rule: issue.kind,
+            severity: "warning".to_owned(),
+            message: issue.message,
+            line,
+            column,
+            suggestion: issue.suggestion,
+        });
+    }
+
+    for hit in scan_style_guide(&text, &ctx.style_guide) {
+        let (line, column) = byte_offset_to_line_col(&text, hit.start);
+        let note = hit
+            .note
+            .as_deref()
+            .map(|n| format!(" ({n})"))
+            .unwrap_or_default();
+        findings.push(Finding {
+            source: "LexelStyleGuide".to_owned(),
+            rule: format!("style:{}", hit.term),
+            severity: "warning".to_owned(),
+            message: format!(
+                "Style guide prefers \"{}\" over \"{}\"{note}.",
+                hit.preferred, hit.term
+            ),
+            line,
+            column,
+            suggestion: Some(hit.preferred),
+        });
+    }
+
     findings.sort_by_key(|f| (f.line, f.column));
 
     Ok(FileCheckReport {
@@ -411,12 +469,23 @@ fn cmd_check(args: CheckArgs) -> Result<ExitCode> {
         engine.add_weirpack_bytes(&bytes)?;
     }
 
+    let style_guide: Vec<StyleGuideRule> = match &args.style_guide {
+        Some(path) => {
+            let raw = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read style guide {}", path.display()))?;
+            serde_json::from_str(&raw)
+                .with_context(|| format!("Invalid style guide JSON in {}", path.display()))?
+        }
+        None => Vec::new(),
+    };
+
     let scanner = SlopScanner::load_embedded()?;
     let catalog = SurfaceCatalog::load_embedded()?;
     let mut ctx = CheckContext {
         engine,
         scanner,
         catalog,
+        style_guide,
     };
 
     let mut reports = Vec::new();

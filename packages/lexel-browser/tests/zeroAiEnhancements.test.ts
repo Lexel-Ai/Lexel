@@ -2,11 +2,17 @@ import {
   applyRulePreset,
   applySafeGrammarLints,
   computeReadabilityMetrics,
+  expandSnippetAtCursor,
   getBuiltinSurfaceDefault,
+  getSurfaceGradeTarget,
   HARPER_RULE_PRESETS,
   isSurfaceProfileCustomized,
   normalizeTypography,
   resetSurfaceOverride,
+  scanInvisibleChars,
+  scanStructureIssues,
+  scanStyleGuide,
+  stripInvisibleChars,
   toSentenceCase,
   toTitleCase,
   upsertSurfaceOverride,
@@ -200,5 +206,43 @@ describe('zero-AI enhancements in lexel-ui & lexel-browser', () => {
 
     const resetList = resetSurfaceOverride(overrideList, 'web_reddit');
     expect(resetList).toEqual([]);
+  });
+
+  it('detects invisible watermarks, structure bugs, style guide terms, writing goals, and snippets', () => {
+    const raw = 'Hi\u200Bthere\u202Fteam';
+    expect(scanInvisibleChars(raw).length).toBe(2);
+    expect(stripInvisibleChars(raw).text).toBe('Hithere team');
+
+    const structure = scanStructureIssues('Check the the parser (unclosed and “mixed" quotes.');
+    expect(structure.some((i) => i.kind === 'duplicate_word')).toBe(true);
+    expect(structure.some((i) => i.kind === 'unbalanced_delimiter')).toBe(true);
+    expect(structure.some((i) => i.kind === 'mixed_quotes')).toBe(true);
+
+    const styleRules = [{ term: 'postgres', preferred: 'PostgreSQL', note: 'Official name' }];
+    expect(scanStyleGuide('Move postgres now, keep `postgres`.', styleRules).length).toBe(1);
+    const diag = scanTier0Diagnostics('Move postgres\u200B now.', 'general', {
+      styleGuide: styleRules,
+    });
+    expect(diag.invisibleLints.length).toBe(1);
+    expect(diag.styleGuideLints.length).toBe(1);
+
+    const fixed = applySafeDeterministicFixes('Move postgres\u200B now.', 'general', {
+      styleGuide: styleRules,
+    });
+    expect(fixed.text).toBe('Move PostgreSQL now.');
+
+    const goals = computeReadabilityMetrics(
+      'I think we just shipped it. The release was tested carefully yesterday. Fast work.',
+    );
+    expect(goals.speakingTimeSec).toBeGreaterThanOrEqual(goals.readingTimeSec);
+    expect(goals.hedgingCount).toBeGreaterThanOrEqual(2);
+    expect(goals.sentenceVarietyScore).toBeGreaterThan(0);
+    expect(getSurfaceGradeTarget('web_x').maxGrade).toBeLessThanOrEqual(9);
+
+    const expanded = expandSnippetAtCursor('Ready ;lgtm', 11, [
+      { trigger: ';lgtm', expansion: 'Looks good to me, ready to merge.' },
+    ]);
+    expect(expanded?.text).toBe('Ready Looks good to me, ready to merge.');
+    expect(expanded?.expandedTrigger).toBe(';lgtm');
   });
 });

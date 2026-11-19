@@ -268,3 +268,48 @@ fn custom_weirpack_builder_verifies_tests_and_loads_into_engine() {
         "expected AvoidSynergy diagnostic, got: {diags:?}"
     );
 }
+
+#[test]
+fn invisible_chars_structure_guard_style_guide_and_writing_goals_work() {
+    // 1. Invisible watermark chars detected & stripped cleanly
+    let watermarked = "Hello\u{200B}world\u{202F}from\u{FEFF}Lexel.";
+    let inv_hits = lexel_core::scan_invisible_chars(watermarked);
+    assert_eq!(inv_hits.len(), 3);
+    assert_eq!(inv_hits[0].codepoint, "U+200B");
+    let stripped = lexel_core::strip_invisible_chars(watermarked);
+    assert_eq!(stripped.text, "Helloworld fromLexel.");
+    assert_eq!(stripped.fixes_applied, 3);
+
+    // 2. Structure & punctuation guard detects duplicate words, unclosed delimiters, mixed quotes
+    let broken = "We saw the the bug (pending fix and “mixed\" quotes.";
+    let issues = lexel_core::scan_structure_issues(broken);
+    assert!(issues.iter().any(|i| i.kind == "duplicate_word"));
+    assert!(issues.iter().any(|i| i.kind == "unbalanced_delimiter"));
+    assert!(issues.iter().any(|i| i.kind == "mixed_quotes"));
+
+    // 3. Team Style Guide enforces brand naming outside code blocks
+    let rules = vec![lexel_core::StyleGuideRule {
+        term: "postgres".to_owned(),
+        preferred: "PostgreSQL".to_owned(),
+        case_sensitive: false,
+        note: Some("Use official product name".to_owned()),
+    }];
+    let style_text = "We migrate from postgres today, keep `postgres` code intact.";
+    let style_hits = lexel_core::scan_style_guide(style_text, &rules);
+    assert_eq!(style_hits.len(), 1);
+    let styled = lexel_core::apply_style_guide_fixes(style_text, &rules);
+    assert_eq!(
+        styled.text,
+        "We migrate from PostgreSQL today, keep `postgres` code intact."
+    );
+
+    // 4. Writing goals & style meter metrics
+    let prose = "I think we just shipped it. The patch was reviewed by two engineers yesterday. Latency dropped fast.";
+    let report = analyze_readability(prose);
+    assert!(report.speaking_time_sec >= report.reading_time_sec);
+    assert!(report.hedging_count >= 2);
+    assert!(report.passive_voice_count >= 1);
+    assert!(report.sentence_variety_score > 0);
+    let x_target = lexel_core::surface_grade_target("web_x");
+    assert!(x_target.max_grade <= 9.0);
+}

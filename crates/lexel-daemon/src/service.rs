@@ -3,14 +3,15 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use lexel_core::{
-    AiTaskId, GateCheckSummary, HarperDiagnostic, HarperEngine, HarperRuleInfo, LexelProfile,
-    ReadabilityReport, RulePreset, SafeFixResult, SecretMatch, SlopHit, SlopScanner,
-    StoredWeirpack, SurfaceCatalog, SurfaceViolation, UnifiedSettings, VoiceExample,
-    WeirpackValidationSummary, analyze_readability, apply_safe_deterministic_fixes,
-    build_custom_weirpack_bytes, build_rewrite_messages_with_surfaces, decode_weirpack_base64,
-    encode_weirpack_base64, normalize_typography, preset_rule_overrides, sanitize_model_output,
-    scan_secrets, structured_lint_config, synonyms_for, to_sentence_case, to_title_case,
-    validate_weirpack_bytes, verify_rewrite_with_surfaces,
+    AiTaskId, GateCheckSummary, HarperDiagnostic, HarperEngine, HarperRuleInfo, InvisibleCharHit,
+    LexelProfile, ReadabilityReport, RulePreset, SafeFixResult, SecretMatch, SlopHit, SlopScanner,
+    StoredWeirpack, StructureIssue, StyleGuideHit, SurfaceCatalog, SurfaceViolation,
+    UnifiedSettings, VoiceExample, WeirpackValidationSummary, analyze_readability,
+    apply_safe_deterministic_fixes, apply_style_guide_fixes, build_custom_weirpack_bytes,
+    build_rewrite_messages_with_surfaces, decode_weirpack_base64, encode_weirpack_base64,
+    normalize_typography, preset_rule_overrides, sanitize_model_output, scan_invisible_chars,
+    scan_secrets, scan_structure_issues, scan_style_guide, structured_lint_config, synonyms_for,
+    to_sentence_case, to_title_case, validate_weirpack_bytes, verify_rewrite_with_surfaces,
 };
 use lexel_db::{DatabaseBackup, DbError, LexelDb};
 use serde::{Deserialize, Serialize};
@@ -91,6 +92,9 @@ pub struct Tier0CheckResponse {
     pub slop: Vec<SlopHit>,
     pub surface: Vec<SurfaceViolation>,
     pub secrets: Vec<SecretMatch>,
+    pub invisible_chars: Vec<InvisibleCharHit>,
+    pub structure: Vec<StructureIssue>,
+    pub style_guide: Vec<StyleGuideHit>,
     pub safe_fixed_text: String,
     pub safe_fixes_count: usize,
     pub blocked: bool,
@@ -500,13 +504,25 @@ impl DaemonService {
     pub fn fix_safe(&self, req: Tier0FixSafeRequest) -> Result<SafeFixResult, DaemonError> {
         let profile = self.active_profile()?;
         let surface_id = req.surface_id.as_deref().unwrap_or("general");
-        Ok(apply_safe_deterministic_fixes(
+        let base = apply_safe_deterministic_fixes(
             &req.text,
             surface_id,
             &profile.settings.custom_slop_terms,
             &profile.settings.disabled_slop_terms,
             &profile.settings.custom_surfaces,
-        )?)
+        )?;
+        let styled = apply_style_guide_fixes(&base.text, &profile.settings.style_guide);
+        let mut categories = base.categories;
+        for c in styled.categories {
+            if !categories.contains(&c) {
+                categories.push(c);
+            }
+        }
+        Ok(SafeFixResult {
+            text: styled.text,
+            fixes_applied: base.fixes_applied + styled.fixes_applied,
+            categories,
+        })
     }
 
     pub fn title_case(&self, text: &str) -> String {
@@ -537,6 +553,7 @@ impl DaemonService {
             &profile.settings.disabled_slop_terms,
             &profile.settings.custom_surfaces,
         )?;
+        let styled = apply_style_guide_fixes(&deterministic.text, &profile.settings.style_guide);
 
         let mut engine = HarperEngine::new(
             profile.settings.dialect,
@@ -545,10 +562,10 @@ impl DaemonService {
             &profile.settings.ignored_lints,
         )?;
         engine.load_stored_weirpacks(&profile.settings.weirpacks);
-        let grammar = engine.apply_safe_harper_fixes(&deterministic.text, language);
+        let grammar = engine.apply_safe_harper_fixes(&styled.text, language);
 
         let mut categories = deterministic.categories;
-        for cat in grammar.categories {
+        for cat in styled.categories.into_iter().chain(grammar.categories) {
             if !categories.contains(&cat) {
                 categories.push(cat);
             }
@@ -556,7 +573,9 @@ impl DaemonService {
 
         Ok(SafeFixResult {
             text: grammar.text,
-            fixes_applied: deterministic.fixes_applied + grammar.fixes_applied,
+            fixes_applied: deterministic.fixes_applied
+                + styled.fixes_applied
+                + grammar.fixes_applied,
             categories,
         })
     }
@@ -665,6 +684,9 @@ impl DaemonService {
                 slop: Vec::new(),
                 surface: Vec::new(),
                 secrets: Vec::new(),
+                invisible_chars: Vec::new(),
+                structure: Vec::new(),
+                style_guide: Vec::new(),
                 safe_fixed_text: req.text,
                 safe_fixes_count: 0,
                 blocked: true,
@@ -693,6 +715,7 @@ impl DaemonService {
             &profile.settings.disabled_slop_terms,
             &profile.settings.custom_surfaces,
         )?;
+        let style_fix = apply_style_guide_fixes(&safe_fix.text, &profile.settings.style_guide);
 
         Ok(Tier0CheckResponse {
             harper: engine.check_text_with_language(&req.text, language),
@@ -704,8 +727,11 @@ impl DaemonService {
             ),
             surface: catalog.validate(&req.text, surface_id)?,
             secrets: scan_secrets(&req.text),
-            safe_fixed_text: safe_fix.text,
-            safe_fixes_count: safe_fix.fixes_applied,
+            invisible_chars: scan_invisible_chars(&req.text),
+            structure: scan_structure_issues(&req.text),
+            style_guide: scan_style_guide(&req.text, &profile.settings.style_guide),
+            safe_fixed_text: style_fix.text,
+            safe_fixes_count: safe_fix.fixes_applied + style_fix.fixes_applied,
             blocked: false,
         })
     }

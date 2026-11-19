@@ -53,7 +53,9 @@ import {
   getLanguageMode,
   getPageSummary,
   getPrivacyBlocklist,
+  getSnippets,
   getStoredWeirpacks,
+  getStyleGuide,
   getSurfaceOverride,
   getTheme,
   getVoiceExamples,
@@ -66,7 +68,9 @@ import {
   setLanguageMode,
   setPageSummary,
   setPrivacyBlocklist,
+  setSnippets,
   setStoredWeirpacks,
+  setStyleGuide,
   setSurfaceOverride,
   setTheme,
 } from '../shared/storage';
@@ -300,11 +304,12 @@ async function handleLint(
     return { kind: 'lints', lints: {} };
   }
 
-  const [isolateRes, languageMode, slopCfg, customSurfaces] = await Promise.all([
+  const [isolateRes, languageMode, slopCfg, customSurfaces, styleGuide] = await Promise.all([
     chrome.storage.local.get({ isolateEnglish: false }),
     getLanguageMode(),
     getCustomSlopConfig(),
     getCustomSurfaces(),
+    getStyleGuide(),
   ]);
   const isolateEnglish =
     (req.options?.isolateEnglish as boolean | undefined) ?? isolateRes.isolateEnglish === true;
@@ -328,14 +333,25 @@ async function handleLint(
 
   const bySource = Object.fromEntries(unpackedEntries) as UnpackedLintGroups;
   const surfaceId: SurfaceId = req.surfaceId ?? 'general';
-  const { slopLints, surfaceLints, secretLints } = scanTier0Diagnostics(req.text, surfaceId, {
-    customSlopTerms: slopCfg.customTerms,
-    disabledSlopTerms: slopCfg.disabledTerms,
-    customSurfaces,
-  });
+  const { slopLints, surfaceLints, secretLints, invisibleLints, structureLints, styleGuideLints } =
+    scanTier0Diagnostics(req.text, surfaceId, {
+      customSlopTerms: slopCfg.customTerms,
+      disabledSlopTerms: slopCfg.disabledTerms,
+      customSurfaces,
+      styleGuide,
+    });
 
   if (secretLints.length > 0) {
     bySource.LexelSecrets = secretLints;
+  }
+  if (invisibleLints.length > 0) {
+    bySource.LexelInvisibleChars = invisibleLints;
+  }
+  if (structureLints.length > 0) {
+    bySource.LexelStructure = structureLints;
+  }
+  if (styleGuideLints.length > 0) {
+    bySource.LexelStyleGuide = styleGuideLints;
   }
   if (slopLints.length > 0) {
     bySource.LexelAntiSlop = slopLints;
@@ -344,8 +360,16 @@ async function handleLint(
     bySource.LexelSurface = surfaceLints;
   }
 
+  const lexelSyntheticSources = new Set([
+    'LexelAntiSlop',
+    'LexelSurface',
+    'LexelSecrets',
+    'LexelInvisibleChars',
+    'LexelStructure',
+    'LexelStyleGuide',
+  ]);
   const harperCount = Object.entries(bySource)
-    .filter(([k]) => k !== 'LexelAntiSlop' && k !== 'LexelSurface' && k !== 'LexelSecrets')
+    .filter(([k]) => !lexelSyntheticSources.has(k))
     .reduce((acc, [, list]) => acc + list.length, 0);
 
   if (sender?.tab?.id != null) {
@@ -857,15 +881,17 @@ async function handleRequest(
       return { text: await instance.toTitleCase(req.text) };
     }
     case 'fixSafeIssues': {
-      const [slopCfg, customSurfaces] = await Promise.all([
+      const [slopCfg, customSurfaces, styleGuide] = await Promise.all([
         getCustomSlopConfig(),
         getCustomSurfaces(),
+        getStyleGuide(),
       ]);
       return {
         result: applySafeDeterministicFixes(req.text, req.surfaceId, {
           customSlopTerms: slopCfg.customTerms,
           disabledSlopTerms: slopCfg.disabledTerms,
           customSurfaces,
+          styleGuide,
         }),
       };
     }
@@ -951,17 +977,20 @@ async function handleRequest(
       return { config: nextConfig };
     }
     case 'fixAllSafe': {
-      const [instance, isolateRes, languageMode, slopCfg, customSurfaces] = await Promise.all([
-        ensureLinter(),
-        chrome.storage.local.get({ isolateEnglish: false }),
-        getLanguageMode(),
-        getCustomSlopConfig(),
-        getCustomSurfaces(),
-      ]);
+      const [instance, isolateRes, languageMode, slopCfg, customSurfaces, styleGuide] =
+        await Promise.all([
+          ensureLinter(),
+          chrome.storage.local.get({ isolateEnglish: false }),
+          getLanguageMode(),
+          getCustomSlopConfig(),
+          getCustomSurfaces(),
+          getStyleGuide(),
+        ]);
       const slopFixed = applySafeDeterministicFixes(req.text, req.surfaceId, {
         customSlopTerms: slopCfg.customTerms,
         disabledSlopTerms: slopCfg.disabledTerms,
         customSurfaces,
+        styleGuide,
       });
       const norm = normalizeTypography(slopFixed.text);
       const grouped = await instance.organizedLints(norm.text, {
@@ -1010,6 +1039,18 @@ async function handleRequest(
     case 'setCustomSurfaces':
       await setCustomSurfaces(req.surfaces);
       await pushPatchToDaemon({ customSurfaces: req.surfaces });
+      return { kind: 'unit' };
+    case 'getStyleGuide':
+      return { rules: await getStyleGuide() };
+    case 'setStyleGuide':
+      await setStyleGuide(req.rules);
+      await pushPatchToDaemon({ styleGuide: req.rules });
+      return { kind: 'unit' };
+    case 'getSnippets':
+      return { snippets: await getSnippets() };
+    case 'setSnippets':
+      await setSnippets(req.snippets);
+      await pushPatchToDaemon({ snippets: req.snippets });
       return { kind: 'unit' };
     case 'getStatsSummary': {
       const instance = await ensureLinter();

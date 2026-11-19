@@ -7,7 +7,10 @@ import {
   normalizeTypography,
   type RulePresetId,
   resolveSurfaceProfileShared,
+  scanInvisibleChars,
   scanSecretsAndPii,
+  scanStructureIssues,
+  scanStyleGuide,
   scanTier0DiagnosticsShared,
   toSentenceCase,
   toTitleCase,
@@ -97,6 +100,8 @@ export function createDefaultSettings(): UnifiedDaemonSettings {
     disabledSlopTerms: [],
     customSurfaces: [],
     weirpacks: [],
+    styleGuide: [],
+    snippets: [],
   };
 }
 
@@ -366,6 +371,7 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
       const tier0Options = {
         customSlopTerms: active.settings.customSlopTerms,
         disabledSlopTerms: active.settings.disabledSlopTerms,
+        styleGuide: active.settings.styleGuide ?? [],
       };
       const diag = scanTier0DiagnosticsShared(text, profile, tier0Options);
       const safe = applySafeDeterministicFixesShared(text, profile, tier0Options);
@@ -392,6 +398,9 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
           label: s.label,
           maskedPreview: s.maskedPreview,
         })),
+        invisibleChars: scanInvisibleChars(text),
+        structure: scanStructureIssues(text),
+        styleGuide: scanStyleGuide(text, active.settings.styleGuide ?? []),
         safeFixedText: safe.text,
         safeFixesCount: safe.fixesApplied,
         blocked: false,
@@ -405,6 +414,7 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
       return applySafeDeterministicFixesShared(text, profile, {
         customSlopTerms: active.settings.customSlopTerms,
         disabledSlopTerms: active.settings.disabledSlopTerms,
+        styleGuide: active.settings.styleGuide ?? [],
       });
     }
     case 'titleCase':

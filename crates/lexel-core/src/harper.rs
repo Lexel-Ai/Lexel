@@ -110,8 +110,13 @@ pub struct ReadabilityReport {
     pub long_sentences: usize,
     pub avg_words_per_sentence: f64,
     pub reading_time_sec: usize,
+    pub speaking_time_sec: usize,
     pub flesch_reading_ease: f64,
     pub flesch_kincaid_grade: f64,
+    pub passive_voice_count: usize,
+    pub hedging_count: usize,
+    pub hedging_percent: f64,
+    pub sentence_variety_score: usize,
 }
 
 /// Summary returned after validating an uploaded `.weirpack` archive.
@@ -710,23 +715,25 @@ fn sentence_case_segment(
     (out, at_sentence_start)
 }
 
-/// Deterministically normalize curly quotes, ellipses, non-breaking spaces, and redundant inline spaces outside code/quote blocks.
+/// Deterministically normalize curly quotes, ellipses, non-breaking spaces, invisible Unicode watermarks, and redundant inline spaces outside code/quote blocks.
 pub fn normalize_typography(text: &str) -> SafeFixResult {
-    let ignored = crate::slop::ignored_prose_ranges(text);
-    let mut fixes = 0usize;
-    let mut categories = Vec::new();
+    let stripped = crate::quality::strip_invisible_chars(text);
+    let working = stripped.text.as_str();
+    let ignored = crate::slop::ignored_prose_ranges(working);
+    let mut fixes = stripped.fixes_applied;
+    let mut categories = stripped.categories;
     let mut quote_fixes = 0usize;
     let mut ellipsis_fixes = 0usize;
     let mut space_fixes = 0usize;
-    let mut rebuilt = String::with_capacity(text.len());
+    let mut rebuilt = String::with_capacity(working.len());
     let mut cursor = 0usize;
 
     for (r_start, r_end) in ignored
         .into_iter()
-        .chain(std::iter::once((text.len(), text.len())))
+        .chain(std::iter::once((working.len(), working.len())))
     {
         if r_start > cursor {
-            let segment = &text[cursor..r_start];
+            let segment = &working[cursor..r_start];
             let mut quote_normalized = String::with_capacity(segment.len());
             for ch in segment.chars() {
                 match ch {
@@ -781,7 +788,7 @@ pub fn normalize_typography(text: &str) -> SafeFixResult {
             rebuilt.push_str(&lines_out.join("\n"));
         }
         if r_end > r_start {
-            rebuilt.push_str(&text[r_start..r_end]);
+            rebuilt.push_str(&working[r_start..r_end]);
         }
         cursor = r_end;
     }
@@ -825,6 +832,7 @@ pub fn analyze_readability(text: &str) -> ReadabilityReport {
 
     let mut sentences = 0usize;
     let mut long_sentences = 0usize;
+    let mut sentence_lengths: Vec<usize> = Vec::new();
     for part in text.split(['.', '!', '?']) {
         let count = part
             .split_whitespace()
@@ -832,6 +840,7 @@ pub fn analyze_readability(text: &str) -> ReadabilityReport {
             .count();
         if count > 0 {
             sentences += 1;
+            sentence_lengths.push(count);
             if count >= 25 {
                 long_sentences += 1;
             }
@@ -839,6 +848,7 @@ pub fn analyze_readability(text: &str) -> ReadabilityReport {
     }
     if words > 0 && sentences == 0 {
         sentences = 1;
+        sentence_lengths.push(words);
     }
 
     let avg_words_per_sentence = if sentences > 0 {
@@ -848,6 +858,11 @@ pub fn analyze_readability(text: &str) -> ReadabilityReport {
     };
     let reading_time_sec = if words > 0 {
         (((words as f64 / 200.0) * 60.0).round() as usize).max(1)
+    } else {
+        0
+    };
+    let speaking_time_sec = if words > 0 {
+        (((words as f64 / 130.0) * 60.0).round() as usize).max(1)
     } else {
         0
     };
@@ -862,6 +877,40 @@ pub fn analyze_readability(text: &str) -> ReadabilityReport {
         (0.0, 0.0)
     };
 
+    let passive_voice_count =
+        regex::Regex::new(r"(?i)\b(?:am|is|are|was|were|be|been|being)\s+[a-z]{3,}(?:ed|en)\b")
+            .map(|re| re.find_iter(text).count())
+            .unwrap_or(0);
+
+    let hedging_count = regex::Regex::new(
+        r"(?i)\b(?:just|actually|basically|honestly|somewhat|arguably|perhaps|maybe|seemingly|kind of|sort of|i think|i feel)\b",
+    )
+    .map(|re| re.find_iter(text).count())
+    .unwrap_or(0);
+
+    let hedging_percent = if words > 0 {
+        (((hedging_count as f64 / words as f64) * 100.0) * 10.0).round() / 10.0
+    } else {
+        0.0
+    };
+
+    let sentence_variety_score = if sentence_lengths.len() <= 1 {
+        if words > 0 { 100 } else { 0 }
+    } else {
+        let mean = sentence_lengths.iter().sum::<usize>() as f64 / sentence_lengths.len() as f64;
+        let variance = sentence_lengths
+            .iter()
+            .map(|&len| {
+                let d = len as f64 - mean;
+                d * d
+            })
+            .sum::<f64>()
+            / sentence_lengths.len() as f64;
+        let std_dev = variance.sqrt();
+        // A standard deviation around 6+ words gives crisp human rhythm variety.
+        ((std_dev / 6.0).min(1.0) * 100.0).round() as usize
+    };
+
     ReadabilityReport {
         chars,
         words,
@@ -870,8 +919,13 @@ pub fn analyze_readability(text: &str) -> ReadabilityReport {
         long_sentences,
         avg_words_per_sentence,
         reading_time_sec,
+        speaking_time_sec,
         flesch_reading_ease,
         flesch_kincaid_grade,
+        passive_voice_count,
+        hedging_count,
+        hedging_percent,
+        sentence_variety_score,
     }
 }
 

@@ -6,6 +6,8 @@ import type {
   HarperRulesPayload,
   Hotkey,
   StoredWeirpack,
+  StyleGuideRule,
+  TextSnippet,
   UnifiedDaemonSettings,
 } from '../lib/types';
 
@@ -47,9 +49,20 @@ export function RulesPane({
   const [weirNotice, setWeirNotice] = useState<string | null>(null);
   const [weirError, setWeirError] = useState<string | null>(null);
   const weirUploadRef = useRef<HTMLInputElement | null>(null);
+  const [styleTerm, setStyleTerm] = useState('');
+  const [stylePreferred, setStylePreferred] = useState('');
+  const [styleNote, setStyleNote] = useState('');
+  const [styleCaseSensitive, setStyleCaseSensitive] = useState(false);
+  const [styleNotice, setStyleNotice] = useState<string | null>(null);
+  const styleImportRef = useRef<HTMLInputElement | null>(null);
+  const [snippetTrigger, setSnippetTrigger] = useState('');
+  const [snippetExpansion, setSnippetExpansion] = useState('');
+  const [snippetLabel, setSnippetLabel] = useState('');
 
   const activeHotkey: Hotkey = settings.hotkey ?? { modifiers: ['Alt'], key: 'l' };
   const weirpacks: StoredWeirpack[] = settings.weirpacks ?? [];
+  const styleGuide: StyleGuideRule[] = settings.styleGuide ?? [];
+  const snippets: TextSnippet[] = settings.snippets ?? [];
 
   const allSurfaces = useMemo(() => {
     const map = new Map<string, string>();
@@ -234,6 +247,74 @@ export function RulesPane({
       weirpacks: weirpacks.filter((p) => p.name !== name),
     });
     await onRefreshRules();
+  }
+
+  async function addStyleRule(e: React.FormEvent) {
+    e.preventDefault();
+    const term = styleTerm.trim();
+    const preferred = stylePreferred.trim();
+    if (!term || !preferred) return;
+    const next: StyleGuideRule[] = [
+      ...styleGuide.filter((r) => r.term.toLowerCase() !== term.toLowerCase()),
+      {
+        term,
+        preferred,
+        caseSensitive: styleCaseSensitive,
+        note: styleNote.trim() || null,
+      },
+    ];
+    await onPatchSettings({ styleGuide: next });
+    setStyleTerm('');
+    setStylePreferred('');
+    setStyleNote('');
+    setStyleNotice(`Saved style rule "${term}" -> "${preferred}".`);
+  }
+
+  function exportStyleGuideJson() {
+    const blob = new Blob([JSON.stringify(styleGuide, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'lexel-style-guide.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importStyleGuideJson(file: File | undefined) {
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      if (!Array.isArray(parsed)) {
+        setStyleNotice('Style guide JSON must be an array of { term, preferred } rules.');
+        return;
+      }
+      const valid = parsed.filter(
+        (r): r is StyleGuideRule =>
+          Boolean(r) &&
+          typeof r === 'object' &&
+          typeof (r as StyleGuideRule).term === 'string' &&
+          typeof (r as StyleGuideRule).preferred === 'string',
+      );
+      await onPatchSettings({ styleGuide: valid });
+      setStyleNotice(`Imported ${valid.length} team style guide rule(s).`);
+    } catch {
+      setStyleNotice('Could not parse style guide JSON file.');
+    }
+  }
+
+  async function addSnippet(e: React.FormEvent) {
+    e.preventDefault();
+    const trigger = snippetTrigger.trim();
+    const expansion = snippetExpansion.trim();
+    if (trigger.length < 2 || !expansion) return;
+    const next: TextSnippet[] = [
+      ...snippets.filter((s) => s.trigger !== trigger),
+      { trigger, expansion, label: snippetLabel.trim() || trigger },
+    ];
+    await onPatchSettings({ snippets: next });
+    setSnippetTrigger('');
+    setSnippetExpansion('');
+    setSnippetLabel('');
   }
 
   return (
@@ -1099,6 +1180,296 @@ export function RulesPane({
           </div>
         )}
       </section>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <section
+          className="space-y-2.5 rounded-[8px] border p-3"
+          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-[13px] font-semibold">Team Style Guide ({styleGuide.length})</h2>
+              <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                Enforce product names and team wording across Desktop, Extension, CLI, and LSP.
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <input
+                ref={styleImportRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(e) => {
+                  void importStyleGuideJson(e.target.files?.[0]);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => styleImportRef.current?.click()}
+                className="rounded-[4px] border px-2 py-0.5 text-[11px]"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              >
+                Import JSON
+              </button>
+              <button
+                type="button"
+                onClick={exportStyleGuideJson}
+                className="rounded-[4px] border px-2 py-0.5 text-[11px]"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              >
+                Export
+              </button>
+            </div>
+          </div>
+
+          {styleNotice && (
+            <div className="text-[11px]" style={{ color: 'var(--lx-signal)' }}>
+              {styleNotice}
+            </div>
+          )}
+
+          <form onSubmit={addStyleRule} className="space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="text"
+                value={styleTerm}
+                onChange={(e) => setStyleTerm(e.target.value)}
+                placeholder="Avoid term (e.g. grey)"
+                aria-label="Style guide term to replace"
+                className="rounded-[6px] border px-2.5 py-1 text-[12px]"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              />
+              <input
+                type="text"
+                value={stylePreferred}
+                onChange={(e) => setStylePreferred(e.target.value)}
+                placeholder="Preferred (e.g. gray)"
+                aria-label="Style guide preferred term"
+                className="rounded-[6px] border px-2.5 py-1 text-[12px]"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={styleNote}
+                onChange={(e) => setStyleNote(e.target.value)}
+                placeholder="Optional note (e.g. US brand style)"
+                aria-label="Style guide note"
+                className="min-w-0 flex-1 rounded-[6px] border px-2.5 py-1 text-[12px]"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              />
+              <label className="flex items-center gap-1 text-[11px]">
+                <input
+                  type="checkbox"
+                  checked={styleCaseSensitive}
+                  onChange={(e) => setStyleCaseSensitive(e.target.checked)}
+                />
+                Case-sensitive
+              </label>
+              <button
+                type="submit"
+                className="rounded-[6px] border px-2.5 py-1 text-[12px] font-medium"
+                style={{
+                  backgroundColor: 'var(--lx-muted)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              >
+                Add Rule
+              </button>
+            </div>
+          </form>
+
+          {styleGuide.length === 0 ? (
+            <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
+              No team terminology rules yet. Add rules like &ldquo;Postgres&rdquo; -&gt;
+              &ldquo;PostgreSQL&rdquo;.
+            </p>
+          ) : (
+            <div className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
+              {styleGuide.map((rule) => (
+                <div
+                  key={`${rule.term}-${rule.preferred}`}
+                  className="flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+                  style={{
+                    backgroundColor: 'var(--lx-surface)',
+                    borderColor: 'var(--lx-border)',
+                  }}
+                >
+                  <div className="min-w-0 truncate">
+                    <span className="lexel-mono">{rule.term}</span> -&gt;{' '}
+                    <strong className="lexel-mono">{rule.preferred}</strong>
+                    {rule.note ? (
+                      <span className="ml-1.5 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                        ({rule.note})
+                      </span>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void onPatchSettings({
+                        styleGuide: styleGuide.filter((r) => r.term !== rule.term),
+                      })
+                    }
+                    className="rounded-[4px] border px-2 py-0.5 text-[11px]"
+                    style={{
+                      backgroundColor: 'var(--lx-card)',
+                      borderColor: 'var(--lx-border)',
+                      color: 'var(--lx-fg-muted)',
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section
+          className="space-y-2.5 rounded-[8px] border p-3"
+          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+        >
+          <div>
+            <h2 className="text-[13px] font-semibold">
+              Personal Text Snippets ({snippets.length})
+            </h2>
+            <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+              Type a trigger (e.g. <code>;lgtm</code> or <code>;sig</code>) then Space or Tab in
+              Desktop or any browser text box to expand instantly.
+            </p>
+          </div>
+
+          <form onSubmit={addSnippet} className="space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="text"
+                value={snippetTrigger}
+                onChange={(e) => setSnippetTrigger(e.target.value)}
+                placeholder="Trigger (e.g. ;lgtm)"
+                aria-label="Snippet trigger"
+                className="rounded-[6px] border px-2.5 py-1 text-[12px] lexel-mono"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              />
+              <input
+                type="text"
+                value={snippetLabel}
+                onChange={(e) => setSnippetLabel(e.target.value)}
+                placeholder="Label (optional)"
+                aria-label="Snippet label"
+                className="rounded-[6px] border px-2.5 py-1 text-[12px]"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              />
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={snippetExpansion}
+                onChange={(e) => setSnippetExpansion(e.target.value)}
+                placeholder="Expanded text (e.g. Looks good to me, ready to merge.)"
+                aria-label="Snippet expansion text"
+                className="min-w-0 flex-1 rounded-[6px] border px-2.5 py-1 text-[12px]"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              />
+              <button
+                type="submit"
+                className="rounded-[6px] border px-2.5 py-1 text-[12px] font-medium"
+                style={{
+                  backgroundColor: 'var(--lx-muted)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              >
+                Add Snippet
+              </button>
+            </div>
+          </form>
+
+          {snippets.length === 0 ? (
+            <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
+              No shortcuts configured yet. Snippets skip password and privacy-blocked fields.
+            </p>
+          ) : (
+            <div className="max-h-44 space-y-1.5 overflow-y-auto pr-1">
+              {snippets.map((snippet) => (
+                <div
+                  key={snippet.trigger}
+                  className="flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+                  style={{
+                    backgroundColor: 'var(--lx-surface)',
+                    borderColor: 'var(--lx-border)',
+                  }}
+                >
+                  <div className="min-w-0 truncate">
+                    <span
+                      className="rounded-[4px] border px-1.5 py-0.5 text-[11px] lexel-mono"
+                      style={{
+                        backgroundColor: 'var(--lx-signal-bg)',
+                        borderColor: 'var(--lx-signal)',
+                        color: 'var(--lx-signal)',
+                      }}
+                    >
+                      {snippet.trigger}
+                    </span>{' '}
+                    <span style={{ color: 'var(--lx-fg-muted)' }}>{snippet.expansion}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void onPatchSettings({
+                        snippets: snippets.filter((s) => s.trigger !== snippet.trigger),
+                      })
+                    }
+                    className="rounded-[4px] border px-2 py-0.5 text-[11px]"
+                    style={{
+                      backgroundColor: 'var(--lx-card)',
+                      borderColor: 'var(--lx-border)',
+                      color: 'var(--lx-fg-muted)',
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

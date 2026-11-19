@@ -1,6 +1,7 @@
 import {
   type AiHealthState,
   computeReadabilityMetrics,
+  getSurfaceGradeTarget,
   NibIcon,
   RewriteDiffCard,
   SlidersIcon,
@@ -93,7 +94,15 @@ export function SidePanelApp() {
         disabledSlopTerms: slopConfig.disabledTerms,
         customSurfaces,
       })
-    : { slopLints: [], surfaceLints: [], secretLints: [], secrets: [] };
+    : {
+        slopLints: [],
+        surfaceLints: [],
+        secretLints: [],
+        invisibleLints: [],
+        structureLints: [],
+        styleGuideLints: [],
+        secrets: [],
+      };
 
   async function handleRefreshHealth() {
     const health = (await chrome.runtime.sendMessage({ kind: 'aiHealth' })) as LocalAiHealth;
@@ -518,9 +527,13 @@ export function SidePanelApp() {
       {text.trim()
         ? (() => {
             const stats = computeReadabilityMetrics(text);
+            const target = getSurfaceGradeTarget(surfaceId);
+            const inRange =
+              stats.fleschKincaidGrade >= target.minGrade &&
+              stats.fleschKincaidGrade <= target.maxGrade;
             return (
               <div
-                className="rounded-[8px] border p-2.5 grid grid-cols-4 gap-2 text-[11px] lexel-mono"
+                className="rounded-[8px] border p-2.5 grid grid-cols-3 gap-2 text-[11px] lexel-mono"
                 style={{
                   backgroundColor: 'var(--lx-card)',
                   borderColor: 'var(--lx-border)',
@@ -534,15 +547,33 @@ export function SidePanelApp() {
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] uppercase">Grade</div>
-                  <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
-                    {stats.fleschKincaidGrade.toFixed(1)}
+                  <div className="text-[10px] uppercase">Grade Goal</div>
+                  <div
+                    className="text-xs font-semibold"
+                    style={{ color: inRange ? 'var(--lx-signal)' : 'var(--lx-warn)' }}
+                  >
+                    G{stats.fleschKincaidGrade.toFixed(1)} ({target.minGrade}-{target.maxGrade})
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] uppercase">Ease</div>
+                  <div className="text-[10px] uppercase">Read / Speak</div>
                   <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
-                    {stats.fleschReadingEase.toFixed(0)}
+                    {stats.readingTimeSec}s / {stats.speakingTimeSec}s
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase">Hedging</div>
+                  <div
+                    className="text-xs font-semibold"
+                    style={{ color: stats.hedgingPercent > 4 ? 'var(--lx-warn)' : 'var(--lx-fg)' }}
+                  >
+                    {stats.hedgingCount} ({stats.hedgingPercent}%)
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase">Variety</div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
+                    {stats.sentenceVarietyScore}/100
                   </div>
                 </div>
                 <div>

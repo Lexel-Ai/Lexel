@@ -193,6 +193,13 @@ pub fn apply_safe_deterministic_fixes(
     let mut fixes_applied = 0usize;
     let mut categories = Vec::new();
 
+    let stripped_inv = crate::quality::strip_invisible_chars(&current);
+    if stripped_inv.fixes_applied > 0 {
+        current = stripped_inv.text;
+        fixes_applied += stripped_inv.fixes_applied;
+        categories.push("invisible_chars".to_owned());
+    }
+
     if !profile.allow_em_dashes {
         let em_re = Regex::new(r"\s*—\s*|\s+--\s+")?;
         let ignored = ignored_prose_ranges(&current);

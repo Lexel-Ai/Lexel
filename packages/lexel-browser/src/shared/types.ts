@@ -5,13 +5,24 @@ import type {
   GateCheckSummary,
   QuickActionDef,
   RulePresetId,
+  StyleGuideRule,
   SurfaceId,
   SurfaceProfile,
+  TextSnippet,
 } from 'lexel-ui';
 import type { UnpackedLintGroups } from 'lint-framework';
 import type { MainModelTier, RuntimeKind } from './models';
 
-export type { AiTaskId, BuiltinSurfaceId, QuickActionDef, RulePresetId, SurfaceId, SurfaceProfile };
+export type {
+  AiTaskId,
+  BuiltinSurfaceId,
+  QuickActionDef,
+  RulePresetId,
+  StyleGuideRule,
+  SurfaceId,
+  SurfaceProfile,
+  TextSnippet,
+};
 
 export type LintLanguage = 'plaintext' | 'markdown' | 'typst';
 
@@ -110,6 +121,8 @@ export interface UnifiedDaemonSettings {
   disabledSlopTerms?: string[];
   customSurfaces?: SurfaceProfile[];
   weirpacks?: StoredWeirpack[];
+  styleGuide?: StyleGuideRule[];
+  snippets?: TextSnippet[];
 }
 
 export interface DaemonProfile {
@@ -269,6 +282,10 @@ export type ExtensionRequest =
   | { kind: 'lookupSynonyms'; word: string }
   | { kind: 'getCustomSurfaces' }
   | { kind: 'setCustomSurfaces'; surfaces: SurfaceProfile[] }
+  | { kind: 'getStyleGuide' }
+  | { kind: 'setStyleGuide'; rules: StyleGuideRule[] }
+  | { kind: 'getSnippets' }
+  | { kind: 'setSnippets'; snippets: TextSnippet[] }
   | { kind: 'getStatsSummary' }
   | { kind: 'exportStats' }
   | { kind: 'importStats'; statsJson: string }

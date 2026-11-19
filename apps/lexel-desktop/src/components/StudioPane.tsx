@@ -1,6 +1,8 @@
 import {
   type AiTaskId,
   computeReadabilityMetrics,
+  expandSnippetAtCursor,
+  getSurfaceGradeTarget,
   RewriteDiffCard,
   SurfaceBadge,
   type SurfaceProfile,
@@ -49,6 +51,11 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
 
   const activeSurface: SurfaceProfile = surfaces.find((s) => s.id === surfaceId) ?? surfaces[0];
   const metrics = useMemo(() => computeReadabilityMetrics(text), [text]);
+  const gradeTarget = useMemo(() => getSurfaceGradeTarget(surfaceId), [surfaceId]);
+  const gradeInRange =
+    metrics.words === 0 ||
+    (metrics.fleschKincaidGrade >= gradeTarget.minGrade &&
+      metrics.fleschKincaidGrade <= gradeTarget.maxGrade);
 
   async function runTier0Check() {
     setError(null);
@@ -305,6 +312,27 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== ' ' && e.key !== 'Tab' && e.key !== 'Enter') return;
+            const snippets = settings.snippets ?? [];
+            if (snippets.length === 0) return;
+            const el = e.currentTarget;
+            const start = el.selectionStart ?? text.length;
+            const end = el.selectionEnd ?? start;
+            if (start !== end) return;
+            const expanded = expandSnippetAtCursor(text, start, snippets);
+            if (!expanded) return;
+            e.preventDefault();
+            const suffix = e.key === 'Enter' ? '\n' : ' ';
+            const nextText = `${expanded.text.slice(0, expanded.cursor)}${suffix}${expanded.text.slice(expanded.cursor)}`;
+            const nextCaret = expanded.cursor + suffix.length;
+            setUndoText(text);
+            setText(nextText);
+            setNotice(`Expanded snippet ${expanded.expandedTrigger}.`);
+            requestAnimationFrame(() => {
+              el.setSelectionRange(nextCaret, nextCaret);
+            });
+          }}
           rows={7}
           aria-label="Draft editor"
           className="w-full rounded-[6px] border p-3 text-[13px] leading-[1.6]"
@@ -314,6 +342,47 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
             color: 'var(--lx-fg)',
           }}
         />
+
+        <div
+          className="mt-2 grid grid-cols-2 gap-2 rounded-[6px] border px-2.5 py-2 text-[11px] lexel-mono sm:grid-cols-5"
+          style={{
+            backgroundColor: 'var(--lx-surface)',
+            borderColor: 'var(--lx-border)',
+            color: 'var(--lx-fg-muted)',
+          }}
+        >
+          <div>
+            <span className="block text-[10px]">Grade Goal</span>
+            <span style={{ color: gradeInRange ? 'var(--lx-signal)' : 'var(--lx-warn)' }}>
+              G{metrics.fleschKincaidGrade.toFixed(1)} (target {gradeTarget.minGrade}-
+              {gradeTarget.maxGrade})
+            </span>
+          </div>
+          <div>
+            <span className="block text-[10px]">Read / Speak</span>
+            <span style={{ color: 'var(--lx-fg)' }}>
+              {metrics.readingTimeSec}s / {metrics.speakingTimeSec}s
+            </span>
+          </div>
+          <div>
+            <span className="block text-[10px]">Passive Hints</span>
+            <span
+              style={{ color: metrics.passiveHintCount > 2 ? 'var(--lx-warn)' : 'var(--lx-fg)' }}
+            >
+              {metrics.passiveHintCount}
+            </span>
+          </div>
+          <div>
+            <span className="block text-[10px]">Hedging</span>
+            <span style={{ color: metrics.hedgingPercent > 4 ? 'var(--lx-warn)' : 'var(--lx-fg)' }}>
+              {metrics.hedgingCount} ({metrics.hedgingPercent}%)
+            </span>
+          </div>
+          <div>
+            <span className="block text-[10px]">Rhythm Variety</span>
+            <span style={{ color: 'var(--lx-fg)' }}>{metrics.sentenceVarietyScore}/100</span>
+          </div>
+        </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
@@ -522,17 +591,70 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
         >
           <h2 className="text-[13px] font-semibold">
             Tier 0 Findings ({tier0.harper.length} grammar, {tier0.slop.length} slop,{' '}
-            {tier0.surface.length} surface, {tier0.secrets.length} secrets)
+            {tier0.surface.length} surface, {tier0.secrets.length} secrets,{' '}
+            {(tier0.invisibleChars?.length ?? 0) +
+              (tier0.structure?.length ?? 0) +
+              (tier0.styleGuide?.length ?? 0)}{' '}
+            quality)
           </h2>
 
           {tier0.harper.length === 0 &&
             tier0.slop.length === 0 &&
             tier0.surface.length === 0 &&
-            tier0.secrets.length === 0 && (
+            tier0.secrets.length === 0 &&
+            (tier0.invisibleChars?.length ?? 0) === 0 &&
+            (tier0.structure?.length ?? 0) === 0 &&
+            (tier0.styleGuide?.length ?? 0) === 0 && (
               <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
                 No issues found for {activeSurface.label}.
               </p>
             )}
+
+          {(tier0.invisibleChars ?? []).map((inv) => (
+            <div
+              key={`inv-${inv.codepoint}-${inv.start}`}
+              className="flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+              style={{
+                backgroundColor: 'var(--lx-warn-bg)',
+                borderColor: 'var(--lx-warn)',
+                color: 'var(--lx-warn)',
+              }}
+            >
+              <span>
+                Hidden Unicode <strong>{inv.label}</strong> ({inv.codepoint})
+              </span>
+              <span className="lexel-mono text-[11px]">Invisible</span>
+            </div>
+          ))}
+
+          {(tier0.structure ?? []).map((issue) => (
+            <div
+              key={`struct-${issue.kind}-${issue.start}-${issue.end}`}
+              className="flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+              style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+            >
+              <span>{issue.message}</span>
+              <span className="lexel-mono text-[11px]" style={{ color: 'var(--lx-warn)' }}>
+                {issue.kind}
+              </span>
+            </div>
+          ))}
+
+          {(tier0.styleGuide ?? []).map((hit) => (
+            <div
+              key={`style-${hit.term}-${hit.start}`}
+              className="flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+              style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+            >
+              <span>
+                Style Guide: <strong>{hit.term}</strong> -&gt; <code>{hit.preferred}</code>
+                {hit.note ? ` (${hit.note})` : ''}
+              </span>
+              <span className="lexel-mono text-[11px]" style={{ color: 'var(--lx-signal)' }}>
+                Brand
+              </span>
+            </div>
+          ))}
 
           {tier0.secrets.map((secret) => (
             <div

@@ -1,4 +1,14 @@
-import type { AiTaskId, GateCheckSummary, RulePresetId, SurfaceProfile } from 'lexel-ui';
+import type {
+  AiTaskId,
+  GateCheckSummary,
+  InvisibleCharHit,
+  RulePresetId,
+  StructureIssue,
+  StyleGuideHit,
+  StyleGuideRule,
+  SurfaceProfile,
+  TextSnippet,
+} from 'lexel-ui';
 
 export type MainModelTier = 'lexel-0.5b' | 'lexel-1.5b' | 'custom';
 export type RuntimeKind = 'auto' | 'llama_server' | 'ollama' | 'openai_compat';
@@ -72,6 +82,8 @@ export interface UnifiedDaemonSettings {
   disabledSlopTerms: string[];
   customSurfaces: SurfaceProfile[];
   weirpacks?: StoredWeirpack[];
+  styleGuide?: StyleGuideRule[];
+  snippets?: TextSnippet[];
 }
 
 export interface DaemonProfile {
@@ -154,6 +166,9 @@ export interface Tier0CheckResponse {
   slop: RustSlopHit[];
   surface: RustSurfaceViolation[];
   secrets: RustSecretMatch[];
+  invisibleChars?: InvisibleCharHit[];
+  structure?: StructureIssue[];
+  styleGuide?: StyleGuideHit[];
   safeFixedText: string;
   safeFixesCount: number;
   blocked: boolean;
@@ -223,4 +238,12 @@ export interface DownloadProgress {
 
 export type DesktopTabId = 'studio' | 'surfaces' | 'rules' | 'system';
 
-export type { AiTaskId, RulePresetId };
+export type {
+  AiTaskId,
+  InvisibleCharHit,
+  RulePresetId,
+  StructureIssue,
+  StyleGuideHit,
+  StyleGuideRule,
+  TextSnippet,
+};

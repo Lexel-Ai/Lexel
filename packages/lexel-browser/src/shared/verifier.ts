@@ -52,6 +52,9 @@ export function scanTier0Diagnostics(
   slopLints: UnpackedLint[];
   surfaceLints: UnpackedLint[];
   secretLints: UnpackedLint[];
+  invisibleLints: UnpackedLint[];
+  structureLints: UnpackedLint[];
+  styleGuideLints: UnpackedLint[];
   secrets: SecretMatch[];
 } {
   const profile = resolveProfile(surfaceOrId, options?.customSurfaces);
@@ -59,6 +62,9 @@ export function scanTier0Diagnostics(
     slopLints: UnpackedLint[];
     surfaceLints: UnpackedLint[];
     secretLints: UnpackedLint[];
+    invisibleLints: UnpackedLint[];
+    structureLints: UnpackedLint[];
+    styleGuideLints: UnpackedLint[];
     secrets: SecretMatch[];
   };
 }

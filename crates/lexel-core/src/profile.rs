@@ -94,6 +94,28 @@ pub enum AiTaskId {
     ReplyDraft,
 }
 
+/// Brand or team style guide terminology rule synced across Desktop, Extension, CLI, and LSP.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StyleGuideRule {
+    pub term: String,
+    pub preferred: String,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// Personal shortcut trigger that expands automatically while typing (e.g. `;sig` -> signature).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TextSnippet {
+    pub trigger: String,
+    pub expansion: String,
+    #[serde(default)]
+    pub label: String,
+}
+
 /// User-installed or custom-built Harper `.weirpack` synced across Desktop, CLI, and Browser.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -147,6 +169,10 @@ pub struct UnifiedSettings {
     pub custom_surfaces: Vec<SurfaceProfile>,
     #[serde(default)]
     pub weirpacks: Vec<StoredWeirpack>,
+    #[serde(default)]
+    pub style_guide: Vec<StyleGuideRule>,
+    #[serde(default)]
+    pub snippets: Vec<TextSnippet>,
 }
 
 impl Default for UnifiedSettings {
@@ -190,6 +216,8 @@ impl Default for UnifiedSettings {
             disabled_slop_terms: Vec::new(),
             custom_surfaces: Vec::new(),
             weirpacks: Vec::new(),
+            style_guide: Vec::new(),
+            snippets: Vec::new(),
         }
     }
 }

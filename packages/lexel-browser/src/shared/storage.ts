@@ -5,8 +5,10 @@ import type {
   LintLanguage,
   PageLintSummary,
   StoredWeirpack,
+  StyleGuideRule,
   SurfaceId,
   SurfaceProfile,
+  TextSnippet,
   UnifiedDaemonSettings,
   VoiceExample,
 } from './types';
@@ -39,6 +41,8 @@ const KEYS = {
   disabledSlopTerms: 'lexel_disabled_slop_terms',
   customSurfaces: 'lexel_custom_surfaces',
   weirpacks: 'lexel_weirpacks',
+  styleGuide: 'lexel_style_guide',
+  snippets: 'lexel_snippets',
 } as const;
 
 const DOMAIN_KEY_PREFIX = 'domainStatus ';
@@ -194,6 +198,8 @@ export async function applyUnifiedSettingsToStorage(
     [KEYS.disabledSlopTerms]: settings.disabledSlopTerms ?? [],
     [KEYS.customSurfaces]: settings.customSurfaces ?? [],
     [KEYS.weirpacks]: settings.weirpacks ?? [],
+    [KEYS.styleGuide]: settings.styleGuide ?? [],
+    [KEYS.snippets]: settings.snippets ?? [],
   };
 
   if (settings.hotkey) {
@@ -303,4 +309,22 @@ export async function getStoredWeirpacks(): Promise<StoredWeirpack[]> {
 
 export async function setStoredWeirpacks(packs: StoredWeirpack[]): Promise<void> {
   await chrome.storage.local.set({ [KEYS.weirpacks]: packs });
+}
+
+export async function getStyleGuide(): Promise<StyleGuideRule[]> {
+  const res = await chrome.storage.local.get({ [KEYS.styleGuide]: [] as StyleGuideRule[] });
+  return Array.isArray(res[KEYS.styleGuide]) ? (res[KEYS.styleGuide] as StyleGuideRule[]) : [];
+}
+
+export async function setStyleGuide(rules: StyleGuideRule[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.styleGuide]: rules });
+}
+
+export async function getSnippets(): Promise<TextSnippet[]> {
+  const res = await chrome.storage.local.get({ [KEYS.snippets]: [] as TextSnippet[] });
+  return Array.isArray(res[KEYS.snippets]) ? (res[KEYS.snippets] as TextSnippet[]) : [];
+}
+
+export async function setSnippets(snippets: TextSnippet[]): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.snippets]: snippets });
 }

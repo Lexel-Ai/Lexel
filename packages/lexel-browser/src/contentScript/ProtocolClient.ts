@@ -223,4 +223,11 @@ export default class ProtocolClient {
     });
     return res?.surfaces ?? [];
   }
+
+  public static async getSnippets(): Promise<import('../shared/types').TextSnippet[]> {
+    const res = await send<{ snippets?: import('../shared/types').TextSnippet[] }>({
+      kind: 'getSnippets',
+    });
+    return res?.snippets ?? [];
+  }
 }

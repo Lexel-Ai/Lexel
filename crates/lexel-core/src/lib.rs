@@ -2,6 +2,7 @@ pub mod harper;
 pub mod models;
 pub mod profile;
 pub mod prompt;
+pub mod quality;
 pub mod secrets;
 pub mod slop;
 pub mod surfaces;
@@ -19,11 +20,16 @@ pub use harper::{
 pub use models::{ModelManifest, ModelSpec, default_model_manifest};
 pub use profile::{
     ActivationKey, AiTaskId, Hotkey, LexelProfile, MainModelTier, RuntimeKind, StoredWeirpack,
-    UnifiedSettings, VoiceExample,
+    StyleGuideRule, TextSnippet, UnifiedSettings, VoiceExample,
 };
 pub use prompt::{
     ChatMessage, build_rewrite_messages, build_rewrite_messages_with_surfaces,
     select_relevant_voice_examples,
+};
+pub use quality::{
+    InvisibleCharHit, StructureIssue, StyleGuideHit, SurfaceGradeTarget, apply_style_guide_fixes,
+    scan_invisible_chars, scan_structure_issues, scan_style_guide, strip_invisible_chars,
+    surface_grade_target,
 };
 pub use secrets::{SecretMatch, mask_secret_value, scan_secrets};
 pub use slop::{SlopHit, SlopScanner, ignored_prose_ranges, parse_custom_slop_entry};

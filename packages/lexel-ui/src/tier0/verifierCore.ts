@@ -2,6 +2,7 @@ import surfacesData from '../../../../ml/personas/surfaces.json';
 import type { GateCheckSummary } from '../components/RewriteDiffCard';
 import {
   applySafeFixesForProfile,
+  applyStyleGuideFixes,
   findSlopMatchesWithConfig,
   ignoredProseRanges,
   overlapsIgnoredRanges,
@@ -9,7 +10,10 @@ import {
   type SecretMatch,
   SLOP_TERMS,
   type SlopHit,
+  scanInvisibleChars,
   scanSecretsAndPii,
+  scanStructureIssues,
+  scanStyleGuide,
 } from './secretsAndFixes';
 import type { SurfaceId, SurfaceProfile, Tier0Lint, Tier0Options, UnitBoundMetric } from './types';
 
@@ -119,7 +123,7 @@ function makeLint(
   };
 }
 
-/** Scan text for deterministic slop, surface violations, commit conventions, and secrets. */
+/** Scan text for deterministic slop, surface violations, commit conventions, secrets, invisible chars, structure, and style guide rules. */
 export function scanTier0DiagnosticsShared(
   text: string,
   profile: SurfaceProfile,
@@ -128,11 +132,17 @@ export function scanTier0DiagnosticsShared(
   slopLints: Tier0Lint[];
   surfaceLints: Tier0Lint[];
   secretLints: Tier0Lint[];
+  invisibleLints: Tier0Lint[];
+  structureLints: Tier0Lint[];
+  styleGuideLints: Tier0Lint[];
   secrets: SecretMatch[];
 } {
   const slopLints: Tier0Lint[] = [];
   const surfaceLints: Tier0Lint[] = [];
   const secretLints: Tier0Lint[] = [];
+  const invisibleLints: Tier0Lint[] = [];
+  const structureLints: Tier0Lint[] = [];
+  const styleGuideLints: Tier0Lint[] = [];
   const ignored = ignoredProseRanges(text);
 
   for (const hit of findSlopMatches(text, {
@@ -350,7 +360,58 @@ export function scanTier0DiagnosticsShared(
     );
   }
 
-  return { slopLints, surfaceLints, secretLints, secrets };
+  for (const inv of scanInvisibleChars(text)) {
+    invisibleLints.push(
+      makeLint(
+        text,
+        inv.start,
+        inv.end,
+        'Formatting',
+        'LexelInvisibleChars',
+        `Hidden Unicode character ${escapeHtml(inv.label)} (<code>${inv.codepoint}</code>).`,
+        [{ kind: inv.replacement === '' ? 1 : 0, replacement_text: inv.replacement }],
+      ),
+    );
+  }
+
+  for (const issue of scanStructureIssues(text)) {
+    structureLints.push(
+      makeLint(
+        text,
+        issue.start,
+        issue.end,
+        'Punctuation',
+        'LexelStructure',
+        escapeHtml(issue.message),
+        issue.suggestion !== undefined ? [{ kind: 0, replacement_text: issue.suggestion }] : [],
+      ),
+    );
+  }
+
+  for (const hit of scanStyleGuide(text, options?.styleGuide)) {
+    const noteHtml = hit.note ? ` (${escapeHtml(hit.note)})` : '';
+    styleGuideLints.push(
+      makeLint(
+        text,
+        hit.start,
+        hit.end,
+        'Style',
+        'LexelStyleGuide',
+        `Style guide prefers <code>${escapeHtml(hit.preferred)}</code> over <code>${escapeHtml(hit.term)}</code>${noteHtml}.`,
+        [{ kind: 0, replacement_text: hit.preferred }],
+      ),
+    );
+  }
+
+  return {
+    slopLints,
+    surfaceLints,
+    secretLints,
+    invisibleLints,
+    structureLints,
+    styleGuideLints,
+    secrets,
+  };
 }
 
 export function applySafeDeterministicFixesShared(
@@ -358,12 +419,19 @@ export function applySafeDeterministicFixesShared(
   profile: SurfaceProfile,
   options?: Tier0Options,
 ): SafeFixResult {
-  return applySafeFixesForProfile(
+  const base = applySafeFixesForProfile(
     text,
     profile,
     options?.disabledSlopTerms,
     options?.customSlopTerms,
   );
+  const styled = applyStyleGuideFixes(base.text, options?.styleGuide);
+  const categories = [...new Set([...base.categories, ...styled.categories])];
+  return {
+    text: styled.text,
+    fixesApplied: base.fixesApplied + styled.fixesApplied,
+    categories,
+  };
 }
 
 export function sanitizeModelOutput(raw: string): string {

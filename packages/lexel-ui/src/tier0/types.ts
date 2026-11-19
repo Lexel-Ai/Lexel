@@ -60,11 +60,56 @@ export interface Tier0Lint {
   source: string;
 }
 
+export interface StyleGuideRule {
+  term: string;
+  preferred: string;
+  caseSensitive?: boolean;
+  note?: string | null;
+}
+
+export interface TextSnippet {
+  trigger: string;
+  expansion: string;
+  label?: string;
+}
+
+export interface InvisibleCharHit {
+  codepoint: string;
+  label: string;
+  start: number;
+  end: number;
+  replacement: string;
+}
+
+export interface StructureIssue {
+  kind: string;
+  message: string;
+  problemText: string;
+  start: number;
+  end: number;
+  suggestion?: string;
+}
+
+export interface StyleGuideHit {
+  term: string;
+  preferred: string;
+  note?: string | null;
+  start: number;
+  end: number;
+}
+
+export interface SurfaceGradeTarget {
+  minGrade: number;
+  maxGrade: number;
+  audienceLabel: string;
+}
+
 export interface Tier0Options {
   allowCustomTerms?: boolean;
   customSlopTerms?: string[];
   disabledSlopTerms?: string[];
   customSurfaces?: SurfaceProfile[];
+  styleGuide?: StyleGuideRule[];
 }
 
 export interface UnitBoundMetric {
@@ -90,7 +135,11 @@ export interface ReadabilityMetrics {
   longSentences: number;
   avgWordsPerSentence: number;
   readingTimeSec: number;
+  speakingTimeSec: number;
   fleschReadingEase: number;
   fleschKincaidGrade: number;
   passiveHintCount: number;
+  hedgingCount: number;
+  hedgingPercent: number;
+  sentenceVarietyScore: number;
 }
