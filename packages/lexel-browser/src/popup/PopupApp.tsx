@@ -1,14 +1,14 @@
 import type { Dialect } from 'harper.js';
 import {
+  type AiHealthState,
   NibIcon,
   PanelIcon,
   SlidersIcon,
   StatusPill,
   SurfaceBadge,
   ThemeToggle,
-  type AiHealthState,
 } from 'lexel-ui';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { MODEL_MANIFEST_SPECS } from '../shared/models';
 import { detectSurfaceFromLocation, listSurfaceProfiles } from '../shared/surfaceDetector';
@@ -39,7 +39,7 @@ export function PopupApp() {
   const [copiedCmd, setCopiedCmd] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function refreshAll() {
+  const refreshAll = useCallback(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const url = tab?.url ?? '';
     const domain = url.startsWith('http') ? new URL(url).hostname : 'general';
@@ -108,13 +108,13 @@ export function PopupApp() {
     setAiSettings(aiRes.settings);
     setAiHealth(healthRes);
     setSummary(summaryRes.summary);
-  }
+  }, []);
 
   useEffect(() => {
     refreshAll()
       .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [refreshAll]);
 
   async function handleThemeToggle() {
     const next = theme === 'dark' ? 'light' : 'dark';
@@ -265,7 +265,7 @@ export function PopupApp() {
       ? 'lexel-0.5b'
       : aiSettings?.mainModelTier === 'lexel-1.5b'
         ? 'lexel-1.5b'
-        : aiSettings?.model ?? 'lexel-1.5b';
+        : (aiSettings?.model ?? 'lexel-1.5b');
 
   const customModels = (aiHealth?.models ?? []).filter(
     (m) => m !== 'qwen2.5:0.5b' && m !== 'qwen2.5:1.5b',
@@ -331,7 +331,10 @@ export function PopupApp() {
                   ))}
                 </select>
               ) : (
-                <span className="font-medium lexel-mono text-[11px]" style={{ color: 'var(--lx-signal)' }}>
+                <span
+                  className="font-medium lexel-mono text-[11px]"
+                  style={{ color: 'var(--lx-signal)' }}
+                >
                   {aiHealth.activeProfile.name}
                 </span>
               )}
@@ -344,7 +347,9 @@ export function PopupApp() {
           >
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
-                <div className="text-xs font-medium truncate">{surfaceCtx.domain || 'Browser tab'}</div>
+                <div className="text-xs font-medium truncate">
+                  {surfaceCtx.domain || 'Browser tab'}
+                </div>
                 <div className="mt-1">
                   <SurfaceBadge label={surfaceCtx.label} subcontext={surfaceCtx.subcontext} />
                 </div>
@@ -372,7 +377,10 @@ export function PopupApp() {
               </p>
             ) : (
               <div className="grid grid-cols-2 gap-2 pt-1">
-                <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                <label
+                  className="flex flex-col gap-1 text-[11px]"
+                  style={{ color: 'var(--lx-fg-muted)' }}
+                >
                   <span>Surface Style</span>
                   <select
                     value={surfaceOverride ?? 'auto'}
@@ -393,7 +401,10 @@ export function PopupApp() {
                   </select>
                 </label>
 
-                <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                <label
+                  className="flex flex-col gap-1 text-[11px]"
+                  style={{ color: 'var(--lx-fg-muted)' }}
+                >
                   <span>English Dialect</span>
                   <select
                     value={dialect}
@@ -492,7 +503,10 @@ export function PopupApp() {
 
             {aiSettings?.enabled ? (
               <>
-                <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                <label
+                  className="flex flex-col gap-1 text-[11px]"
+                  style={{ color: 'var(--lx-fg-muted)' }}
+                >
                   <span>Main Model</span>
                   <select
                     value={selectValue}

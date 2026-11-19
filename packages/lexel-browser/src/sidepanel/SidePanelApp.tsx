@@ -1,12 +1,12 @@
 import {
+  type AiHealthState,
+  computeReadabilityMetrics,
   NibIcon,
   RewriteDiffCard,
   SlidersIcon,
   StatusPill,
   SurfaceBadge,
   ThemeToggle,
-  computeReadabilityMetrics,
-  type AiHealthState,
 } from 'lexel-ui';
 import React, { useEffect, useState } from 'react';
 import type { LocalAiHealth } from '../shared/localAiClient';
@@ -172,7 +172,9 @@ export function SidePanelApp() {
       return;
     }
     if (tier0.secrets.length > 0) {
-      setError('Secrets Guard blocked AI rewrite because sensitive credentials or PII were detected.');
+      setError(
+        'Secrets Guard blocked AI rewrite because sensitive credentials or PII were detected.',
+      );
       return;
     }
     setLoading(true);
@@ -241,7 +243,7 @@ export function SidePanelApp() {
       ? 'lexel-0.5b'
       : aiSettings?.mainModelTier === 'lexel-1.5b'
         ? 'lexel-1.5b'
-        : aiSettings?.model ?? 'lexel-1.5b';
+        : (aiSettings?.model ?? 'lexel-1.5b');
 
   return (
     <div data-theme={theme} className="lexel-root min-h-screen p-4 flex flex-col gap-3">
@@ -482,11 +484,14 @@ export function SidePanelApp() {
         </label>
       ) : null}
 
-      {tier0.secretLints.length > 0 || tier0.slopLints.length > 0 || tier0.surfaceLints.length > 0 ? (
+      {tier0.secretLints.length > 0 ||
+      tier0.slopLints.length > 0 ||
+      tier0.surfaceLints.length > 0 ? (
         <div
           className="rounded-[8px] border p-2.5 flex flex-col gap-1.5 text-xs"
           style={{
-            backgroundColor: tier0.secretLints.length > 0 ? 'var(--lx-danger-bg)' : 'var(--lx-warn-bg)',
+            backgroundColor:
+              tier0.secretLints.length > 0 ? 'var(--lx-danger-bg)' : 'var(--lx-warn-bg)',
             borderColor: tier0.secretLints.length > 0 ? 'var(--lx-danger)' : 'var(--lx-warn)',
           }}
         >
@@ -494,10 +499,15 @@ export function SidePanelApp() {
             className="font-semibold"
             style={{ color: tier0.secretLints.length > 0 ? 'var(--lx-danger)' : 'var(--lx-warn)' }}
           >
-            Tier 0 Checks ({tier0.secretLints.length + tier0.slopLints.length + tier0.surfaceLints.length})
+            Tier 0 Checks (
+            {tier0.secretLints.length + tier0.slopLints.length + tier0.surfaceLints.length})
           </div>
-          {[...tier0.secretLints, ...tier0.slopLints, ...tier0.surfaceLints].map((lint, i) => (
-            <div key={i} className="text-[11px]" style={{ color: 'var(--lx-fg)' }}>
+          {[...tier0.secretLints, ...tier0.slopLints, ...tier0.surfaceLints].map((lint) => (
+            <div
+              key={`${lint.lint_kind_pretty}-${lint.span.start}-${lint.span.end}-${lint.problem_text}`}
+              className="text-[11px]"
+              style={{ color: 'var(--lx-fg)' }}
+            >
               <span className="lexel-mono font-medium">[{lint.lint_kind_pretty}]</span>{' '}
               {lint.message_html}
             </div>
@@ -505,49 +515,49 @@ export function SidePanelApp() {
         </div>
       ) : null}
 
-      {text.trim() ? (
-        (() => {
-          const stats = computeReadabilityMetrics(text);
-          return (
-            <div
-              className="rounded-[8px] border p-2.5 grid grid-cols-4 gap-2 text-[11px] lexel-mono"
-              style={{
-                backgroundColor: 'var(--lx-card)',
-                borderColor: 'var(--lx-border)',
-                color: 'var(--lx-fg-muted)',
-              }}
-            >
-              <div>
-                <div className="text-[10px] uppercase">Words</div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
-                  {stats.words}
+      {text.trim()
+        ? (() => {
+            const stats = computeReadabilityMetrics(text);
+            return (
+              <div
+                className="rounded-[8px] border p-2.5 grid grid-cols-4 gap-2 text-[11px] lexel-mono"
+                style={{
+                  backgroundColor: 'var(--lx-card)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg-muted)',
+                }}
+              >
+                <div>
+                  <div className="text-[10px] uppercase">Words</div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
+                    {stats.words}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase">Grade</div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
+                    {stats.fleschKincaidGrade.toFixed(1)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase">Ease</div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
+                    {stats.fleschReadingEase.toFixed(0)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase">Long Sent.</div>
+                  <div
+                    className="text-xs font-semibold"
+                    style={{ color: stats.longSentences > 0 ? 'var(--lx-warn)' : 'var(--lx-fg)' }}
+                  >
+                    {stats.longSentences}
+                  </div>
                 </div>
               </div>
-              <div>
-                <div className="text-[10px] uppercase">Grade</div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
-                  {stats.fleschKincaidGrade.toFixed(1)}
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] uppercase">Ease</div>
-                <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
-                  {stats.fleschReadingEase.toFixed(0)}
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] uppercase">Long Sent.</div>
-                <div
-                  className="text-xs font-semibold"
-                  style={{ color: stats.longSentences > 0 ? 'var(--lx-warn)' : 'var(--lx-fg)' }}
-                >
-                  {stats.longSentences}
-                </div>
-              </div>
-            </div>
-          );
-        })()
-      ) : null}
+            );
+          })()
+        : null}
 
       <div className="flex flex-wrap gap-1.5">
         <button

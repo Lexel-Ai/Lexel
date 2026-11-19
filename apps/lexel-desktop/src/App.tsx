@@ -1,6 +1,7 @@
-import { NibIcon, StatusPill, ThemeToggle, type AiHealthState } from 'lexel-ui';
+import { type AiHealthState, NibIcon, StatusPill, ThemeToggle } from 'lexel-ui';
 import { Globe, Layers, ShieldCheck, Sliders } from 'lucide-react';
-import React, { useCallback, useEffect, useState } from 'react';
+import type React from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { RulesPane } from './components/RulesPane';
 import { StudioPane } from './components/StudioPane';
 import { SurfacesPane } from './components/SurfacesPane';
@@ -215,7 +216,9 @@ export function App() {
               className="hidden border-t pt-2.5 text-[11px] lexel-mono md:block"
               style={{ borderColor: 'var(--lx-border)', color: 'var(--lx-fg-muted)' }}
             >
-              <div>OS: {envInfo.platform}/{envInfo.arch}</div>
+              <div>
+                OS: {envInfo.platform}/{envInfo.arch}
+              </div>
               <div>Rules: {harperRules?.rules.length ?? 0}</div>
               <div>Voice: {voiceExamples.length}</div>
             </div>
@@ -254,10 +257,7 @@ export function App() {
                 Loading Lexel Desktop...
               </p>
             ) : tab === 'studio' ? (
-              <StudioPane
-                settings={status.activeProfile.settings}
-                onRefreshStatus={refreshAll}
-              />
+              <StudioPane settings={status.activeProfile.settings} onRefreshStatus={refreshAll} />
             ) : tab === 'surfaces' ? (
               <SurfacesPane
                 settings={status.activeProfile.settings}

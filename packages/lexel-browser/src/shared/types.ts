@@ -11,14 +11,7 @@ import type {
 import type { UnpackedLintGroups } from 'lint-framework';
 import type { MainModelTier, RuntimeKind } from './models';
 
-export type {
-  AiTaskId,
-  BuiltinSurfaceId,
-  QuickActionDef,
-  RulePresetId,
-  SurfaceId,
-  SurfaceProfile,
-};
+export type { AiTaskId, BuiltinSurfaceId, QuickActionDef, RulePresetId, SurfaceId, SurfaceProfile };
 
 export type LintLanguage = 'plaintext' | 'markdown' | 'typst';
 
@@ -249,7 +242,10 @@ export type ExtensionRequest =
   | { kind: 'setTheme'; theme: 'dark' | 'light' }
   | { kind: 'setPageSummary'; summary: Omit<PageLintSummary, 'tabId' | 'updatedAt'> }
   | { kind: 'getPageSummary'; tabId: number }
-  | { kind: 'setActiveDraft'; draft: { text: string; surfaceId: SurfaceId; subcontext: string | null } }
+  | {
+      kind: 'setActiveDraft';
+      draft: { text: string; surfaceId: SurfaceId; subcontext: string | null };
+    }
   | { kind: 'getActiveDraft' }
   | { kind: 'openSidePanel'; windowId?: number }
   | { kind: 'openOptions' }

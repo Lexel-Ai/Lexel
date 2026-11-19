@@ -78,7 +78,10 @@ export function isSensitiveElement(el: Element | null): boolean {
   return false;
 }
 
-export function detectComposerKind(el: Element | null, pathname: string): 'reply' | 'post' | 'editor' {
+export function detectComposerKind(
+  el: Element | null,
+  pathname: string,
+): 'reply' | 'post' | 'editor' {
   const aria = (el?.getAttribute('aria-label') ?? '').toLowerCase();
   const placeholder = (el?.getAttribute('placeholder') ?? '').toLowerCase();
   const combined = `${aria} ${placeholder}`;
@@ -92,7 +95,11 @@ export function detectComposerKind(el: Element | null, pathname: string): 'reply
   ) {
     return 'reply';
   }
-  if (combined.includes('post') || combined.includes('what is happening') || pathname.includes('/submit')) {
+  if (
+    combined.includes('post') ||
+    combined.includes('what is happening') ||
+    pathname.includes('/submit')
+  ) {
     return 'post';
   }
   return 'editor';

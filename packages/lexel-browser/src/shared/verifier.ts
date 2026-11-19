@@ -1,36 +1,36 @@
-import type { UnpackedLint } from 'lint-framework';
 import {
-  SLOP_TERMS,
   applySafeDeterministicFixesShared,
   extractCodeAndUrlTokens,
   extractUnitBoundMetrics,
   findSlopMatches,
+  type GateCheckSummary,
   hasSecrets,
   resolveSurfaceProfileShared,
+  type SafeFixResult,
+  type SecretMatch,
+  SLOP_TERMS,
+  type SlopHit,
   sanitizeModelOutput,
   scanSecretsAndPii,
   scanTier0DiagnosticsShared,
-  verifyAiRewriteShared,
-  type GateCheckSummary,
-  type SafeFixResult,
-  type SecretMatch,
-  type SlopHit,
   type Tier0Options,
   type UnitBoundMetric,
+  verifyAiRewriteShared,
 } from 'lexel-ui';
+import type { UnpackedLint } from 'lint-framework';
 import { getSurfaceProfile } from './surfaceDetector';
 import type { SurfaceId, SurfaceProfile } from './types';
 
+export type { SafeFixResult, SecretMatch, SlopHit, Tier0Options, UnitBoundMetric };
 export {
-  SLOP_TERMS,
   extractCodeAndUrlTokens,
   extractUnitBoundMetrics,
   findSlopMatches,
   hasSecrets,
+  SLOP_TERMS,
   sanitizeModelOutput,
   scanSecretsAndPii,
 };
-export type { SafeFixResult, SecretMatch, SlopHit, Tier0Options, UnitBoundMetric };
 
 function resolveProfile(
   surfaceOrId: SurfaceId | SurfaceProfile,

@@ -1,62 +1,51 @@
 import surfacesData from '../../../../ml/personas/surfaces.json';
 import type { GateCheckSummary } from '../components/RewriteDiffCard';
 import {
-  SLOP_TERMS,
   applySafeFixesForProfile,
   findSlopMatchesWithConfig,
   ignoredProseRanges,
   overlapsIgnoredRanges,
-  scanSecretsAndPii,
   type SafeFixResult,
   type SecretMatch,
+  SLOP_TERMS,
   type SlopHit,
+  scanSecretsAndPii,
 } from './secretsAndFixes';
-import type {
-  SurfaceId,
-  SurfaceProfile,
-  Tier0Lint,
-  Tier0Options,
-  UnitBoundMetric,
-} from './types';
+import type { SurfaceId, SurfaceProfile, Tier0Lint, Tier0Options, UnitBoundMetric } from './types';
 
 export const BUILTIN_SURFACES: readonly SurfaceProfile[] =
   surfacesData.surfaces as SurfaceProfile[];
 
-const GENERAL_SURFACE: SurfaceProfile =
-  BUILTIN_SURFACES.find((s) => s.id === 'general') ?? {
-    id: 'general',
-    label: 'General',
-    hostPatterns: ['*'],
-    register: 'clear_human',
-    minChars: 4,
-    maxChars: 8000,
-    allowLinks: true,
-    allowEmojis: true,
-    allowHashtags: true,
-    allowEmDashes: false,
-    bannedOpeners: [],
-    promptDirective:
-      'Edit for clarity, active verbs, and natural human rhythm. Preserve every fact, number, URL, and code token.',
-    quickActions: [
-      { id: 'fix_grammar_flow', label: 'Fix & polish' },
-      { id: 'deslop', label: 'Remove AI tone' },
-      { id: 'shorten', label: 'Shorten' },
-    ],
-  };
+const GENERAL_SURFACE: SurfaceProfile = BUILTIN_SURFACES.find((s) => s.id === 'general') ?? {
+  id: 'general',
+  label: 'General',
+  hostPatterns: ['*'],
+  register: 'clear_human',
+  minChars: 4,
+  maxChars: 8000,
+  allowLinks: true,
+  allowEmojis: true,
+  allowHashtags: true,
+  allowEmDashes: false,
+  bannedOpeners: [],
+  promptDirective:
+    'Edit for clarity, active verbs, and natural human rhythm. Preserve every fact, number, URL, and code token.',
+  quickActions: [
+    { id: 'fix_grammar_flow', label: 'Fix & polish' },
+    { id: 'deslop', label: 'Remove AI tone' },
+    { id: 'shorten', label: 'Shorten' },
+  ],
+};
 
 const EMOJI_REGEX = /\p{Extended_Pictographic}/gu;
 const URL_REGEX = /https?:\/\/[^\s<>()]+/gi;
 const HASHTAG_REGEX = /(?:^|\s)(#[a-zA-Z][a-zA-Z0-9_]{1,})/g;
-const BACKTICK_OR_FLAG_REGEX =
-  /`[^`]+`|https?:\/\/[^\s<>()]+|(?:^|\s)(--?[a-zA-Z0-9_-]{2,})/g;
+const BACKTICK_OR_FLAG_REGEX = /`[^`]+`|https?:\/\/[^\s<>()]+|(?:^|\s)(--?[a-zA-Z0-9_-]{2,})/g;
 const METRIC_REGEX =
   /(?<prefix>#|\$|€|£)?(?<num>\d[\d,]*(?:\.\d+)?)(?<suffix>%|ms|s|x|k|m|b|mb|gb|kb|px)?/gi;
 
 function escapeHtml(text: string): string {
-  return text
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
+  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
 function stableHash(key: string): string {
@@ -159,23 +148,14 @@ export function scanTier0DiagnosticsShared(
             },
           ]
         : [];
-    const hint = hit.suggestion !== undefined
-      ? hit.suggestion === ''
-        ? `Common AI filler (<code>${escapeHtml(hit.term)}</code>). Remove it cleanly.`
-        : `Common AI buzzword (<code>${escapeHtml(hit.term)}</code>). Replace with <code>${escapeHtml(hit.suggestion)}</code>.`
-      : `Common AI buzzword ("${escapeHtml(hit.term)}"). Use specific, plain phrasing.`;
+    const hint =
+      hit.suggestion !== undefined
+        ? hit.suggestion === ''
+          ? `Common AI filler (<code>${escapeHtml(hit.term)}</code>). Remove it cleanly.`
+          : `Common AI buzzword (<code>${escapeHtml(hit.term)}</code>). Replace with <code>${escapeHtml(hit.suggestion)}</code>.`
+        : `Common AI buzzword ("${escapeHtml(hit.term)}"). Use specific, plain phrasing.`;
 
-    slopLints.push(
-      makeLint(
-        text,
-        hit.start,
-        hit.end,
-        'Style',
-        'LexelAntiSlop',
-        hint,
-        suggestions,
-      ),
-    );
+    slopLints.push(makeLint(text, hit.start, hit.end, 'Style', 'LexelAntiSlop', hint, suggestions));
   }
 
   if (!profile.allowEmDashes) {
@@ -390,7 +370,10 @@ export function sanitizeModelOutput(raw: string): string {
   let cleaned = raw.trim();
   cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
   if (cleaned.startsWith('```') && cleaned.endsWith('```')) {
-    cleaned = cleaned.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/, '').trim();
+    cleaned = cleaned
+      .replace(/^```[a-z]*\n?/i, '')
+      .replace(/\n?```$/, '')
+      .trim();
   }
   if (
     (cleaned.startsWith('"') && cleaned.endsWith('"')) ||

@@ -47,9 +47,9 @@ describe('lexel-desktop client & catalog', () => {
       patch: { customSurfaces: updatedSurfaces },
     });
     const merged = mergeSurfaceCatalog(patched.settings.customSurfaces);
-    expect(
-      merged.surfaces.find((s) => s.id === 'web_reddit')?.promptDirective,
-    ).toBe('Custom desktop prompt for technical Reddit replies.');
+    expect(merged.surfaces.find((s) => s.id === 'web_reddit')?.promptDirective).toBe(
+      'Custom desktop prompt for technical Reddit replies.',
+    );
 
     const reset = resetSurfaceOverride(patched.settings.customSurfaces, 'web_reddit');
     expect(reset).toEqual([]);
@@ -66,7 +66,9 @@ describe('lexel-desktop client & catalog', () => {
     expect(diag.secrets.length).toBe(1);
     expect(diag.secrets[0].maskedPreview).toContain('***');
 
-    const rules = await daemonRpc<{ rules: Array<{ id: string; enabled: boolean }> }>('harperRules');
+    const rules = await daemonRpc<{ rules: Array<{ id: string; enabled: boolean }> }>(
+      'harperRules',
+    );
     expect(rules.rules.length).toBeGreaterThan(0);
     expect(rules.rules[0].id).toBeTruthy();
 

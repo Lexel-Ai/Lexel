@@ -1,18 +1,15 @@
 import {
+  type AiTaskId,
   computeReadabilityMetrics,
   RewriteDiffCard,
   SurfaceBadge,
-  type AiTaskId,
   type SurfaceProfile,
 } from 'lexel-ui';
-import React, { useMemo, useState } from 'react';
+import type React from 'react';
+import { useMemo, useState } from 'react';
 import { daemonRpc, rewriteWithTask } from '../lib/desktopClient';
 import { mergeSurfaceCatalog } from '../lib/surfaces';
-import type {
-  RewriteResponse,
-  Tier0CheckResponse,
-  UnifiedDaemonSettings,
-} from '../lib/types';
+import type { RewriteResponse, Tier0CheckResponse, UnifiedDaemonSettings } from '../lib/types';
 
 interface StudioPaneProps {
   settings: UnifiedDaemonSettings;
@@ -50,8 +47,7 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const activeSurface: SurfaceProfile =
-    surfaces.find((s) => s.id === surfaceId) ?? surfaces[0];
+  const activeSurface: SurfaceProfile = surfaces.find((s) => s.id === surfaceId) ?? surfaces[0];
   const metrics = useMemo(() => computeReadabilityMetrics(text), [text]);
 
   async function runTier0Check() {
@@ -98,7 +94,9 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
     }
   }
 
-  async function runDeterministicTransform(kind: 'titleCase' | 'sentenceCase' | 'normalizeTypography') {
+  async function runDeterministicTransform(
+    kind: 'titleCase' | 'sentenceCase' | 'normalizeTypography',
+  ) {
     if (!text.trim()) return;
     setError(null);
     setNotice(null);
@@ -190,7 +188,8 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
         <div>
           <h1 className="text-[18px] font-semibold">Quick Rewrite</h1>
           <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-            Draft, check with native Rust Harper + Anti-Slop, and run surface-scoped local AI rewrites.
+            Draft, check with native Rust Harper + Anti-Slop, and run surface-scoped local AI
+            rewrites.
           </p>
         </div>
         <SurfaceBadge
@@ -290,9 +289,13 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
         className="rounded-[8px] border p-3"
         style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
       >
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
+        <div
+          className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] lexel-mono"
+          style={{ color: 'var(--lx-fg-muted)' }}
+        >
           <span>
-            Draft ({metrics.words} words, {text.length} chars, grade {metrics.fleschKincaidGrade.toFixed(1)}, ease {metrics.fleschReadingEase.toFixed(0)})
+            Draft ({metrics.words} words, {text.length} chars, grade{' '}
+            {metrics.fleschKincaidGrade.toFixed(1)}, ease {metrics.fleschReadingEase.toFixed(0)})
           </span>
           <span>
             Limit: {activeSurface.maxChars ? `${activeSurface.maxChars} chars` : 'unbounded'}
@@ -518,7 +521,8 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
           style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
         >
           <h2 className="text-[13px] font-semibold">
-            Tier 0 Findings ({tier0.harper.length} grammar, {tier0.slop.length} slop, {tier0.surface.length} surface, {tier0.secrets.length} secrets)
+            Tier 0 Findings ({tier0.harper.length} grammar, {tier0.slop.length} slop,{' '}
+            {tier0.surface.length} surface, {tier0.secrets.length} secrets)
           </h2>
 
           {tier0.harper.length === 0 &&
@@ -530,9 +534,9 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
               </p>
             )}
 
-          {tier0.secrets.map((secret, idx) => (
+          {tier0.secrets.map((secret) => (
             <div
-              key={`secret-${idx}-${secret.start}`}
+              key={`secret-${secret.kind}-${secret.start}-${secret.end}`}
               role="alert"
               className="flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
               style={{
@@ -542,20 +546,22 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
               }}
             >
               <span>
-                <strong>{secret.label}</strong> detected ({secret.maskedPreview}). Remove before AI rewrite.
+                <strong>{secret.label}</strong> detected ({secret.maskedPreview}). Remove before AI
+                rewrite.
               </span>
               <span className="lexel-mono text-[11px]">{secret.kind}</span>
             </div>
           ))}
 
-          {tier0.slop.map((hit, idx) => (
+          {tier0.slop.map((hit) => (
             <div
-              key={`slop-${idx}-${hit.start}`}
+              key={`slop-${hit.term}-${hit.start}-${hit.end}`}
               className="flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
               style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
             >
               <span>
-                <strong className="lexel-mono">{hit.term}</strong> flagged ({hit.isEmDash ? 'em_dash' : 'slop'})
+                <strong className="lexel-mono">{hit.term}</strong> flagged (
+                {hit.isEmDash ? 'em_dash' : 'slop'})
               </span>
               {hit.suggestion && (
                 <span className="lexel-mono text-[11px]" style={{ color: 'var(--lx-signal)' }}>
@@ -565,9 +571,9 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
             </div>
           ))}
 
-          {tier0.surface.map((item, idx) => (
+          {tier0.surface.map((item) => (
             <div
-              key={`surface-${idx}-${item.start}`}
+              key={`surface-${item.kind}-${item.start}-${item.end}`}
               className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
               style={{
                 backgroundColor: 'var(--lx-warn-bg)',
@@ -579,9 +585,9 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
             </div>
           ))}
 
-          {tier0.harper.map((item, idx) => (
+          {tier0.harper.map((item) => (
             <div
-              key={`harper-${idx}-${item.start}-${item.end}`}
+              key={`harper-${item.rule}-${item.start}-${item.end}`}
               className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
               style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
             >

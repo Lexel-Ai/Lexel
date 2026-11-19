@@ -2,8 +2,8 @@ import type { LintOptions } from 'harper.js';
 import {
   closestBox,
   computeLintBoxes,
-  getCMRoot,
   getCaretPosition,
+  getCMRoot,
   Highlights,
   type IgnorableLintBox,
   isHeading,
@@ -59,7 +59,10 @@ function isGoogleDocsMirrorTarget(target: Node): target is HTMLElement {
 }
 
 function getGoogleDocsVisibleWindows(target: HTMLElement, source: string): UnpackedSpan[] {
-  if (!isGoogleDocsMirrorTarget(target) || target.getAttribute('data-harper-gdocs-source') !== 'native') {
+  if (
+    !isGoogleDocsMirrorTarget(target) ||
+    target.getAttribute('data-harper-gdocs-source') !== 'native'
+  ) {
     return [];
   }
   const editor = target.closest('.kix-appview-editor');

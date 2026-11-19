@@ -21,9 +21,7 @@ export function SurfaceBadge({ label, subcontext, charCount, maxChars }: Surface
       }}
     >
       <span>{label}</span>
-      {subcontext ? (
-        <span style={{ color: 'var(--lx-fg-muted)' }}>/ {subcontext}</span>
-      ) : null}
+      {subcontext ? <span style={{ color: 'var(--lx-fg-muted)' }}>/ {subcontext}</span> : null}
       {typeof charCount === 'number' && typeof maxChars === 'number' ? (
         <span style={{ color: overLimit ? 'var(--lx-danger)' : 'var(--lx-fg-muted)' }}>
           {charCount}/{maxChars}

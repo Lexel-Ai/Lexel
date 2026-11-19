@@ -58,9 +58,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
 # Tauri Desktop Rust backend (if apps/lexel-desktop/src-tauri changed)
-cargo check --manifest-path apps/lexel-desktop/src-tauri/Cargo.toml
+cargo fmt --manifest-path apps/lexel-desktop/src-tauri/Cargo.toml --check
+cargo clippy --manifest-path apps/lexel-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
 
-# TypeScript / React packages & apps
+# TypeScript / React packages & apps (Biome format + lint + tsc + tests + build)
+pnpm run check
 pnpm -r typecheck
 pnpm -r test
 pnpm -r build

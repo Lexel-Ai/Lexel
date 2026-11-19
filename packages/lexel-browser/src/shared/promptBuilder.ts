@@ -1,7 +1,4 @@
-import {
-  buildRewriteMessagesShared,
-  selectRelevantVoiceExamplesShared,
-} from 'lexel-ui';
+import { buildRewriteMessagesShared, selectRelevantVoiceExamplesShared } from 'lexel-ui';
 import type { AiTaskId, SurfaceId, SurfaceProfile, VoiceExample } from './types';
 
 export function selectRelevantVoiceExamples(

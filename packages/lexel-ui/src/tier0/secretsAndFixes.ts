@@ -1,10 +1,5 @@
 import slopConfig from '../../../../rules/slop_terms.json';
-import type {
-  ReadabilityMetrics,
-  RulePresetDefinition,
-  RulePresetId,
-  Tier0Lint,
-} from './types';
+import type { ReadabilityMetrics, RulePresetDefinition, RulePresetId, Tier0Lint } from './types';
 
 export interface SecretMatch {
   kind: string;
@@ -83,7 +78,8 @@ const SECRET_RULES: Array<{ kind: string; label: string; regex: RegExp }> = [
   {
     kind: 'discord_webhook',
     label: 'Discord webhook URL',
-    regex: /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]{20,}/g,
+    regex:
+      /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]{20,}/g,
   },
   {
     kind: 'aws_access_key',
@@ -309,9 +305,7 @@ function preserveMatchedCase(matched: string, replacement: string): string {
   return replacement;
 }
 
-function splitProseAndIgnored(
-  text: string,
-): Array<{ slice: string; ignored: boolean }> {
+function splitProseAndIgnored(text: string): Array<{ slice: string; ignored: boolean }> {
   const ranges = ignoredProseRanges(text);
   if (ranges.length === 0) return [{ slice: text, ignored: false }];
   const parts: Array<{ slice: string; ignored: boolean }> = [];
@@ -337,7 +331,11 @@ function buildReplacementPairs(
   const customMap = new Map<string, string>();
   for (const raw of customSlopTerms ?? []) {
     const parsed = parseCustomSlopEntry(raw);
-    if (parsed.term && parsed.replacement !== undefined && !disabledSet.has(parsed.term.toLowerCase())) {
+    if (
+      parsed.term &&
+      parsed.replacement !== undefined &&
+      !disabledSet.has(parsed.term.toLowerCase())
+    ) {
       customMap.set(parsed.term.toLowerCase(), parsed.replacement);
       pairs.push([parsed.term, parsed.replacement]);
     }
@@ -467,9 +465,7 @@ export function toTitleCase(text: string): string {
     .map(({ slice, ignored }) => {
       if (ignored) return slice;
       const tokens = slice.split(/(\s+)/);
-      const wordIndices = tokens
-        .map((tok, i) => (/\S/.test(tok) ? i : -1))
-        .filter((i) => i >= 0);
+      const wordIndices = tokens.map((tok, i) => (/\S/.test(tok) ? i : -1)).filter((i) => i >= 0);
       const firstIdx = wordIndices[0] ?? -1;
       const lastIdx = wordIndices[wordIndices.length - 1] ?? -1;
 
@@ -700,7 +696,9 @@ export function computeReadabilityMetrics(text: string): ReadabilityMetrics {
   const rawEase = 206.835 - 1.015 * wordsPerSentence - 84.6 * syllablesPerWord;
   const rawGrade = 0.39 * wordsPerSentence + 11.8 * syllablesPerWord - 15.59;
 
-  const passiveMatches = trimmed.match(/\b(?:am|is|are|was|were|be|been|being)\s+[a-z]{3,}(?:ed|en)\b/gi);
+  const passiveMatches = trimmed.match(
+    /\b(?:am|is|are|was|were|be|been|being)\s+[a-z]{3,}(?:ed|en)\b/gi,
+  );
 
   return {
     chars: text.length,
@@ -726,7 +724,8 @@ export const HARPER_RULE_PRESETS: ReadonlyArray<RulePresetDefinition> = [
   {
     id: 'strict_technical',
     label: 'Strict Technical',
-    description: 'Flags filler words, hedging, long sentences, repetition, and enforces Oxford commas.',
+    description:
+      'Flags filler words, hedging, long sentences, repetition, and enforces Oxford commas.',
     rules: {
       BoringWords: true,
       FillerWords: true,
@@ -741,7 +740,8 @@ export const HARPER_RULE_PRESETS: ReadonlyArray<RulePresetDefinition> = [
   {
     id: 'formal_academic',
     label: 'Formal / Academic',
-    description: 'Adds contraction checks and spelled-number guidance alongside strict prose clarity.',
+    description:
+      'Adds contraction checks and spelled-number guidance alongside strict prose clarity.',
     rules: {
       AvoidContractions: true,
       BoringWords: true,
@@ -758,7 +758,8 @@ export const HARPER_RULE_PRESETS: ReadonlyArray<RulePresetDefinition> = [
   {
     id: 'casual_chat',
     label: 'Casual Chat',
-    description: 'Relaxes sentence capitalization, contraction, and long-sentence checks for quick messages.',
+    description:
+      'Relaxes sentence capitalization, contraction, and long-sentence checks for quick messages.',
     rules: {
       LongSentences: false,
       SentenceCapitalization: false,

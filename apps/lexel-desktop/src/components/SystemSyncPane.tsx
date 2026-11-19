@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import type React from 'react';
+import { useEffect, useState } from 'react';
 import {
   daemonRpc,
   deleteModel,
@@ -49,7 +50,7 @@ export function SystemSyncPane({
 
   useEffect(() => {
     setRenameDraft(status.activeProfile.name);
-  }, [status.activeProfile.id, status.activeProfile.name]);
+  }, [status.activeProfile.name]);
 
   useEffect(() => {
     let active = true;
@@ -75,7 +76,9 @@ export function SystemSyncPane({
     status.runtime.llamaServerAvailable ||
     status.runtime.ollamaBinaryAvailable ||
     status.runtime.ollamaRunning;
-  const hasAnyModel = status.models.some((m) => (m.ggufInstalled && m.ggufSizeValid) || m.ollamaInstalled);
+  const hasAnyModel = status.models.some(
+    (m) => (m.ggufInstalled && m.ggufSizeValid) || m.ollamaInstalled,
+  );
 
   async function handleInstallNativeMessaging() {
     setActionError(null);
@@ -239,7 +242,8 @@ export function SystemSyncPane({
       <header>
         <h1 className="text-[18px] font-semibold">Local AI, Extension Sync &amp; Profiles</h1>
         <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-          Connect your browser extension to lexel.db, download verified GGUF weights, and tune local inference.
+          Connect your browser extension to lexel.db, download verified GGUF weights, and tune local
+          inference.
         </p>
       </header>
 
@@ -276,9 +280,13 @@ export function SystemSyncPane({
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-[14px] font-semibold">Browser Extension Bridge (Native Messaging)</h2>
+            <h2 className="text-[14px] font-semibold">
+              Browser Extension Bridge (Native Messaging)
+            </h2>
             <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-              Writes <code className="lexel-mono">com.lexel.daemon.json</code> so Chrome, Brave, Edge, and Firefox sync rules, prompts, and local AI from <code className="lexel-mono">{envInfo?.dbPath ?? 'lexel.db'}</code>.
+              Writes <code className="lexel-mono">com.lexel.daemon.json</code> so Chrome, Brave,
+              Edge, and Firefox sync rules, prompts, and local AI from{' '}
+              <code className="lexel-mono">{envInfo?.dbPath ?? 'lexel.db'}</code>.
             </p>
           </div>
           <span className="text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
@@ -295,7 +303,10 @@ export function SystemSyncPane({
             >
               <div className="min-w-0">
                 <div className="font-medium">{target.browser}</div>
-                <div className="truncate max-w-[260px] text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
+                <div
+                  className="truncate max-w-[260px] text-[11px] lexel-mono"
+                  style={{ color: 'var(--lx-fg-muted)' }}
+                >
                   {target.manifestPath}
                 </div>
               </div>
@@ -409,7 +420,9 @@ export function SystemSyncPane({
             <div style={{ color: 'var(--lx-fg-muted)' }}>Readiness</div>
             <div
               className="lexel-mono font-medium"
-              style={{ color: hasAnyRuntime && hasAnyModel ? 'var(--lx-signal)' : 'var(--lx-warn)' }}
+              style={{
+                color: hasAnyRuntime && hasAnyModel ? 'var(--lx-signal)' : 'var(--lx-warn)',
+              }}
             >
               {hasAnyRuntime && hasAnyModel
                 ? 'Ready for local rewrites'
@@ -431,7 +444,8 @@ export function SystemSyncPane({
           >
             No local inference engine was detected yet. Install Ollama (ollama.com) or place{' '}
             <code className="lexel-mono">llama-server</code> in{' '}
-            <code className="lexel-mono">{envInfo?.dataDir ?? '~/.local/share/lexel'}/bin/</code>, then click Enable Local AI.
+            <code className="lexel-mono">{envInfo?.dataDir ?? '~/.local/share/lexel'}/bin/</code>,
+            then click Enable Local AI.
           </div>
         )}
 
@@ -475,9 +489,7 @@ export function SystemSyncPane({
             <select
               id="ai-runtime-kind"
               value={settings.runtime}
-              onChange={(e) =>
-                void onPatchSettings({ runtime: e.target.value as RuntimeKind })
-              }
+              onChange={(e) => void onPatchSettings({ runtime: e.target.value as RuntimeKind })}
               className="w-full rounded-[6px] border px-2.5 py-1.5 text-[12px]"
               style={{
                 backgroundColor: 'var(--lx-surface)',
@@ -516,12 +528,22 @@ export function SystemSyncPane({
                     <span>{m.label}</span>
                     <span
                       className="text-[11px] lexel-mono"
-                      style={{ color: ready || m.ollamaInstalled ? 'var(--lx-signal)' : 'var(--lx-fg-muted)' }}
+                      style={{
+                        color:
+                          ready || m.ollamaInstalled ? 'var(--lx-signal)' : 'var(--lx-fg-muted)',
+                      }}
                     >
-                      {ready ? 'GGUF verified' : m.ollamaInstalled ? 'Ollama ready' : 'Not downloaded'}
+                      {ready
+                        ? 'GGUF verified'
+                        : m.ollamaInstalled
+                          ? 'Ollama ready'
+                          : 'Not downloaded'}
                     </span>
                   </div>
-                  <div className="mt-0.5 text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
+                  <div
+                    className="mt-0.5 text-[11px] lexel-mono"
+                    style={{ color: 'var(--lx-fg-muted)' }}
+                  >
                     {m.ggufFilename} ({totalMb} MB)
                   </div>
                 </div>
@@ -585,7 +607,10 @@ export function SystemSyncPane({
           })}
         </div>
 
-        <div className="grid gap-3 border-t pt-3 sm:grid-cols-3" style={{ borderColor: 'var(--lx-border)' }}>
+        <div
+          className="grid gap-3 border-t pt-3 sm:grid-cols-3"
+          style={{ borderColor: 'var(--lx-border)' }}
+        >
           <div>
             <label
               htmlFor="ai-temperature"
@@ -922,7 +947,8 @@ export function SystemSyncPane({
           <div className="max-h-56 space-y-1.5 overflow-y-auto">
             {voiceExamples.length === 0 ? (
               <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                No saved style pairs yet. Accept a rewrite in Quick Rewrite or the browser extension to build local style memory.
+                No saved style pairs yet. Accept a rewrite in Quick Rewrite or the browser extension
+                to build local style memory.
               </p>
             ) : (
               voiceExamples.map((ex) => (
@@ -933,7 +959,8 @@ export function SystemSyncPane({
                 >
                   <div className="min-w-0">
                     <div className="lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
-                      {ex.surfaceId}{ex.subcontext ? ` (${ex.subcontext})` : ''}
+                      {ex.surfaceId}
+                      {ex.subcontext ? ` (${ex.subcontext})` : ''}
                     </div>
                     <div className="truncate">{ex.rewritten}</div>
                   </div>

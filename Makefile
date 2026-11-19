@@ -1,4 +1,4 @@
-.PHONY: sync-harper install install-hooks setup dev-browser build-browser zip-browser dev-desktop build-desktop tauri-dev tauri-build package typecheck test build rust-check rust-test daemon
+.PHONY: sync-harper install install-hooks setup dev-browser build-browser zip-browser dev-desktop build-desktop tauri-dev tauri-build package lint format check typecheck test build rust-check rust-test daemon
 
 install:
 	pnpm install
@@ -13,7 +13,7 @@ sync-harper:
 	bash scripts/sync-harper.sh
 
 rust-check:
-	cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings
+	cargo fmt --check && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --manifest-path apps/lexel-desktop/src-tauri/Cargo.toml --check && cargo clippy --manifest-path apps/lexel-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
 
 rust-test:
 	cargo test --workspace
@@ -44,6 +44,15 @@ tauri-build:
 
 package:
 	bash scripts/package-release.sh --with-desktop
+
+lint:
+	pnpm run lint
+
+format:
+	cargo fmt && cargo fmt --manifest-path apps/lexel-desktop/src-tauri/Cargo.toml && pnpm run format
+
+check:
+	$(MAKE) rust-check && pnpm run check && pnpm -r typecheck
 
 typecheck:
 	pnpm -r typecheck

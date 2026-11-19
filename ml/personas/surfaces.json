@@ -40,12 +40,7 @@
       "allowEmojis": false,
       "allowHashtags": false,
       "allowEmDashes": false,
-      "bannedOpeners": [
-        "great thread",
-        "totally agree",
-        "100% this",
-        "underrated take"
-      ],
+      "bannedOpeners": ["great thread", "totally agree", "100% this", "underrated take"],
       "promptDirective": "Keep under 240 characters (strict max 280). High signal density, concrete detail, zero hashtags, zero emojis, zero engagement-bait openers, zero em dashes.",
       "quickActions": [
         { "id": "rewrite_surface", "label": "Fit for X (<=280)" },
@@ -66,11 +61,7 @@
       "allowEmojis": false,
       "allowHashtags": false,
       "allowEmDashes": false,
-      "bannedOpeners": [
-        "great job!",
-        "awesome work!",
-        "thank you for your contribution"
-      ],
+      "bannedOpeners": ["great job!", "awesome work!", "thank you for your contribution"],
       "promptDirective": "Write concisely for engineers reviewing code or issues. Preserve all backticks, file paths, issue IDs (#42), and metrics exactly. Remove sycophancy and fluff.",
       "quickActions": [
         { "id": "rewrite_surface", "label": "Polish engineering note" },
@@ -159,11 +150,7 @@
       "allowEmojis": false,
       "allowHashtags": false,
       "allowEmDashes": false,
-      "bannedOpeners": [
-        "happy monday",
-        "welcome back to another",
-        "in this week's issue"
-      ],
+      "bannedOpeners": ["happy monday", "welcome back to another", "in this week's issue"],
       "promptDirective": "Write sharp editorial prose with concrete examples and clear transitions. Avoid newsletter throat-clearing, buzzwords, and em dashes.",
       "quickActions": [
         { "id": "fix_grammar_flow", "label": "Polish prose" },
@@ -182,10 +169,7 @@
       "allowEmojis": true,
       "allowHashtags": false,
       "allowEmDashes": false,
-      "bannedOpeners": [
-        "in today's digital age",
-        "without further ado"
-      ],
+      "bannedOpeners": ["in today's digital age", "without further ado"],
       "promptDirective": "Write direct, readable blog prose with active voice. Keep links intact and avoid filler intros and em dashes.",
       "quickActions": [
         { "id": "fix_grammar_flow", "label": "Polish article" },
@@ -204,11 +188,7 @@
       "allowEmojis": true,
       "allowHashtags": false,
       "allowEmDashes": false,
-      "bannedOpeners": [
-        "+1",
-        "bump",
-        "great post"
-      ],
+      "bannedOpeners": ["+1", "bump", "great post"],
       "promptDirective": "Write clear forum replies with reproducible details and respectful peer tone. Preserve code blocks and links.",
       "quickActions": [
         { "id": "rewrite_surface", "label": "Polish forum reply" },
@@ -227,12 +207,7 @@
       "allowEmojis": false,
       "allowHashtags": false,
       "allowEmDashes": false,
-      "bannedOpeners": [
-        "wip",
-        "misc fixes",
-        "minor changes",
-        "updated stuff"
-      ],
+      "bannedOpeners": ["wip", "misc fixes", "minor changes", "updated stuff"],
       "promptDirective": "Use imperative mood for the subject line under 72 characters without a trailing period. Keep commit scope, file paths, and issue IDs intact.",
       "quickActions": [
         { "id": "rewrite_surface", "label": "Polish commit" },
@@ -251,10 +226,7 @@
       "allowEmojis": false,
       "allowHashtags": false,
       "allowEmDashes": false,
-      "bannedOpeners": [
-        "this function",
-        "helper method to"
-      ],
+      "bannedOpeners": ["this function", "helper method to"],
       "promptDirective": "Explain why, invariants, or edge cases concisely. Preserve backticks and identifier names untouched.",
       "quickActions": [
         { "id": "rewrite_surface", "label": "Concise comment" },
@@ -273,10 +245,7 @@
       "allowEmojis": false,
       "allowHashtags": false,
       "allowEmDashes": false,
-      "bannedOpeners": [
-        "in this document we will",
-        "welcome to the documentation"
-      ],
+      "bannedOpeners": ["in this document we will", "welcome to the documentation"],
       "promptDirective": "Write clear, scannable technical documentation in active voice. Preserve code blocks, CLI flags, URLs, and numbers.",
       "quickActions": [
         { "id": "fix_grammar_flow", "label": "Fix grammar" },

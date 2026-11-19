@@ -1,4 +1,3 @@
-import React, { useCallback, useEffect, useState } from 'react';
 import {
   CloseIcon,
   NibIcon,
@@ -8,9 +7,15 @@ import {
   StatusPill,
   SurfaceBadge,
 } from 'lexel-ui';
+import React, { useCallback, useEffect, useState } from 'react';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { getSurfaceProfile } from '../shared/surfaceDetector';
-import type { AiTaskId, DetectedSurfaceContext, RewriteResult, SurfaceProfile } from '../shared/types';
+import type {
+  AiTaskId,
+  DetectedSurfaceContext,
+  RewriteResult,
+  SurfaceProfile,
+} from '../shared/types';
 import { hasSecrets } from '../shared/verifier';
 import ProtocolClient from './ProtocolClient';
 
@@ -85,10 +90,13 @@ export function AiFloatingPill({
     }
   }, [expanded, refreshHealth]);
 
+  const activeElement = field?.element ?? null;
   useEffect(() => {
-    setResult(null);
-    setError(null);
-  }, [field?.element]);
+    if (activeElement !== undefined) {
+      setResult(null);
+      setError(null);
+    }
+  }, [activeElement]);
 
   useEffect(() => {
     if (!field || context.isBlocked) {
@@ -165,7 +173,7 @@ export function AiFloatingPill({
       }
       setResult(res.result);
     },
-    [field, context.surfaceId, context.subcontext, refreshHealth],
+    [field, context.surfaceId, context.subcontext, context.domain, refreshHealth],
   );
 
   useEffect(() => {
@@ -355,7 +363,14 @@ export function AiFloatingPill({
             gap: '10px',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '8px',
+            }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
               <NibIcon className="w-4 h-4" />
               <SurfaceBadge
@@ -450,7 +465,8 @@ export function AiFloatingPill({
                 color: 'var(--lx-danger)',
               }}
             >
-              Secrets Guard flagged sensitive credentials or PII in this field. AI rewrites are blocked.
+              Secrets Guard flagged sensitive credentials or PII in this field. AI rewrites are
+              blocked.
             </div>
           ) : null}
 

@@ -1,8 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import {
-  getBuiltinSurfaceDefault,
-  isSurfaceProfileCustomized,
-} from '../tier0/promptCore';
+import { getBuiltinSurfaceDefault, isSurfaceProfileCustomized } from '../tier0/promptCore';
 import type { SurfaceProfile } from '../tier0/types';
 
 export interface EditableSurfaceCardProps {
@@ -41,11 +38,13 @@ export function EditableSurfaceCard({
   const [allowHashtagsDraft, setAllowHashtagsDraft] = useState(profile.allowHashtags);
   const [allowEmDashesDraft, setAllowEmDashesDraft] = useState(profile.allowEmDashes);
 
-  useEffect(() => {
-    setEditing(false);
-  }, [profile.id]);
+  const prevProfileId = React.useRef(profile.id);
 
   useEffect(() => {
+    if (prevProfileId.current !== profile.id) {
+      prevProfileId.current = profile.id;
+      setEditing(false);
+    }
     setPromptDraft(profile.promptDirective);
     setMaxCharsDraft(profile.maxChars);
     setAllowLinksDraft(profile.allowLinks);
@@ -133,7 +132,8 @@ export function EditableSurfaceCard({
         <form onSubmit={handleSave} className="flex flex-col gap-2 pt-1">
           <label className="flex flex-col gap-1">
             <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-              AI Style Prompt (used for {profile.label} rewrites; numeric and anti-slop safety gates stay locked)
+              AI Style Prompt (used for {profile.label} rewrites; numeric and anti-slop safety gates
+              stay locked)
             </span>
             <textarea
               rows={2}

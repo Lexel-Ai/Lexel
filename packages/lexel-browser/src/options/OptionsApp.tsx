@@ -1,4 +1,3 @@
-import { packWeirpackFiles } from 'harper.js';
 import type {
   Dialect,
   LintConfig,
@@ -7,19 +6,21 @@ import type {
   Summary,
   WeirpackTestFailures,
 } from 'harper.js';
+import { packWeirpackFiles } from 'harper.js';
 import {
+  applyRulePreset,
   BUILTIN_SURFACES,
   EditableSurfaceCard,
   HARPER_RULE_PRESETS,
   NibIcon,
+  type RulePresetId,
+  resetSurfaceOverride,
   StatusPill,
   ThemeToggle,
-  applyRulePreset,
-  resetSurfaceOverride,
   upsertSurfaceOverride,
-  type RulePresetId,
 } from 'lexel-ui';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type React from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { MODEL_MANIFEST_SPECS, resolveModelNameForTier } from '../shared/models';
 import { listSurfaceProfiles } from '../shared/surfaceDetector';
@@ -96,9 +97,9 @@ export function OptionsApp() {
   const [downloadingModelId, setDownloadingModelId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const extensionId = typeof chrome !== 'undefined' ? chrome.runtime?.id ?? '' : '';
+  const extensionId = typeof chrome !== 'undefined' ? (chrome.runtime?.id ?? '') : '';
 
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
     const [
       themeRes,
       aiRes,
@@ -208,11 +209,11 @@ export function OptionsApp() {
     if (healthRes.activeProfile) {
       setRenameDraft(healthRes.activeProfile.name);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void loadAll();
-  }, []);
+  }, [loadAll]);
 
   const harperRuleEntries = useMemo(() => {
     const q = ruleSearch.trim().toLowerCase();
@@ -234,10 +235,7 @@ export function OptionsApp() {
   }, [defaultLintConfig, lintConfig, lintDescriptions, ruleSearch]);
 
   const managedDomains = useMemo(() => {
-    const keys = new Set([
-      ...Object.keys(domainStatuses),
-      ...Object.keys(surfaceOverrides),
-    ]);
+    const keys = new Set([...Object.keys(domainStatuses), ...Object.keys(surfaceOverrides)]);
     return Array.from(keys).sort();
   }, [domainStatuses, surfaceOverrides]);
 
@@ -454,7 +452,7 @@ export function OptionsApp() {
           ? Object.entries(res.failures)
               .map(([rule, cases]) => `${rule}: ${cases.length} failing test(s)`)
               .join('; ')
-          : res?.error ?? 'Invalid pack';
+          : (res?.error ?? 'Invalid pack');
         setErrorMsg(`Weirpack rejected (${failText}).`);
         return;
       }
@@ -501,8 +499,7 @@ export function OptionsApp() {
       setErrorMsg('Enter both a target phrase and a plain replacement.');
       return;
     }
-    const exprClause =
-      rawExpr.includes(' ') && !rawExpr.startsWith('(') ? `(${rawExpr})` : rawExpr;
+    const exprClause = rawExpr.includes(' ') && !rawExpr.startsWith('(') ? `(${rawExpr})` : rawExpr;
     const escapeQuotes = (v: string) => v.replaceAll('"', '\\"');
     const lines = [
       `expr main ${exprClause}`,
@@ -513,7 +510,9 @@ export function OptionsApp() {
       `let strategy "MatchCase"`,
     ];
     if (weirTestBad.trim() && weirTestGood.trim()) {
-      lines.push(`test "${escapeQuotes(weirTestBad.trim())}" "${escapeQuotes(weirTestGood.trim())}"`);
+      lines.push(
+        `test "${escapeQuotes(weirTestBad.trim())}" "${escapeQuotes(weirTestGood.trim())}"`,
+      );
     }
     try {
       const files = new Map<string, string>([
@@ -546,7 +545,7 @@ export function OptionsApp() {
           ? Object.entries(res.failures)
               .map(([k, v]) => `${k}: ${Object.keys(v).length} failed`)
               .join('; ')
-          : res?.error ?? 'Invalid Weir expression or failed unit test.';
+          : (res?.error ?? 'Invalid Weir expression or failed unit test.');
         setErrorMsg(`Weirpack test failed (${failText}).`);
         return;
       }
@@ -739,7 +738,8 @@ export function OptionsApp() {
                 <div>
                   <h2 className="text-sm font-semibold m-0">Local Account &amp; Desktop Sync</h2>
                   <p className="text-xs m-0 mt-0.5" style={{ color: 'var(--lx-fg-muted)' }}>
-                    One shared SQLite profile links this Browser Extension, Lexel Desktop, and CLI on your device.
+                    One shared SQLite profile links this Browser Extension, Lexel Desktop, and CLI
+                    on your device.
                   </p>
                 </div>
                 <button
@@ -760,7 +760,10 @@ export function OptionsApp() {
                 <div className="flex flex-col gap-3 pt-1">
                   <div className="flex flex-wrap items-center gap-2 text-xs">
                     <span style={{ color: 'var(--lx-fg-muted)' }}>Active profile:</span>
-                    <span className="font-semibold lexel-mono" style={{ color: 'var(--lx-signal)' }}>
+                    <span
+                      className="font-semibold lexel-mono"
+                      style={{ color: 'var(--lx-signal)' }}
+                    >
                       {aiHealth.activeProfile.name}
                     </span>
                     <span style={{ color: 'var(--lx-fg-muted)' }}>
@@ -783,8 +786,12 @@ export function OptionsApp() {
                           >
                             <div className="min-w-0">
                               <div className="font-medium truncate">{p.name}</div>
-                              <div className="text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
-                                {p.settings.mainModelTier} · AI {p.settings.aiEnabled ? 'ON' : 'OFF'}
+                              <div
+                                className="text-[11px] lexel-mono"
+                                style={{ color: 'var(--lx-fg-muted)' }}
+                              >
+                                {p.settings.mainModelTier} · AI{' '}
+                                {p.settings.aiEnabled ? 'ON' : 'OFF'}
                               </div>
                             </div>
                             <div className="flex items-center gap-1.5 shrink-0">
@@ -900,13 +907,18 @@ export function OptionsApp() {
                     Native Messaging bridge to Lexel Desktop is not connected yet.
                   </div>
                   <p className="m-0" style={{ color: 'var(--lx-fg-muted)' }}>
-                    Open <strong>Lexel Desktop &rarr; AI &amp; Extension Sync</strong>, paste your Extension ID below, and click <strong>Register Browser Bridge</strong> (or run the CLI command below).
+                    Open <strong>Lexel Desktop &rarr; AI &amp; Extension Sync</strong>, paste your
+                    Extension ID below, and click <strong>Register Browser Bridge</strong> (or run
+                    the CLI command below).
                   </p>
                   {extensionId ? (
                     <div className="flex flex-wrap items-center gap-2">
                       <span
                         className="rounded-[4px] border px-2 py-1 lexel-mono text-[11px]"
-                        style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+                        style={{
+                          backgroundColor: 'var(--lx-surface)',
+                          borderColor: 'var(--lx-border)',
+                        }}
                       >
                         Extension ID: {extensionId}
                       </span>
@@ -914,7 +926,9 @@ export function OptionsApp() {
                         type="button"
                         onClick={() => {
                           void navigator.clipboard.writeText(extensionId);
-                          setNotice('Copied Extension ID. Paste it into Lexel Desktop -> AI & Extension Sync.');
+                          setNotice(
+                            'Copied Extension ID. Paste it into Lexel Desktop -> AI & Extension Sync.',
+                          );
                         }}
                         className="rounded-[6px] px-2.5 py-1 text-[11px] font-semibold"
                         style={{
@@ -928,14 +942,19 @@ export function OptionsApp() {
                   ) : null}
                   <div
                     className="rounded-[4px] border px-2.5 py-1.5 lexel-mono text-[11px] break-all"
-                    style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+                    style={{
+                      backgroundColor: 'var(--lx-surface)',
+                      borderColor: 'var(--lx-border)',
+                    }}
                   >
                     {aiHealth?.nativeHostCommand ?? 'make setup'}
                   </div>
                   <button
                     type="button"
                     onClick={() => {
-                      void navigator.clipboard.writeText(aiHealth?.nativeHostCommand ?? 'make setup');
+                      void navigator.clipboard.writeText(
+                        aiHealth?.nativeHostCommand ?? 'make setup',
+                      );
                       setNotice('Copied Native Messaging CLI command.');
                     }}
                     className="rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
@@ -955,7 +974,9 @@ export function OptionsApp() {
               className="rounded-[8px] border p-4 flex flex-col gap-3"
               style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
             >
-              <h2 className="text-sm font-semibold m-0">Downloaded Local Models (0.5B &amp; 1.5B)</h2>
+              <h2 className="text-sm font-semibold m-0">
+                Downloaded Local Models (0.5B &amp; 1.5B)
+              </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {MODEL_MANIFEST_SPECS.map((spec) => {
                   const status = aiHealth?.installedModels?.find((m) => m.id === spec.id);
@@ -972,16 +993,29 @@ export function OptionsApp() {
                       <div className="space-y-1">
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-semibold">{spec.label}</span>
-                          <span className="lexel-mono text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                          <span
+                            className="lexel-mono text-[11px]"
+                            style={{ color: 'var(--lx-fg-muted)' }}
+                          >
                             ~{spec.approxRamMb} MB RAM
                           </span>
                         </div>
                         <p className="m-0 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
                           {spec.description}
                         </p>
-                        <div className="lexel-mono text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                          GGUF: {status ? (status.ggufInstalled ? 'Installed' : 'Not downloaded') : spec.ggufFilename}
-                          {status ? ` · Ollama: ${status.ollamaInstalled ? 'Ready' : 'Auto-imports on toggle'}` : ''}
+                        <div
+                          className="lexel-mono text-[11px]"
+                          style={{ color: 'var(--lx-fg-muted)' }}
+                        >
+                          GGUF:{' '}
+                          {status
+                            ? status.ggufInstalled
+                              ? 'Installed'
+                              : 'Not downloaded'
+                            : spec.ggufFilename}
+                          {status
+                            ? ` · Ollama: ${status.ollamaInstalled ? 'Ready' : 'Auto-imports on toggle'}`
+                            : ''}
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -995,7 +1029,9 @@ export function OptionsApp() {
                             color: isSelected ? 'var(--lx-on-accent)' : 'var(--lx-fg)',
                           }}
                         >
-                          {isSelected ? 'Selected Main Model' : `Set ${spec.id === 'lexel-0.5b' ? '0.5B' : '1.5B'} as Main`}
+                          {isSelected
+                            ? 'Selected Main Model'
+                            : `Set ${spec.id === 'lexel-0.5b' ? '0.5B' : '1.5B'} as Main`}
                         </button>
                         {aiHealth?.daemonConnected ? (
                           status?.ggufInstalled && status.ggufSizeValid ? (
@@ -1046,7 +1082,8 @@ export function OptionsApp() {
               <div>
                 <span className="text-sm font-medium">Enable Local AI Rewrites</span>
                 <p className="text-[11px] m-0" style={{ color: 'var(--lx-fg-muted)' }}>
-                  Turning off unloads model weights from RAM immediately while keeping Tier 0 grammar checks active.
+                  Turning off unloads model weights from RAM immediately while keeping Tier 0
+                  grammar checks active.
                 </p>
               </div>
               <input
@@ -1122,7 +1159,11 @@ export function OptionsApp() {
               </label>
 
               <label className="flex flex-col gap-1 text-xs">
-                <span>{aiSettings.mainModelTier === 'custom' ? 'Custom Model / GGUF Path' : 'Effective Model Tag'}</span>
+                <span>
+                  {aiSettings.mainModelTier === 'custom'
+                    ? 'Custom Model / GGUF Path'
+                    : 'Effective Model Tag'}
+                </span>
                 <input
                   type="text"
                   value={aiSettings.model}
@@ -1371,15 +1412,31 @@ export function OptionsApp() {
               </div>
             </div>
 
-            <div className="border-t pt-3 flex flex-col gap-3" style={{ borderColor: 'var(--lx-border)' }}>
+            <div
+              className="border-t pt-3 flex flex-col gap-3"
+              style={{ borderColor: 'var(--lx-border)' }}
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Rule management views">
+                <div
+                  className="flex flex-wrap gap-1.5"
+                  role="tablist"
+                  aria-label="Rule management views"
+                >
                   {(
                     [
-                      { id: 'harper', label: `Harper Rules (${Object.keys(defaultLintConfig).length})` },
-                      { id: 'slop', label: `Anti-Slop (${SLOP_TERMS.length + customSlopTerms.length})` },
+                      {
+                        id: 'harper',
+                        label: `Harper Rules (${Object.keys(defaultLintConfig).length})`,
+                      },
+                      {
+                        id: 'slop',
+                        label: `Anti-Slop (${SLOP_TERMS.length + customSlopTerms.length})`,
+                      },
                       { id: 'sites', label: `Site Controls (${managedDomains.length})` },
-                      { id: 'surfaces', label: `Surfaces (${listSurfaceProfiles(customSurfaces).length})` },
+                      {
+                        id: 'surfaces',
+                        label: `Surfaces (${listSurfaceProfiles(customSurfaces).length})`,
+                      },
                       { id: 'weirpacks', label: `Weirpacks (${weirpacks.length})` },
                       { id: 'stats', label: 'Writing Stats' },
                     ] as const
@@ -1392,7 +1449,8 @@ export function OptionsApp() {
                       onClick={() => setRulesSubTab(item.id)}
                       className="rounded-[6px] border px-2.5 py-1 text-xs font-medium"
                       style={{
-                        backgroundColor: rulesSubTab === item.id ? 'var(--lx-accent)' : 'var(--lx-bg)',
+                        backgroundColor:
+                          rulesSubTab === item.id ? 'var(--lx-accent)' : 'var(--lx-bg)',
                         borderColor: 'var(--lx-border)',
                         color: rulesSubTab === item.id ? 'var(--lx-on-accent)' : 'var(--lx-fg)',
                       }}
@@ -1421,7 +1479,10 @@ export function OptionsApp() {
               {rulesSubTab === 'harper' ? (
                 <div className="flex flex-col gap-2.5">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-[11px] font-medium mr-1" style={{ color: 'var(--lx-fg-muted)' }}>
+                    <span
+                      className="text-[11px] font-medium mr-1"
+                      style={{ color: 'var(--lx-fg-muted)' }}
+                    >
                       Presets:
                     </span>
                     {HARPER_RULE_PRESETS.map((preset) => (
@@ -1561,7 +1622,9 @@ export function OptionsApp() {
                           type="button"
                           onClick={() => {
                             const nextDisabled = muted
-                              ? disabledSlopTerms.filter((d) => d.toLowerCase() !== term.toLowerCase())
+                              ? disabledSlopTerms.filter(
+                                  (d) => d.toLowerCase() !== term.toLowerCase(),
+                                )
                               : [...disabledSlopTerms, term];
                             void saveCustomSlop(customSlopTerms, nextDisabled);
                           }}
@@ -1635,7 +1698,10 @@ export function OptionsApp() {
                         type="button"
                         onClick={() => void handleAddSiteRule()}
                         className="rounded-[6px] px-3 py-1.5 text-xs font-semibold shrink-0"
-                        style={{ backgroundColor: 'var(--lx-accent)', color: 'var(--lx-on-accent)' }}
+                        style={{
+                          backgroundColor: 'var(--lx-accent)',
+                          color: 'var(--lx-on-accent)',
+                        }}
                       >
                         Save
                       </button>
@@ -1796,7 +1862,8 @@ export function OptionsApp() {
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs" style={{ color: 'var(--lx-fg-muted)' }}>
-                      Load local `.weirpack` bundles. Embedded Weir unit tests run before activation.
+                      Load local `.weirpack` bundles. Embedded Weir unit tests run before
+                      activation.
                     </span>
                     <input
                       ref={weirpackInputRef}
@@ -1935,7 +2002,8 @@ export function OptionsApp() {
                           style={{ borderColor: 'var(--lx-border)' }}
                         >
                           <span>
-                            <span className="font-semibold lexel-mono">{pack.name}</span> ({pack.ruleCount} rules)
+                            <span className="font-semibold lexel-mono">{pack.name}</span> (
+                            {pack.ruleCount} rules)
                           </span>
                           <div className="flex items-center gap-3">
                             <label className="inline-flex items-center gap-1">
@@ -1974,7 +2042,10 @@ export function OptionsApp() {
               ) : null}
 
               {rulesSubTab === 'stats' ? (
-                <div className="rounded-[6px] border p-3 text-xs space-y-2" style={{ borderColor: 'var(--lx-border)', backgroundColor: 'var(--lx-bg)' }}>
+                <div
+                  className="rounded-[6px] border p-3 text-xs space-y-2"
+                  style={{ borderColor: 'var(--lx-border)', backgroundColor: 'var(--lx-bg)' }}
+                >
                   <div className="flex items-center justify-between">
                     <span className="font-semibold">Local Writing Stats (Harper Engine)</span>
                     <button
@@ -2094,7 +2165,8 @@ export function OptionsApp() {
               </h2>
               {voiceExamples.length === 0 ? (
                 <p className="text-xs m-0" style={{ color: 'var(--lx-fg-muted)' }}>
-                  No accepted rewrites stored yet. Accepting a local AI rewrite saves a few-shot style example here on your device.
+                  No accepted rewrites stored yet. Accepting a local AI rewrite saves a few-shot
+                  style example here on your device.
                 </p>
               ) : (
                 <div className="flex flex-col gap-2 max-h-64 overflow-y-auto">
@@ -2105,7 +2177,10 @@ export function OptionsApp() {
                       style={{ backgroundColor: 'var(--lx-bg)', borderColor: 'var(--lx-border)' }}
                     >
                       <div className="space-y-1">
-                        <div className="lexel-mono text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                        <div
+                          className="lexel-mono text-[11px]"
+                          style={{ color: 'var(--lx-fg-muted)' }}
+                        >
                           {ex.surfaceId}
                           {ex.subcontext ? ` / ${ex.subcontext}` : ''}
                         </div>
@@ -2114,7 +2189,10 @@ export function OptionsApp() {
                       <button
                         type="button"
                         onClick={async () => {
-                          await chrome.runtime.sendMessage({ kind: 'deleteVoiceExample', id: ex.id });
+                          await chrome.runtime.sendMessage({
+                            kind: 'deleteVoiceExample',
+                            id: ex.id,
+                          });
                           setVoiceExamples((prev) => prev.filter((item) => item.id !== ex.id));
                         }}
                         className="text-[11px]"
@@ -2175,11 +2253,11 @@ function OptionsStructuredRules({
 
   return (
     <div className="space-y-2">
-      {settings.filter(matches).map((setting, idx) => {
+      {settings.filter(matches).map((setting) => {
         if ('Group' in setting) {
           return (
             <details
-              key={`${setting.Group.label}-${idx}`}
+              key={`${setting.Group.label}-${setting.Group.description}`}
               open={query.length > 0}
               className="rounded-[6px] border p-2"
               style={{ borderColor: 'var(--lx-border)', backgroundColor: 'var(--lx-card)' }}
@@ -2213,7 +2291,7 @@ function OptionsStructuredRules({
           const { names, name, labels } = setting.OneOfMany;
           const active =
             names.find((n) => lintConfig[n] === true) ??
-            (names.every((n) => lintConfig[n] === false) ? '' : name ?? '');
+            (names.every((n) => lintConfig[n] === false) ? '' : (name ?? ''));
           return (
             <div
               key={names.join('-')}

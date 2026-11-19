@@ -5,6 +5,13 @@ import {
   LocalLinter,
   unpackWeirpackBytes,
 } from 'harper.js';
+import {
+  applyRulePreset,
+  applySafeGrammarLints,
+  normalizeTypography,
+  type Tier0Lint,
+  toSentenceCase,
+} from 'lexel-ui';
 import { type UnpackedLintGroups, unpackLint } from 'lint-framework';
 import {
   daemonApplyRulePreset,
@@ -27,13 +34,6 @@ import {
   daemonUnloadAi,
   fetchDaemonStatus,
 } from '../shared/daemonClient';
-import {
-  applyRulePreset,
-  applySafeGrammarLints,
-  normalizeTypography,
-  toSentenceCase,
-  type Tier0Lint,
-} from 'lexel-ui';
 import {
   checkLocalAiHealth,
   generateLocalRewrite,
@@ -126,7 +126,11 @@ async function getStoredLintConfig(instance: LocalLinter): Promise<LintConfig> {
 }
 
 async function applyDaemonSnapshotToExtension(
-  profile: { id: string; updatedAt: number; settings: import('../shared/types').UnifiedDaemonSettings },
+  profile: {
+    id: string;
+    updatedAt: number;
+    settings: import('../shared/types').UnifiedDaemonSettings;
+  },
   forceLinterReload = false,
 ): Promise<boolean> {
   const stamp = `${profile.id}:${profile.updatedAt}`;
@@ -388,7 +392,9 @@ async function handleAiHealth(): Promise<LocalAiHealth> {
 
     const models = Array.from(
       new Set([
-        ...payload.models.filter((m) => m.ggufInstalled || m.ollamaInstalled).map((m) => m.ollamaTag),
+        ...payload.models
+          .filter((m) => m.ggufInstalled || m.ollamaInstalled)
+          .map((m) => m.ollamaTag),
         ...rt.ollamaModels,
       ]),
     );
@@ -911,9 +917,7 @@ async function handleRequest(
       const clean = req.term.trim();
       if (!clean) return { kind: 'unit' };
       const slopCfg = await getCustomSlopConfig();
-      const exists = slopCfg.disabledTerms.some(
-        (t) => t.toLowerCase() === clean.toLowerCase(),
-      );
+      const exists = slopCfg.disabledTerms.some((t) => t.toLowerCase() === clean.toLowerCase());
       if (!exists) {
         const nextDisabled = [...slopCfg.disabledTerms, clean];
         await setCustomSlopConfig(slopCfg.customTerms, nextDisabled);

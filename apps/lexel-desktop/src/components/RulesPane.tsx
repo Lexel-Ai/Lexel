@@ -1,9 +1,6 @@
-import {
-  HARPER_RULE_PRESETS,
-  SLOP_TERMS,
-  type RulePresetId,
-} from 'lexel-ui';
-import React, { useMemo, useState } from 'react';
+import { HARPER_RULE_PRESETS, type RulePresetId, SLOP_TERMS } from 'lexel-ui';
+import type React from 'react';
+import { useMemo, useState } from 'react';
 import { daemonRpc } from '../lib/desktopClient';
 import type { HarperRulesPayload, Hotkey, UnifiedDaemonSettings } from '../lib/types';
 
@@ -41,8 +38,7 @@ export function RulesPane({
     const q = ruleSearch.trim().toLowerCase();
     const filtered = q
       ? rules.filter(
-          (r) =>
-            r.id.toLowerCase().includes(q) || r.description.toLowerCase().includes(q),
+          (r) => r.id.toLowerCase().includes(q) || r.description.toLowerCase().includes(q),
         )
       : rules;
     return filtered.slice(0, 120);
@@ -127,7 +123,8 @@ export function RulesPane({
       <header>
         <h1 className="text-[18px] font-semibold">Grammar, Anti-Slop, Extension &amp; Privacy</h1>
         <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-          Every deterministic Tier 0 rule and browser extension preference lives in lexel.db and syncs automatically.
+          Every deterministic Tier 0 rule and browser extension preference lives in lexel.db and
+          syncs automatically.
         </p>
       </header>
 
@@ -349,9 +346,7 @@ export function RulesPane({
             <input
               type="checkbox"
               checked={settings.openSuggestionsOnHover}
-              onChange={(e) =>
-                void onPatchSettings({ openSuggestionsOnHover: e.target.checked })
-              }
+              onChange={(e) => void onPatchSettings({ openSuggestionsOnHover: e.target.checked })}
             />
             Open grammar suggestions on underline hover
           </label>
@@ -392,7 +387,8 @@ export function RulesPane({
         <div className="max-h-72 space-y-1.5 overflow-y-auto pr-1">
           {visibleRules.length === 0 ? (
             <p className="text-[12px] py-2" style={{ color: 'var(--lx-fg-muted)' }}>
-              No grammar rules match &ldquo;{ruleSearch}&rdquo;. Clear the filter to browse all rules.
+              No grammar rules match &ldquo;{ruleSearch}&rdquo;. Clear the filter to browse all
+              rules.
             </p>
           ) : (
             visibleRules.map((rule) => (
@@ -580,7 +576,8 @@ export function RulesPane({
             Privacy Blocklist ({settings.privacyBlocklist.length})
           </h2>
           <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-            Lexel blocks local AI and pauses linting on matching hostnames (supports exact hosts or *.domain.com).
+            Lexel blocks local AI and pauses linting on matching hostnames (supports exact hosts or
+            *.domain.com).
           </p>
         </div>
 

@@ -1,9 +1,9 @@
 import {
-  HARPER_RULE_PRESETS,
   applyRulePreset,
   applySafeGrammarLints,
   computeReadabilityMetrics,
   getBuiltinSurfaceDefault,
+  HARPER_RULE_PRESETS,
   isSurfaceProfileCustomized,
   normalizeTypography,
   resetSurfaceOverride,
@@ -27,25 +27,25 @@ describe('zero-AI enhancements in lexel-ui & lexel-browser', () => {
       '<html><head><link rel="preconnect" href="https://substackcdn.com"></head><body></body></html>',
       'text/html',
     );
-    expect(detectSurfaceFromLocation('https://notes.example.org/post', { doc: substackDoc }).surfaceId).toBe(
-      'web_substack',
-    );
+    expect(
+      detectSurfaceFromLocation('https://notes.example.org/post', { doc: substackDoc }).surfaceId,
+    ).toBe('web_substack');
 
     const wpDoc = new DOMParser().parseFromString(
       '<html><head><meta name="generator" content="WordPress 6.7"></head><body></body></html>',
       'text/html',
     );
-    expect(detectSurfaceFromLocation('https://blog.example.org/wp-admin', { doc: wpDoc }).surfaceId).toBe(
-      'web_wordpress',
-    );
+    expect(
+      detectSurfaceFromLocation('https://blog.example.org/wp-admin', { doc: wpDoc }).surfaceId,
+    ).toBe('web_wordpress');
 
     const discDoc = new DOMParser().parseFromString(
       '<html><head><meta name="generator" content="Discourse 3.4.0"></head><body></body></html>',
       'text/html',
     );
-    expect(detectSurfaceFromLocation('https://forum.example.org/t/123', { doc: discDoc }).surfaceId).toBe(
-      'web_discourse',
-    );
+    expect(
+      detectSurfaceFromLocation('https://forum.example.org/t/123', { doc: discDoc }).surfaceId,
+    ).toBe('web_discourse');
   });
 
   it('detects extended secret types and attaches 1-click [REDACTED] suggestions', () => {
@@ -107,8 +107,7 @@ describe('zero-AI enhancements in lexel-ui & lexel-browser', () => {
   });
 
   it('validates git commit rules and excess punctuation cleanly', () => {
-    const commit =
-      'Added a massive change that breaks our 72-character subject rule right here.\n';
+    const commit = 'Added a massive change that breaks our 72-character subject rule right here.\n';
     const { surfaceLints } = scanTier0Diagnostics(commit, 'ide_git_commit');
     expect(surfaceLints.some((l) => l.message_html.includes('72 characters'))).toBe(true);
     expect(surfaceLints.some((l) => l.message_html.includes('trailing period'))).toBe(true);

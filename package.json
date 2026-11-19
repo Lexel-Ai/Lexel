@@ -15,7 +15,15 @@
     "tauri:dev": "pnpm --filter lexel-desktop tauri dev",
     "tauri:build": "pnpm --filter lexel-desktop tauri build",
     "typecheck": "pnpm -r typecheck",
+    "lint": "biome lint apps packages models rules/slop_terms.json ml/personas",
+    "format": "biome format --write apps packages models rules/slop_terms.json ml/personas",
+    "format:check": "biome format apps packages models rules/slop_terms.json ml/personas",
+    "check": "biome check apps packages models rules/slop_terms.json ml/personas",
+    "check:fix": "biome check --write apps packages models rules/slop_terms.json ml/personas",
     "test": "pnpm -r test",
     "build": "pnpm -r build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.8"
   }
 }

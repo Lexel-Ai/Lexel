@@ -1,8 +1,4 @@
-import type {
-  AiSettings,
-  DaemonProfile,
-  InstalledModelStatus,
-} from './types';
+import type { AiSettings, DaemonProfile, InstalledModelStatus } from './types';
 
 export interface LocalAiHealth {
   ok: boolean;
@@ -27,9 +23,7 @@ function isModelPresent(configured: string, available: string[]): boolean {
   return available.some((m) => {
     const candidate = m.toLowerCase();
     return (
-      candidate === target ||
-      candidate === `${target}:latest` ||
-      `${candidate}:latest` === target
+      candidate === target || candidate === `${target}:latest` || `${candidate}:latest` === target
     );
   });
 }
@@ -67,9 +61,10 @@ export async function checkLocalAiHealth(settings: AiSettings): Promise<LocalAiH
   }
 
   try {
-    const signal = typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
-      ? AbortSignal.timeout(4000)
-      : undefined;
+    const signal =
+      typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
+        ? AbortSignal.timeout(4000)
+        : undefined;
 
     if (settings.provider === 'ollama') {
       const res = await fetch(`${base}/api/tags`, { method: 'GET', signal });

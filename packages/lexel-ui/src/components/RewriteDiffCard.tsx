@@ -60,7 +60,10 @@ export function RewriteDiffCard({
       }}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-[11px] font-medium lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
+        <span
+          className="text-[11px] font-medium lexel-mono"
+          style={{ color: 'var(--lx-fg-muted)' }}
+        >
           {modelName} · {latencyMs}ms
         </span>
         <div className="flex flex-wrap gap-1.5">
@@ -83,8 +86,8 @@ export function RewriteDiffCard({
             color: 'var(--lx-warn)',
           }}
         >
-          {gates.warnings.map((w, idx) => (
-            <li key={idx}>{w}</li>
+          {gates.warnings.map((w) => (
+            <li key={w}>{w}</li>
           ))}
         </ul>
       ) : null}
@@ -101,7 +104,9 @@ export function RewriteDiffCard({
       </div>
 
       <details className="text-xs">
-        <summary style={{ color: 'var(--lx-fg-muted)' }}>Original text ({original.length} chars)</summary>
+        <summary style={{ color: 'var(--lx-fg-muted)' }}>
+          Original text ({original.length} chars)
+        </summary>
         <p
           className="mt-1.5 rounded-[6px] border p-2 whitespace-pre-wrap"
           style={{

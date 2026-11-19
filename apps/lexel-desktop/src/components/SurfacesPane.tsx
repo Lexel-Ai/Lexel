@@ -1,10 +1,11 @@
 import {
   EditableSurfaceCard,
   resetSurfaceOverride,
-  upsertSurfaceOverride,
   type SurfaceProfile,
+  upsertSurfaceOverride,
 } from 'lexel-ui';
-import React, { useMemo, useState } from 'react';
+import type React from 'react';
+import { useMemo, useState } from 'react';
 import { mergeSurfaceCatalog } from '../lib/surfaces';
 import type { UnifiedDaemonSettings } from '../lib/types';
 
@@ -95,9 +96,12 @@ export function SurfacesPane({ settings, onPatchSettings }: SurfacesPaneProps) {
     <div className="space-y-4">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-[18px] font-semibold">Surfaces &amp; AI Prompts ({surfaces.length})</h1>
+          <h1 className="text-[18px] font-semibold">
+            Surfaces &amp; AI Prompts ({surfaces.length})
+          </h1>
           <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-            Customize AI rewrite prompts per platform. Saved to lexel.db and shared with the browser extension.
+            Customize AI rewrite prompts per platform. Saved to lexel.db and shared with the browser
+            extension.
           </p>
         </div>
 

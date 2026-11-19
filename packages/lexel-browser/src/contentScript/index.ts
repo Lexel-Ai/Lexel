@@ -1,4 +1,5 @@
 import '@webcomponents/custom-elements';
+import tokensCss from 'lexel-ui/tokens.css?inline';
 import { getClosestBlockAncestor, isVisible, leafNodes } from 'lint-framework';
 import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -11,12 +12,11 @@ import type {
   SurfaceId,
   SurfaceProfile,
 } from '../shared/types';
-import { AiFloatingPill, type ActiveFieldHandle } from './AiFloatingPill';
+import { type ActiveFieldHandle, AiFloatingPill } from './AiFloatingPill';
 import { createGoogleDocsBridgeSync, isGoogleDocsPage } from './googleDocs';
 import { type ActiveLintPopup, LexelLintController } from './LexelLintController';
 import { LexelSuggestionPopover } from './LexelSuggestionPopover';
 import ProtocolClient from './ProtocolClient';
-import tokensCss from 'lexel-ui/tokens.css?inline';
 
 let blocklistCache: string[] = [];
 let surfaceOverrideCache: SurfaceId | null = null;
@@ -156,7 +156,9 @@ function readThreadContextAround(el: HTMLElement): string {
 function setElementValueSafely(el: HTMLElement, nextText: string) {
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
     const proto =
-      el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      el instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
     const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
     if (descriptor?.set) {
       descriptor.set.call(el, nextText);
@@ -233,11 +235,13 @@ function scanFields() {
     }
   });
 
-  document.querySelectorAll<HTMLInputElement>('input[type="text"][spellcheck="true"]').forEach((el) => {
-    if (!el.disabled && !el.readOnly && !isSensitiveElement(el)) {
-      lintController.addTarget(el);
-    }
-  });
+  document
+    .querySelectorAll<HTMLInputElement>('input[type="text"][spellcheck="true"]')
+    .forEach((el) => {
+      if (!el.disabled && !el.readOnly && !isSensitiveElement(el)) {
+        lintController.addTarget(el);
+      }
+    });
 
   document.querySelectorAll('[contenteditable="true"], [contenteditable=""]').forEach((el) => {
     if (!(el instanceof HTMLElement) || isSensitiveElement(el)) return;
@@ -396,9 +400,7 @@ const WATCHED_STORAGE_KEYS = new Set([
 
 chrome.storage?.onChanged.addListener((changes) => {
   if (
-    Object.keys(changes).some(
-      (k) => WATCHED_STORAGE_KEYS.has(k) || k.startsWith('domainStatus '),
-    )
+    Object.keys(changes).some((k) => WATCHED_STORAGE_KEYS.has(k) || k.startsWith('domainStatus '))
   ) {
     void hydrateConfig().then(() => {
       ProtocolClient.clearCache();

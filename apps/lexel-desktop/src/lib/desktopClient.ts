@@ -1,17 +1,17 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
+  type AiTaskId,
   applyRulePreset,
   applySafeDeterministicFixesShared,
   normalizeTypography,
+  type RulePresetId,
   resolveSurfaceProfileShared,
   scanSecretsAndPii,
   scanTier0DiagnosticsShared,
   toSentenceCase,
   toTitleCase,
   verifyAiRewriteShared,
-  type AiTaskId,
-  type RulePresetId,
 } from 'lexel-ui';
 import manifestData from '../../../../models/manifest.json';
 import type {
@@ -494,11 +494,32 @@ export async function getNativeHostStatus(): Promise<NativeHostStatusReport> {
     hostName: 'com.lexel.daemon',
     daemonBin: null,
     targets: [
-      { browser: 'Google Chrome', manifestPath: '~/.config/google-chrome/NativeMessagingHosts/com.lexel.daemon.json', installed: false },
-      { browser: 'Chromium', manifestPath: '~/.config/chromium/NativeMessagingHosts/com.lexel.daemon.json', installed: false },
-      { browser: 'Brave', manifestPath: '~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.lexel.daemon.json', installed: false },
-      { browser: 'Microsoft Edge', manifestPath: '~/.config/microsoft-edge/NativeMessagingHosts/com.lexel.daemon.json', installed: false },
-      { browser: 'Firefox', manifestPath: '~/.mozilla/native-messaging-hosts/com.lexel.daemon.json', installed: false },
+      {
+        browser: 'Google Chrome',
+        manifestPath: '~/.config/google-chrome/NativeMessagingHosts/com.lexel.daemon.json',
+        installed: false,
+      },
+      {
+        browser: 'Chromium',
+        manifestPath: '~/.config/chromium/NativeMessagingHosts/com.lexel.daemon.json',
+        installed: false,
+      },
+      {
+        browser: 'Brave',
+        manifestPath:
+          '~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.lexel.daemon.json',
+        installed: false,
+      },
+      {
+        browser: 'Microsoft Edge',
+        manifestPath: '~/.config/microsoft-edge/NativeMessagingHosts/com.lexel.daemon.json',
+        installed: false,
+      },
+      {
+        browser: 'Firefox',
+        manifestPath: '~/.mozilla/native-messaging-hosts/com.lexel.daemon.json',
+        installed: false,
+      },
     ],
   };
 }

@@ -29,9 +29,7 @@ export interface NativeDaemonResult<T> {
 
 function makeNativeInstallHint(): string {
   const extId = typeof chrome !== 'undefined' ? chrome.runtime?.id : undefined;
-  return extId
-    ? `lexel-daemon install-native-host --extension-id ${extId}`
-    : 'make setup';
+  return extId ? `lexel-daemon install-native-host --extension-id ${extId}` : 'make setup';
 }
 
 export async function callNativeDaemon<T>(
@@ -202,9 +200,7 @@ export function daemonLookupSynonyms(
   return callNativeDaemon('synonyms', { word });
 }
 
-export function daemonApplyRulePreset(
-  preset: string,
-): Promise<NativeDaemonResult<DaemonProfile>> {
+export function daemonApplyRulePreset(preset: string): Promise<NativeDaemonResult<DaemonProfile>> {
   return callNativeDaemon('applyRulePreset', { preset });
 }
 

@@ -37,7 +37,13 @@ export function parseSafeLintParagraphs(html: string): SafeMessageSegment[][] {
 
     const el = node as HTMLElement;
     const tag = el.tagName.toLowerCase();
-    if (tag === 'script' || tag === 'style' || tag === 'iframe' || tag === 'object' || tag === 'embed') {
+    if (
+      tag === 'script' ||
+      tag === 'style' ||
+      tag === 'iframe' ||
+      tag === 'object' ||
+      tag === 'embed'
+    ) {
       return;
     }
     if (tag === 'p' || tag === 'div') {
@@ -88,7 +94,10 @@ function formatSuggestionDisplay(
   }
 }
 
-function categoryBadgeStyle(rule: string, lintKind: string): {
+function categoryBadgeStyle(
+  rule: string,
+  lintKind: string,
+): {
   bg: string;
   border: string;
   color: string;
@@ -157,9 +166,12 @@ export function LexelSuggestionPopover({
 
   const box = active?.box ?? null;
 
+  const boxKey = box ? `${box.lint.context_hash}:${box.lint.span.start}` : '';
   useEffect(() => {
-    setSelectedIndex(0);
-  }, [box?.lint.context_hash, box?.lint.span.start]);
+    if (boxKey !== undefined) {
+      setSelectedIndex(0);
+    }
+  }, [boxKey]);
 
   useLayoutEffect(() => {
     if (!box) return;
@@ -301,36 +313,40 @@ export function LexelSuggestionPopover({
       </div>
 
       <div className="text-xs leading-relaxed space-y-1.5" style={{ color: 'var(--lx-fg-muted)' }}>
-        {paragraphs.map((segments, pIdx) => (
-          <p key={pIdx} className="m-0">
-            {segments.map((seg, sIdx) => {
-              if (seg.type === 'break') return <br key={sIdx} />;
-              if (seg.type === 'code') {
-                return (
-                  <code
-                    key={sIdx}
-                    className="lexel-mono rounded-[4px] px-1 py-0.5 text-[11px]"
-                    style={{
-                      backgroundColor: 'var(--lx-muted)',
-                      color: 'var(--lx-fg)',
-                    }}
-                  >
-                    {seg.text}
-                  </code>
-                );
-              }
-              if (seg.type === 'strong') {
-                return (
-                  <strong key={sIdx} style={{ color: 'var(--lx-fg)' }}>
-                    {seg.text}
-                  </strong>
-                );
-              }
-              if (seg.type === 'em') return <em key={sIdx}>{seg.text}</em>;
-              return <React.Fragment key={sIdx}>{seg.text}</React.Fragment>;
-            })}
-          </p>
-        ))}
+        {paragraphs.map((segments) => {
+          const pKey = segments.map((s) => `${s.type}:${s.text}`).join('|');
+          return (
+            <p key={pKey} className="m-0">
+              {segments.map((seg) => {
+                const segKey = `${seg.type}:${seg.text}`;
+                if (seg.type === 'break') return <br key={segKey} />;
+                if (seg.type === 'code') {
+                  return (
+                    <code
+                      key={segKey}
+                      className="lexel-mono rounded-[4px] px-1 py-0.5 text-[11px]"
+                      style={{
+                        backgroundColor: 'var(--lx-muted)',
+                        color: 'var(--lx-fg)',
+                      }}
+                    >
+                      {seg.text}
+                    </code>
+                  );
+                }
+                if (seg.type === 'strong') {
+                  return (
+                    <strong key={segKey} style={{ color: 'var(--lx-fg)' }}>
+                      {seg.text}
+                    </strong>
+                  );
+                }
+                if (seg.type === 'em') return <em key={segKey}>{seg.text}</em>;
+                return <React.Fragment key={segKey}>{seg.text}</React.Fragment>;
+              })}
+            </p>
+          );
+        })}
       </div>
 
       {suggestions.length > 0 ? (
@@ -340,7 +356,7 @@ export function LexelSuggestionPopover({
             const isSelected = idx === selectedIndex;
             return (
               <button
-                key={`${sug.kind}-${sug.replacement_text}-${idx}`}
+                key={`${sug.kind}-${sug.replacement_text}`}
                 type="button"
                 role="menuitem"
                 onMouseDown={(e) => e.preventDefault()}

@@ -23,7 +23,9 @@ describe('surfaceDetector', () => {
 
   it('detects X, LinkedIn, Discord, and Gmail', () => {
     expect(detectSurfaceFromLocation('https://x.com/home').surfaceId).toBe('web_x');
-    expect(detectSurfaceFromLocation('https://www.linkedin.com/feed/').surfaceId).toBe('web_linkedin');
+    expect(detectSurfaceFromLocation('https://www.linkedin.com/feed/').surfaceId).toBe(
+      'web_linkedin',
+    );
     expect(detectSurfaceFromLocation('https://discord.com/channels/1/2').surfaceId).toBe(
       'web_discord_slack',
     );

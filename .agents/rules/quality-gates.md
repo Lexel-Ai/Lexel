@@ -12,10 +12,12 @@ Before proposing any commit or declaring a task finished, verify every modified 
 
 ## 1. Stack Verification Gates
 
-### Rust (`crates/*`)
+### Rust (`crates/*` & `apps/lexel-desktop/src-tauri`)
 ```bash
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --manifest-path apps/lexel-desktop/src-tauri/Cargo.toml --check
+cargo clippy --manifest-path apps/lexel-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --workspace
 ```
 - Zero compiler warnings or clippy errors on Lexel crates.
@@ -23,6 +25,7 @@ cargo test --workspace
 
 ### TypeScript / JS (`packages/*`, `apps/*`)
 ```bash
+pnpm run check
 pnpm -r typecheck
 pnpm -r test
 pnpm -r build

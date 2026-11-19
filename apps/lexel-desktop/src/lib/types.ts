@@ -1,9 +1,4 @@
-import type {
-  AiTaskId,
-  GateCheckSummary,
-  RulePresetId,
-  SurfaceProfile,
-} from 'lexel-ui';
+import type { AiTaskId, GateCheckSummary, RulePresetId, SurfaceProfile } from 'lexel-ui';
 
 export type MainModelTier = 'lexel-0.5b' | 'lexel-1.5b' | 'custom';
 export type RuntimeKind = 'auto' | 'llama_server' | 'ollama' | 'openai_compat';

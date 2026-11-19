@@ -1,9 +1,4 @@
-import type {
-  AiTaskId,
-  SurfaceId,
-  SurfaceProfile,
-  UnitBoundMetric,
-} from './types';
+import type { AiTaskId, SurfaceId, SurfaceProfile, UnitBoundMetric } from './types';
 import { BUILTIN_SURFACES, resolveSurfaceProfileShared } from './verifierCore';
 
 export interface VoicePromptExample {
@@ -150,7 +145,8 @@ export function upsertSurfaceOverride(
   const next: SurfaceProfile = {
     ...baseSurface,
     ...patch,
-    promptDirective: (patch.promptDirective ?? baseSurface.promptDirective).trim() ||
+    promptDirective:
+      (patch.promptDirective ?? baseSurface.promptDirective).trim() ||
       (builtin?.promptDirective ?? baseSurface.promptDirective),
     maxChars: Math.max(40, patch.maxChars ?? baseSurface.maxChars),
   };

@@ -29,7 +29,8 @@ describe('model manifest & native daemon client', () => {
       runtime: {
         id: 'abcdefghijklmnopabcdefghijklmnop',
         lastError: { message: 'Access to the specified native messaging host is forbidden.' },
-        sendNativeMessage: (_host: string, _msg: unknown, cb: (res: unknown) => void) => cb(undefined),
+        sendNativeMessage: (_host: string, _msg: unknown, cb: (res: unknown) => void) =>
+          cb(undefined),
       },
     });
 

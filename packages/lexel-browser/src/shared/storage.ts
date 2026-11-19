@@ -123,7 +123,10 @@ export async function getSurfaceOverride(domain: string): Promise<SurfaceId | nu
   return map[domain.toLowerCase()] ?? null;
 }
 
-export async function setSurfaceOverride(domain: string, surfaceId: SurfaceId | null): Promise<void> {
+export async function setSurfaceOverride(
+  domain: string,
+  surfaceId: SurfaceId | null,
+): Promise<void> {
   const map = { ...(await getAllSurfaceOverrides()) };
   const key = domain.toLowerCase();
   if (surfaceId) {
@@ -145,7 +148,9 @@ export async function getAllDomainStatuses(): Promise<Record<string, boolean>> {
   return map;
 }
 
-export async function applyUnifiedSettingsToStorage(settings: UnifiedDaemonSettings): Promise<void> {
+export async function applyUnifiedSettingsToStorage(
+  settings: UnifiedDaemonSettings,
+): Promise<void> {
   const currentAll = await chrome.storage.local.get(null);
   const keysToRemove = Object.keys(currentAll).filter((k) => k.startsWith(DOMAIN_KEY_PREFIX));
   if (keysToRemove.length > 0) {
