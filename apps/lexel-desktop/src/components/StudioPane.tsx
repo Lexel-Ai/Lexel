@@ -8,13 +8,24 @@ import {
   type SurfaceProfile,
 } from 'lexel-ui';
 import type React from 'react';
-import { useMemo, useState } from 'react';
-import { daemonRpc, rewriteWithTask } from '../lib/desktopClient';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  daemonRpc,
+  polishClipboardSafe,
+  readClipboardText,
+  rewriteWithTask,
+} from '../lib/desktopClient';
 import { mergeSurfaceCatalog } from '../lib/surfaces';
-import type { RewriteResponse, Tier0CheckResponse, UnifiedDaemonSettings } from '../lib/types';
+import type {
+  DraftSnapshot,
+  RewriteResponse,
+  Tier0CheckResponse,
+  UnifiedDaemonSettings,
+} from '../lib/types';
 
 interface StudioPaneProps {
   settings: UnifiedDaemonSettings;
+  incomingDraft?: { text: string; seq: number } | null;
   onRefreshStatus: () => Promise<void>;
 }
 
@@ -26,7 +37,7 @@ const TASKS: ReadonlyArray<{ id: AiTaskId; label: string }> = [
   { id: 'reply_draft', label: 'Draft Reply' },
 ];
 
-export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
+export function StudioPane({ settings, incomingDraft, onRefreshStatus }: StudioPaneProps) {
   const { surfaces } = useMemo(
     () => mergeSurfaceCatalog(settings.customSurfaces),
     [settings.customSurfaces],
@@ -39,6 +50,8 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
     'In todays fast-paced landscape, we delve into why local AI rewrites should stay fast — and keep latency under 18ms for #42.',
   );
   const [undoText, setUndoText] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<DraftSnapshot[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
   const [synonymWord, setSynonymWord] = useState('');
   const [synonyms, setSynonyms] = useState<string[]>([]);
   const [synonymNotice, setSynonymNotice] = useState<string | null>(null);
@@ -48,6 +61,29 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
   const [copied, setCopied] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const refreshDrafts = useCallback(async () => {
+    try {
+      const res = await daemonRpc<{ drafts: DraftSnapshot[] }>('listDrafts', {});
+      setDrafts(res.drafts ?? []);
+    } catch {
+      // Non-fatal in preview mode.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshDrafts();
+  }, [refreshDrafts]);
+
+  useEffect(() => {
+    if (!incomingDraft?.text) return;
+    setText((prev) => {
+      setUndoText(prev);
+      return incomingDraft.text;
+    });
+    setRewrite(null);
+    setNotice('Loaded draft from system clipboard (Cmd/Ctrl+Shift+L).');
+  }, [incomingDraft]);
 
   const activeSurface: SurfaceProfile = surfaces.find((s) => s.id === surfaceId) ?? surfaces[0];
   const metrics = useMemo(() => computeReadabilityMetrics(text), [text]);
@@ -187,6 +223,54 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
     await navigator.clipboard?.writeText(rewrite.suggestion).catch(() => undefined);
     setCopied(true);
     setTimeout(() => setCopied(false), 1400);
+  }
+
+  async function handlePolishClipboard() {
+    setError(null);
+    setNotice(null);
+    try {
+      const report = await polishClipboardSafe(surfaceId);
+      setUndoText(text);
+      setText(report.polished);
+      if (report.secretsBlocked > 0) {
+        setError(
+          `Secrets Guard blocked clipboard auto-rewrite (${report.secretsBlocked} secret match). Draft loaded for manual inspection.`,
+        );
+      } else if (report.fixesApplied > 0) {
+        setNotice(
+          `Polished clipboard with ${report.fixesApplied} safe fix${report.fixesApplied === 1 ? '' : 'es'} and copied clean text back.`,
+        );
+      } else {
+        setNotice('Loaded clipboard text. No deterministic fixes needed.');
+      }
+      await onRefreshStatus();
+    } catch (err) {
+      try {
+        const raw = await readClipboardText();
+        if (raw.trim()) {
+          setUndoText(text);
+          setText(raw);
+          setNotice('Loaded text from clipboard.');
+          return;
+        }
+      } catch {
+        // Report original error below.
+      }
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleSaveSnapshot() {
+    if (!text.trim()) return;
+    setError(null);
+    try {
+      await daemonRpc('saveDraft', { draft: { surfaceId, content: text } });
+      await refreshDrafts();
+      setShowHistory(true);
+      setNotice('Saved draft snapshot to local SQLite history.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
@@ -445,6 +529,42 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
           >
             Clean Quotes
           </button>
+          <button
+            type="button"
+            onClick={() => void handlePolishClipboard()}
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          >
+            Polish Clipboard
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSaveSnapshot()}
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          >
+            Save Snapshot
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowHistory((v) => !v)}
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: showHistory ? 'var(--lx-muted)' : 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          >
+            History ({drafts.length})
+          </button>
           {undoText !== null && (
             <button
               type="button"
@@ -476,6 +596,73 @@ export function StudioPane({ settings, onRefreshStatus }: StudioPaneProps) {
           </button>
         </div>
       </div>
+
+      {showHistory && (
+        <section
+          aria-label="Local Draft History"
+          className="space-y-2 rounded-[8px] border p-3"
+          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+        >
+          <div className="flex items-center justify-between">
+            <h2 className="text-[13px] font-semibold">Local Draft Snapshots ({drafts.length})</h2>
+            <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+              Opt-in local SQLite only (purged by Purge Local Data)
+            </span>
+          </div>
+          {drafts.length === 0 ? (
+            <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
+              No saved snapshots yet. Click Save Snapshot above to keep a local version.
+            </p>
+          ) : (
+            <div className="max-h-48 space-y-1.5 overflow-y-auto">
+              {drafts.map((snap) => (
+                <div
+                  key={snap.id}
+                  className="flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+                  style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+                >
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{snap.title}</div>
+                    <div className="text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
+                      {snap.surfaceId} · {snap.wordCount} words
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUndoText(text);
+                        setText(snap.content);
+                        setSurfaceId(snap.surfaceId);
+                        setNotice(`Restored snapshot "${snap.title}".`);
+                      }}
+                      className="rounded-[4px] border px-2 py-0.5 text-[11px]"
+                      style={{
+                        backgroundColor: 'var(--lx-card)',
+                        borderColor: 'var(--lx-border)',
+                        color: 'var(--lx-fg)',
+                      }}
+                    >
+                      Restore
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await daemonRpc('deleteDraft', { id: snap.id });
+                        await refreshDrafts();
+                      }}
+                      className="rounded-[4px] px-1.5 py-0.5 text-[11px]"
+                      style={{ color: 'var(--lx-danger)' }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       <section
         className="space-y-2 rounded-[8px] border p-3"

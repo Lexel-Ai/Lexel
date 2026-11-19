@@ -13,8 +13,8 @@ use serde::Deserialize;
 use crate::auth::{constant_time_eq, is_allowed_origin};
 use crate::service::{
     ApplyPresetRequest, BuildWeirpackRequest, DaemonError, DaemonService, FixAllSafeRequest,
-    ReadabilityRequest, RewriteRequest, SaveVoiceRequest, SynonymsRequest, Tier0CheckRequest,
-    Tier0FixSafeRequest, TitleCaseRequest, ValidateWeirpackRequest,
+    ReadabilityRequest, RewriteRequest, SaveDraftRequest, SaveVoiceRequest, SynonymsRequest,
+    Tier0CheckRequest, Tier0FixSafeRequest, TitleCaseRequest, ValidateWeirpackRequest,
 };
 
 pub type StateChangeHook = Arc<dyn Fn(&str) + Send + Sync>;
@@ -137,6 +137,9 @@ pub fn build_router_with_notifier(
             get(get_voice_examples).post(post_voice_example),
         )
         .route("/v1/voice-examples/{id}", delete(delete_voice_example))
+        .route("/v1/analytics/stats", get(get_writing_stats))
+        .route("/v1/drafts", get(get_drafts).post(post_draft))
+        .route("/v1/drafts/{id}", delete(delete_draft))
         .route("/v1/export", get(get_export))
         .route("/v1/import", post(post_import))
         .route("/v1/purge", post(post_purge))
@@ -492,6 +495,36 @@ async fn delete_voice_example(
 ) -> Result<impl IntoResponse, DaemonError> {
     let deleted = state.service.delete_voice_example(&id)?;
     state.notify("voice");
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
+}
+
+async fn get_writing_stats(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.writing_stats()?))
+}
+
+async fn get_drafts(State(state): State<AppState>) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(
+        serde_json::json!({ "drafts": state.service.list_drafts()? }),
+    ))
+}
+
+async fn post_draft(
+    State(state): State<AppState>,
+    Json(body): Json<SaveDraftRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    let draft = state.service.save_draft(body)?;
+    state.notify("drafts");
+    Ok(Json(serde_json::json!({ "draft": draft })))
+}
+
+async fn delete_draft(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, DaemonError> {
+    let deleted = state.service.delete_draft(&id)?;
+    state.notify("drafts");
     Ok(Json(serde_json::json!({ "deleted": deleted })))
 }
 

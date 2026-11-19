@@ -199,6 +199,22 @@ pub async fn forward_rpc_to_loopback(
                     None,
                 )
             }
+            "writingStats" => (reqwest::Method::GET, "/v1/analytics/stats".to_owned(), None),
+            "listDrafts" => (reqwest::Method::GET, "/v1/drafts".to_owned(), None),
+            "saveDraft" => {
+                let draft = payload
+                    .get("draft")
+                    .cloned()
+                    .unwrap_or_else(|| payload.clone());
+                (reqwest::Method::POST, "/v1/drafts".to_owned(), Some(draft))
+            }
+            "deleteDraft" => {
+                let id = payload
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .and_then(safe_path_segment)?;
+                (reqwest::Method::DELETE, format!("/v1/drafts/{id}"), None)
+            }
             "importBackup" => {
                 let backup = payload
                     .get("backup")

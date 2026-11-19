@@ -15,16 +15,20 @@ import type {
   DownloadProgress,
   MainModelTier,
   NativeHostStatusReport,
+  OsOverlayCapabilities,
   RuntimeKind,
   ToggleAiResponse,
   UnifiedDaemonSettings,
   VoiceExample,
+  WritingStatsSummary,
 } from '../lib/types';
 
 interface SystemSyncPaneProps {
   status: DaemonStatusPayload;
   envInfo: DesktopEnvInfo | null;
   nativeStatus: NativeHostStatusReport | null;
+  osOverlay: OsOverlayCapabilities | null;
+  writingStats: WritingStatsSummary | null;
   voiceExamples: VoiceExample[];
   onPatchSettings: (patch: Partial<UnifiedDaemonSettings>) => Promise<void>;
   onRefreshAll: () => Promise<void>;
@@ -34,6 +38,8 @@ export function SystemSyncPane({
   status,
   envInfo,
   nativeStatus,
+  osOverlay,
+  writingStats,
   voiceExamples,
   onPatchSettings,
   onRefreshAll,
@@ -979,6 +985,107 @@ export function SystemSyncPane({
               ))
             )}
           </div>
+        </section>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <section
+          className="space-y-2.5 rounded-[8px] border p-3"
+          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+        >
+          <div>
+            <h2 className="text-[13px] font-semibold">Local Writing Insights</h2>
+            <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+              100% local SQLite counters for the active profile. Never stores raw text and never
+              leaves your machine.
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center lexel-mono">
+            <div
+              className="rounded-[6px] border p-2"
+              style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+            >
+              <div className="text-[15px] font-semibold">
+                {writingStats?.totalWordsChecked ?? 0}
+              </div>
+              <div className="text-[10px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                Words Checked
+              </div>
+            </div>
+            <div
+              className="rounded-[6px] border p-2"
+              style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+            >
+              <div className="text-[15px] font-semibold">
+                {(writingStats?.totalGrammarHits ?? 0) + (writingStats?.totalSlopHits ?? 0)}
+              </div>
+              <div className="text-[10px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                Grammar &amp; Slop
+              </div>
+            </div>
+            <div
+              className="rounded-[6px] border p-2"
+              style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+            >
+              <div className="text-[15px] font-semibold" style={{ color: 'var(--lx-signal)' }}>
+                {writingStats?.totalFixesApplied ?? 0}
+              </div>
+              <div className="text-[10px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                Safe Fixes
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] lexel-mono">
+            <span style={{ color: 'var(--lx-fg-muted)' }}>
+              Checks run: {writingStats?.totalChecks ?? 0}
+            </span>
+            <span style={{ color: 'var(--lx-warn)' }}>
+              Secrets caught: {writingStats?.totalSecretBlocks ?? 0}
+            </span>
+          </div>
+          {(writingStats?.topSurfaces ?? []).length > 0 && (
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {(writingStats?.topSurfaces ?? []).map(([surface, count]) => (
+                <span
+                  key={surface}
+                  className="rounded-[4px] border px-2 py-0.5 text-[11px] lexel-mono"
+                  style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+                >
+                  {surface}: {count}
+                </span>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section
+          className="space-y-2 rounded-[8px] border p-3"
+          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+        >
+          <div>
+            <h2 className="text-[13px] font-semibold">System-Wide Hotkey &amp; OS Overlay</h2>
+            <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+              Check text copied from Slack, Outlook, Notes, or terminals using the global desktop
+              shortcut.
+            </p>
+          </div>
+          <div
+            className="space-y-1 rounded-[6px] border p-2.5 text-[11px] lexel-mono"
+            style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
+          >
+            <div>
+              Shortcut:{' '}
+              <strong style={{ color: 'var(--lx-signal)' }}>
+                {osOverlay?.globalShortcut ?? 'CmdOrCtrl+Shift+L'}
+              </strong>
+            </div>
+            <div>Platform: {osOverlay?.platform ?? envInfo?.platform ?? 'desktop'}</div>
+            <div>Mode: {osOverlay?.nativeOverlayMode ?? 'global_hotkey_clipboard'}</div>
+          </div>
+          <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+            {osOverlay?.notes ??
+              'Copy any draft, press Cmd/Ctrl+Shift+L, and Lexel Desktop opens with the text ready to polish.'}
+          </p>
         </section>
       </div>
     </div>

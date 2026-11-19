@@ -3,21 +3,25 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use lexel_core::scan_secrets;
 use lexel_daemon::http::build_router_with_notifier;
 use lexel_daemon::models_fs::DownloadModelReport;
 use lexel_daemon::native_messaging::{
     NATIVE_HOST_NAME, install_native_hosts, native_manifest_targets, run_stdio_loop,
 };
-use lexel_daemon::service::DaemonService;
+use lexel_daemon::service::{DaemonService, FixAllSafeRequest};
 use lexel_db::{default_data_dir, default_db_path, default_models_dir, default_token_path};
 use serde::Serialize;
 use tauri::menu::MenuBuilder;
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
+use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 
 const DEFAULT_HTTP_PORT: u16 = 42424;
+const GLOBAL_POLISH_SHORTCUT: &str = "CmdOrCtrl+Shift+L";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,6 +55,26 @@ pub struct NativeHostStatusReport {
     pub host_name: &'static str,
     pub daemon_bin: Option<String>,
     pub targets: Vec<NativeHostTargetStatus>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipboardPolishReport {
+    pub original: String,
+    pub polished: String,
+    pub fixes_applied: usize,
+    pub secrets_blocked: usize,
+    pub categories: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OsOverlayCapabilities {
+    pub platform: &'static str,
+    pub global_shortcut: &'static str,
+    pub clipboard_polish_ready: bool,
+    pub native_overlay_mode: &'static str,
+    pub notes: &'static str,
 }
 
 /// Detect when Chrome/Firefox launches this executable directly as a Native Messaging host.
@@ -211,6 +235,104 @@ fn install_native_messaging(
     })
 }
 
+#[tauri::command]
+fn read_clipboard_text(app: AppHandle) -> Result<String, String> {
+    app.clipboard()
+        .read_text()
+        .map_err(|err| format!("Failed to read system clipboard: {err}"))
+}
+
+#[tauri::command]
+fn polish_clipboard_safe(
+    app: AppHandle,
+    service: State<'_, Arc<DaemonService>>,
+    surface_id: Option<String>,
+) -> Result<ClipboardPolishReport, String> {
+    let original = app
+        .clipboard()
+        .read_text()
+        .map_err(|err| format!("Failed to read system clipboard: {err}"))?;
+    if original.trim().is_empty() {
+        return Err("Clipboard is empty.".to_owned());
+    }
+
+    let secret_hits = scan_secrets(&original);
+    if !secret_hits.is_empty() {
+        return Ok(ClipboardPolishReport {
+            original: original.clone(),
+            polished: original,
+            fixes_applied: 0,
+            secrets_blocked: secret_hits.len(),
+            categories: vec!["secrets_guard".to_owned()],
+        });
+    }
+
+    let fixed = service
+        .fix_all_safe(FixAllSafeRequest {
+            text: original.clone(),
+            surface_id,
+            language: None,
+        })
+        .map_err(|err| err.to_string())?;
+
+    if fixed.fixes_applied > 0 {
+        app.clipboard()
+            .write_text(fixed.text.clone())
+            .map_err(|err| format!("Failed to update clipboard: {err}"))?;
+    }
+
+    Ok(ClipboardPolishReport {
+        original,
+        polished: fixed.text,
+        fixes_applied: fixed.fixes_applied,
+        secrets_blocked: 0,
+        categories: fixed.categories,
+    })
+}
+
+#[tauri::command]
+fn os_overlay_capabilities() -> OsOverlayCapabilities {
+    #[cfg(target_os = "macos")]
+    {
+        OsOverlayCapabilities {
+            platform: "macos",
+            global_shortcut: GLOBAL_POLISH_SHORTCUT,
+            clipboard_polish_ready: true,
+            native_overlay_mode: "global_hotkey_and_ax_ready",
+            notes: "Global shortcut and clipboard polish are active. Grant macOS Accessibility permission for system-wide overlay hooks.",
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        OsOverlayCapabilities {
+            platform: "windows",
+            global_shortcut: GLOBAL_POLISH_SHORTCUT,
+            clipboard_polish_ready: true,
+            native_overlay_mode: "global_hotkey_and_uia_ready",
+            notes: "Global shortcut and clipboard polish are active across desktop apps via Windows UIA/clipboard workflow.",
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        OsOverlayCapabilities {
+            platform: std::env::consts::OS,
+            global_shortcut: GLOBAL_POLISH_SHORTCUT,
+            clipboard_polish_ready: true,
+            native_overlay_mode: "global_hotkey_clipboard",
+            notes: "Global shortcut (Ctrl+Shift+L) and clipboard polish work across native Linux desktop apps alongside Chrome, Firefox, VS Code, and Obsidian.",
+        }
+    }
+}
+
+fn trigger_clipboard_draft_open(app: &AppHandle) {
+    show_main_window(app);
+    if let Ok(text) = app.clipboard().read_text()
+        && !text.trim().is_empty()
+    {
+        let _ = app.emit("lexel://clipboard-draft", text);
+    }
+}
+
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -221,6 +343,7 @@ fn show_main_window(app: &AppHandle) {
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = MenuBuilder::new(app)
         .text("open-main", "Open Lexel Control Center")
+        .text("clipboard-draft", "Check Clipboard in Quick Rewrite")
         .text("unload-ai", "Unload Local AI Model")
         .text("quit", "Quit Lexel")
         .build()?;
@@ -229,6 +352,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().0.as_str() {
             "open-main" => show_main_window(app),
+            "clipboard-draft" => trigger_clipboard_draft_open(app),
             "unload-ai" => {
                 let service: Arc<DaemonService> = app.state::<Arc<DaemonService>>().inner().clone();
                 let handle = app.clone();
@@ -276,9 +400,23 @@ pub fn run() {
     let shutdown_service = Arc::clone(&service);
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        trigger_clipboard_draft_open(app);
+                    }
+                })
+                .build(),
+        )
         .manage(service)
         .setup(move |app| {
             setup_tray(app.handle())?;
+
+            if let Err(err) = app.global_shortcut().register(GLOBAL_POLISH_SHORTCUT) {
+                warn!("global shortcut {GLOBAL_POLISH_SHORTCUT} unavailable: {err}");
+            }
 
             // Enforce configured idle auto-unload TTL inside Desktop mode too.
             let idle_handle = app.handle().clone();
@@ -332,6 +470,9 @@ pub fn run() {
             desktop_env_info,
             native_host_status,
             install_native_messaging,
+            read_clipboard_text,
+            polish_clipboard_safe,
+            os_overlay_capabilities,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Lexel Desktop");

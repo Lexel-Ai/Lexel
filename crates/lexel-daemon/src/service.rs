@@ -13,7 +13,7 @@ use lexel_core::{
     scan_secrets, scan_structure_issues, scan_style_guide, structured_lint_config, synonyms_for,
     to_sentence_case, to_title_case, validate_weirpack_bytes, verify_rewrite_with_surfaces,
 };
-use lexel_db::{DatabaseBackup, DbError, LexelDb};
+use lexel_db::{DatabaseBackup, DbError, DraftSnapshot, LexelDb, WritingStatsSummary};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::info;
@@ -184,6 +184,14 @@ pub struct SaveVoiceRequest {
     pub original: String,
     pub rewritten: String,
     pub action: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveDraftRequest {
+    pub surface_id: Option<String>,
+    pub title: Option<String>,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -571,11 +579,18 @@ impl DaemonService {
             }
         }
 
+        let total_fixes =
+            deterministic.fixes_applied + styled.fixes_applied + grammar.fixes_applied;
+        if total_fixes > 0 {
+            let words = req.text.split_whitespace().count();
+            if let Ok(db) = self.db.lock() {
+                let _ = db.record_writing_event(surface_id, words, 0, 0, 0, total_fixes);
+            }
+        }
+
         Ok(SafeFixResult {
             text: grammar.text,
-            fixes_applied: deterministic.fixes_applied
-                + styled.fixes_applied
-                + grammar.fixes_applied,
+            fixes_applied: total_fixes,
             categories,
         })
     }
@@ -717,19 +732,41 @@ impl DaemonService {
         )?;
         let style_fix = apply_style_guide_fixes(&safe_fix.text, &profile.settings.style_guide);
 
+        let harper = engine.check_text_with_language(&req.text, language);
+        let slop = slop_scanner.scan_with_overrides(
+            &req.text,
+            surface_profile.allow_em_dashes,
+            &profile.settings.custom_slop_terms,
+            &profile.settings.disabled_slop_terms,
+        );
+        let surface = catalog.validate(&req.text, surface_id)?;
+        let secrets = scan_secrets(&req.text);
+        let invisible_chars = scan_invisible_chars(&req.text);
+        let structure = scan_structure_issues(&req.text);
+        let style_guide = scan_style_guide(&req.text, &profile.settings.style_guide);
+
+        let words = req.text.split_whitespace().count();
+        if words > 0
+            && let Ok(db) = self.db.lock()
+        {
+            let _ = db.record_writing_event(
+                surface_id,
+                words,
+                harper.len(),
+                slop.len(),
+                secrets.len(),
+                0,
+            );
+        }
+
         Ok(Tier0CheckResponse {
-            harper: engine.check_text_with_language(&req.text, language),
-            slop: slop_scanner.scan_with_overrides(
-                &req.text,
-                surface_profile.allow_em_dashes,
-                &profile.settings.custom_slop_terms,
-                &profile.settings.disabled_slop_terms,
-            ),
-            surface: catalog.validate(&req.text, surface_id)?,
-            secrets: scan_secrets(&req.text),
-            invisible_chars: scan_invisible_chars(&req.text),
-            structure: scan_structure_issues(&req.text),
-            style_guide: scan_style_guide(&req.text, &profile.settings.style_guide),
+            harper,
+            slop,
+            surface,
+            secrets,
+            invisible_chars,
+            structure,
+            style_guide,
             safe_fixed_text: style_fix.text,
             safe_fixes_count: safe_fix.fixes_applied + style_fix.fixes_applied,
             blocked: false,
@@ -758,6 +795,35 @@ impl DaemonService {
     pub fn delete_voice_example(&self, id: &str) -> Result<bool, DaemonError> {
         let db = self.db.lock().expect("db mutex poisoned");
         Ok(db.delete_voice_example(id)?)
+    }
+
+    pub fn writing_stats(&self) -> Result<WritingStatsSummary, DaemonError> {
+        let db = self.db.lock().expect("db mutex poisoned");
+        Ok(db.writing_stats_summary()?)
+    }
+
+    pub fn list_drafts(&self) -> Result<Vec<DraftSnapshot>, DaemonError> {
+        let db = self.db.lock().expect("db mutex poisoned");
+        Ok(db.list_draft_snapshots(50)?)
+    }
+
+    pub fn save_draft(&self, req: SaveDraftRequest) -> Result<DraftSnapshot, DaemonError> {
+        if req.content.trim().is_empty() {
+            return Err(DaemonError::BadRequest(
+                "Draft content cannot be empty.".to_owned(),
+            ));
+        }
+        let db = self.db.lock().expect("db mutex poisoned");
+        Ok(db.save_draft_snapshot(
+            req.surface_id.as_deref().unwrap_or("general"),
+            req.title.as_deref(),
+            &req.content,
+        )?)
+    }
+
+    pub fn delete_draft(&self, id: &str) -> Result<bool, DaemonError> {
+        let db = self.db.lock().expect("db mutex poisoned");
+        Ok(db.delete_draft_snapshot(id)?)
     }
 
     pub fn export_backup(&self) -> Result<DatabaseBackup, DaemonError> {
@@ -973,6 +1039,22 @@ impl DaemonService {
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| DaemonError::BadRequest("missing id".to_owned()))?;
                 Ok(serde_json::json!({ "deleted": self.delete_voice_example(id)? }))
+            }
+            "writingStats" => {
+                Ok(serde_json::to_value(self.writing_stats()?).map_err(DbError::from)?)
+            }
+            "listDrafts" => Ok(serde_json::json!({ "drafts": self.list_drafts()? })),
+            "saveDraft" => {
+                let raw = payload.get("draft").cloned().unwrap_or(payload);
+                let req: SaveDraftRequest = serde_json::from_value(raw).map_err(DbError::from)?;
+                Ok(serde_json::json!({ "draft": self.save_draft(req)? }))
+            }
+            "deleteDraft" => {
+                let id = payload
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| DaemonError::BadRequest("missing id".to_owned()))?;
+                Ok(serde_json::json!({ "deleted": self.delete_draft(id)? }))
             }
             "exportBackup" => {
                 Ok(serde_json::to_value(self.export_backup()?).map_err(DbError::from)?)

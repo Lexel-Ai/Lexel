@@ -18,18 +18,22 @@ import {
 } from 'lexel-ui';
 import manifestData from '../../../../models/manifest.json';
 import type {
+  ClipboardPolishReport,
   DaemonProfile,
   DaemonStatusPayload,
   DesktopEnvInfo,
   DownloadModelReport,
   DownloadProgress,
+  DraftSnapshot,
   HarperRulesPayload,
   NativeHostInstallReport,
   NativeHostStatusReport,
+  OsOverlayCapabilities,
   RewriteResponse,
   Tier0CheckResponse,
   UnifiedDaemonSettings,
   VoiceExample,
+  WritingStatsSummary,
 } from './types';
 
 export interface ManifestModelSpec {
@@ -51,6 +55,8 @@ interface PreviewStore {
   activeProfileId: string;
   profiles: DaemonProfile[];
   voiceExamples: VoiceExample[];
+  drafts?: DraftSnapshot[];
+  stats?: WritingStatsSummary;
 }
 
 export function isTauriRuntime(): boolean {
@@ -473,6 +479,45 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
       savePreviewStore(store);
       return { deleted: true };
     }
+    case 'writingStats':
+      return (
+        store.stats ?? {
+          totalChecks: 0,
+          totalWordsChecked: 0,
+          totalGrammarHits: 0,
+          totalSlopHits: 0,
+          totalSecretBlocks: 0,
+          totalFixesApplied: 0,
+          topSurfaces: [],
+        }
+      );
+    case 'listDrafts':
+      return { drafts: store.drafts ?? [] };
+    case 'saveDraft': {
+      const raw = (payload.draft ?? payload) as Partial<DraftSnapshot>;
+      const content = String(raw.content ?? '');
+      const snapshot: DraftSnapshot = {
+        id: `draft_${Date.now()}`,
+        profileId: active.id,
+        surfaceId: String(raw.surfaceId ?? 'general'),
+        title:
+          String(raw.title ?? '').trim() ||
+          content.trim().split('\n')[0]?.slice(0, 48) ||
+          'Untitled draft',
+        content,
+        wordCount: content.trim() ? content.trim().split(/\s+/).length : 0,
+        createdAt: Date.now(),
+      };
+      store.drafts = [snapshot, ...(store.drafts ?? [])].slice(0, 50);
+      savePreviewStore(store);
+      return { draft: snapshot };
+    }
+    case 'deleteDraft': {
+      const id = String(payload.id ?? '');
+      store.drafts = (store.drafts ?? []).filter((d) => d.id !== id);
+      savePreviewStore(store);
+      return { deleted: true };
+    }
     case 'exportBackup':
       return {
         version: 1,
@@ -619,6 +664,61 @@ export async function subscribeToStateChanges(
   return listen<string>('lexel://state-changed', (event) => {
     onChange(event.payload);
   });
+}
+
+export async function subscribeToClipboardDraft(
+  onDraft: (text: string) => void,
+): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return () => undefined;
+  }
+  return listen<string>('lexel://clipboard-draft', (event) => {
+    onDraft(event.payload);
+  });
+}
+
+export async function readClipboardText(): Promise<string> {
+  if (isTauriRuntime()) {
+    return invoke<string>('read_clipboard_text');
+  }
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.readText) {
+    return navigator.clipboard.readText();
+  }
+  throw new Error('Clipboard reading is unavailable in this preview context.');
+}
+
+export async function polishClipboardSafe(surfaceId?: string): Promise<ClipboardPolishReport> {
+  if (isTauriRuntime()) {
+    return invoke<ClipboardPolishReport>('polish_clipboard_safe', { surfaceId });
+  }
+  const original = await readClipboardText();
+  const fixed = await daemonRpc<{ text: string; fixesApplied: number; categories: string[] }>(
+    'fixAllSafe',
+    { text: original, surfaceId: surfaceId ?? 'general' },
+  );
+  if (fixed.fixesApplied > 0 && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(fixed.text);
+  }
+  return {
+    original,
+    polished: fixed.text,
+    fixesApplied: fixed.fixesApplied,
+    secretsBlocked: 0,
+    categories: fixed.categories,
+  };
+}
+
+export async function getOsOverlayCapabilities(): Promise<OsOverlayCapabilities> {
+  if (isTauriRuntime()) {
+    return invoke<OsOverlayCapabilities>('os_overlay_capabilities');
+  }
+  return {
+    platform: 'browser-preview',
+    globalShortcut: 'CmdOrCtrl+Shift+L',
+    clipboardPolishReady: false,
+    nativeOverlayMode: 'preview',
+    notes: 'Launch native Lexel Desktop to activate Cmd/Ctrl+Shift+L clipboard polish.',
+  };
 }
 
 export function rewriteWithTask(params: {

@@ -91,3 +91,43 @@ fn failed_backup_import_rolls_back_without_wiping_existing_data() {
     assert_eq!(after.settings.user_dictionary, vec!["KeepMe"]);
     assert_eq!(db.list_voice_examples(None, 20).unwrap().len(), 1);
 }
+
+#[test]
+fn local_writing_stats_and_draft_snapshots_persist_and_purge() {
+    let db = LexelDb::open_in_memory().expect("in-memory db");
+    db.record_writing_event("web_reddit", 42, 2, 3, 1, 4)
+        .expect("record event 1");
+    db.record_writing_event("web_reddit", 18, 1, 0, 0, 1)
+        .expect("record event 2");
+    db.record_writing_event("web_email", 30, 0, 1, 0, 2)
+        .expect("record event 3");
+
+    let stats = db.writing_stats_summary().expect("stats summary");
+    assert_eq!(stats.total_checks, 3);
+    assert_eq!(stats.total_words_checked, 90);
+    assert_eq!(stats.total_grammar_hits, 3);
+    assert_eq!(stats.total_slop_hits, 4);
+    assert_eq!(stats.total_secret_blocks, 1);
+    assert_eq!(stats.total_fixes_applied, 7);
+    assert_eq!(stats.top_surfaces[0], ("web_reddit".to_owned(), 2));
+
+    let snap = db
+        .save_draft_snapshot("web_email", None, "Hello team,\nReady to ship v1.")
+        .expect("save snapshot");
+    assert_eq!(snap.title, "Hello team,");
+    assert_eq!(snap.word_count, 6);
+    assert_eq!(db.list_draft_snapshots(20).expect("list drafts").len(), 1);
+
+    db.purge_all().expect("purge all");
+    assert_eq!(
+        db.writing_stats_summary()
+            .expect("empty stats")
+            .total_checks,
+        0
+    );
+    assert!(
+        db.list_draft_snapshots(20)
+            .expect("empty drafts")
+            .is_empty()
+    );
+}

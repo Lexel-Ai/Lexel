@@ -10,7 +10,9 @@ import {
   daemonRpc,
   getDesktopEnvInfo,
   getNativeHostStatus,
+  getOsOverlayCapabilities,
   isTauriRuntime,
+  subscribeToClipboardDraft,
   subscribeToStateChanges,
 } from './lib/desktopClient';
 import type {
@@ -19,8 +21,10 @@ import type {
   DesktopTabId,
   HarperRulesPayload,
   NativeHostStatusReport,
+  OsOverlayCapabilities,
   UnifiedDaemonSettings,
   VoiceExample,
+  WritingStatsSummary,
 } from './lib/types';
 
 export function App() {
@@ -29,6 +33,9 @@ export function App() {
   const [harperRules, setHarperRules] = useState<HarperRulesPayload | null>(null);
   const [envInfo, setEnvInfo] = useState<DesktopEnvInfo | null>(null);
   const [nativeStatus, setNativeStatus] = useState<NativeHostStatusReport | null>(null);
+  const [osOverlay, setOsOverlay] = useState<OsOverlayCapabilities | null>(null);
+  const [writingStats, setWritingStats] = useState<WritingStatsSummary | null>(null);
+  const [incomingDraft, setIncomingDraft] = useState<{ text: string; seq: number } | null>(null);
   const [voiceExamples, setVoiceExamples] = useState<VoiceExample[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -43,18 +50,23 @@ export function App() {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [nextStatus, nextRules, nextEnv, nextNative, nextVoice] = await Promise.all([
-        daemonRpc<DaemonStatusPayload>('status'),
-        daemonRpc<HarperRulesPayload>('harperRules'),
-        getDesktopEnvInfo(),
-        getNativeHostStatus(),
-        daemonRpc<{ examples: VoiceExample[] }>('listVoiceExamples', {}),
-      ]);
+      const [nextStatus, nextRules, nextEnv, nextNative, nextVoice, nextStats, nextOverlay] =
+        await Promise.all([
+          daemonRpc<DaemonStatusPayload>('status'),
+          daemonRpc<HarperRulesPayload>('harperRules'),
+          getDesktopEnvInfo(),
+          getNativeHostStatus(),
+          daemonRpc<{ examples: VoiceExample[] }>('listVoiceExamples', {}),
+          daemonRpc<WritingStatsSummary>('writingStats', {}),
+          getOsOverlayCapabilities(),
+        ]);
       setStatus(nextStatus);
       setHarperRules(nextRules);
       setEnvInfo(nextEnv);
       setNativeStatus(nextNative);
       setVoiceExamples(nextVoice.examples);
+      setWritingStats(nextStats);
+      setOsOverlay(nextOverlay);
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : String(err));
@@ -68,6 +80,7 @@ export function App() {
   useEffect(() => {
     let active = true;
     let unlisten: (() => void) | null = null;
+    let unlistenClipboard: (() => void) | null = null;
     void subscribeToStateChanges(() => {
       if (active) {
         void refreshAll();
@@ -75,6 +88,18 @@ export function App() {
     }).then((fn) => {
       if (active) {
         unlisten = fn;
+      } else {
+        fn();
+      }
+    });
+    void subscribeToClipboardDraft((text) => {
+      if (active && text.trim()) {
+        setTab('studio');
+        setIncomingDraft({ text, seq: Date.now() });
+      }
+    }).then((fn) => {
+      if (active) {
+        unlistenClipboard = fn;
       } else {
         fn();
       }
@@ -89,6 +114,7 @@ export function App() {
       active = false;
       window.removeEventListener('focus', onFocus);
       unlisten?.();
+      unlistenClipboard?.();
     };
   }, [refreshAll]);
 
@@ -257,7 +283,11 @@ export function App() {
                 Loading Lexel Desktop...
               </p>
             ) : tab === 'studio' ? (
-              <StudioPane settings={status.activeProfile.settings} onRefreshStatus={refreshAll} />
+              <StudioPane
+                settings={status.activeProfile.settings}
+                incomingDraft={incomingDraft}
+                onRefreshStatus={refreshAll}
+              />
             ) : tab === 'surfaces' ? (
               <SurfacesPane
                 settings={status.activeProfile.settings}
@@ -275,6 +305,8 @@ export function App() {
                 status={status}
                 envInfo={envInfo}
                 nativeStatus={nativeStatus}
+                osOverlay={osOverlay}
+                writingStats={writingStats}
                 voiceExamples={voiceExamples}
                 onPatchSettings={handlePatchSettings}
                 onRefreshAll={refreshAll}

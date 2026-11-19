@@ -236,6 +236,42 @@ export interface DownloadProgress {
   percent: number;
 }
 
+export interface WritingStatsSummary {
+  totalChecks: number;
+  totalWordsChecked: number;
+  totalGrammarHits: number;
+  totalSlopHits: number;
+  totalSecretBlocks: number;
+  totalFixesApplied: number;
+  topSurfaces: Array<[string, number]>;
+}
+
+export interface DraftSnapshot {
+  id: string;
+  profileId: string;
+  surfaceId: string;
+  title: string;
+  content: string;
+  wordCount: number;
+  createdAt: number;
+}
+
+export interface ClipboardPolishReport {
+  original: string;
+  polished: string;
+  fixesApplied: number;
+  secretsBlocked: number;
+  categories: string[];
+}
+
+export interface OsOverlayCapabilities {
+  platform: string;
+  globalShortcut: string;
+  clipboardPolishReady: boolean;
+  nativeOverlayMode: string;
+  notes: string;
+}
+
 export type DesktopTabId = 'studio' | 'surfaces' | 'rules' | 'system';
 
 export type {

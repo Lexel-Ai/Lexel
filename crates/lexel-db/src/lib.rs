@@ -33,6 +33,32 @@ pub struct DatabaseBackup {
     pub voice_examples: Vec<VoiceExample>,
 }
 
+/// Aggregated local-only writing statistics (counts only; never stores raw user text).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WritingStatsSummary {
+    pub total_checks: usize,
+    pub total_words_checked: usize,
+    pub total_grammar_hits: usize,
+    pub total_slop_hits: usize,
+    pub total_secret_blocks: usize,
+    pub total_fixes_applied: usize,
+    pub top_surfaces: Vec<(String, usize)>,
+}
+
+/// Opt-in saved scratchpad draft snapshot stored locally in SQLite.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftSnapshot {
+    pub id: String,
+    pub profile_id: String,
+    pub surface_id: String,
+    pub title: String,
+    pub content: String,
+    pub word_count: usize,
+    pub created_at: i64,
+}
+
 /// Return the canonical platform-specific Lexel data directory.
 /// Matches `scripts/setup-models.sh` (`~/.local/share/lexel` on Linux,
 /// `~/Library/Application Support/lexel` on macOS, `%APPDATA%\lexel` on Windows).
@@ -164,6 +190,34 @@ impl LexelDb {
                 original,
                 rewritten
             );
+
+            CREATE TABLE IF NOT EXISTS writing_events (
+                id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                surface_id TEXT NOT NULL,
+                words_checked INTEGER NOT NULL DEFAULT 0,
+                grammar_hits INTEGER NOT NULL DEFAULT 0,
+                slop_hits INTEGER NOT NULL DEFAULT 0,
+                secret_blocks INTEGER NOT NULL DEFAULT 0,
+                fixes_applied INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_writing_events_profile
+                ON writing_events(profile_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS draft_snapshots (
+                id TEXT PRIMARY KEY,
+                profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                surface_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                word_count INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_draft_snapshots_profile
+                ON draft_snapshots(profile_id, created_at DESC);
             "#,
         )?;
 
@@ -561,6 +615,195 @@ impl LexelDb {
         Ok(changed > 0)
     }
 
+    /// Record numeric-only local writing metrics for the active profile (never logs raw text).
+    pub fn record_writing_event(
+        &self,
+        surface_id: &str,
+        words_checked: usize,
+        grammar_hits: usize,
+        slop_hits: usize,
+        secret_blocks: usize,
+        fixes_applied: usize,
+    ) -> Result<(), DbError> {
+        let active = self.active_profile()?;
+        let id = Uuid::new_v4().to_string();
+        let now = now_millis();
+        self.conn.execute(
+            "INSERT INTO writing_events
+             (id, profile_id, surface_id, words_checked, grammar_hits, slop_hits, secret_blocks, fixes_applied, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                id,
+                active.id,
+                surface_id,
+                words_checked as i64,
+                grammar_hits as i64,
+                slop_hits as i64,
+                secret_blocks as i64,
+                fixes_applied as i64,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Aggregate local writing statistics for the active profile.
+    pub fn writing_stats_summary(&self) -> Result<WritingStatsSummary, DbError> {
+        let active = self.active_profile()?;
+        let (checks, words, grammar, slop, secrets, fixes): (i64, i64, i64, i64, i64, i64) =
+            self.conn.query_row(
+                "SELECT COUNT(*),
+                        COALESCE(SUM(words_checked), 0),
+                        COALESCE(SUM(grammar_hits), 0),
+                        COALESCE(SUM(slop_hits), 0),
+                        COALESCE(SUM(secret_blocks), 0),
+                        COALESCE(SUM(fixes_applied), 0)
+                 FROM writing_events
+                 WHERE profile_id = ?1",
+                params![active.id],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT surface_id, COUNT(*) as cnt
+             FROM writing_events
+             WHERE profile_id = ?1
+             GROUP BY surface_id
+             ORDER BY cnt DESC
+             LIMIT 6",
+        )?;
+        let rows = stmt.query_map(params![active.id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize))
+        })?;
+        let mut top_surfaces = Vec::new();
+        for row in rows {
+            top_surfaces.push(row?);
+        }
+
+        Ok(WritingStatsSummary {
+            total_checks: checks.max(0) as usize,
+            total_words_checked: words.max(0) as usize,
+            total_grammar_hits: grammar.max(0) as usize,
+            total_slop_hits: slop.max(0) as usize,
+            total_secret_blocks: secrets.max(0) as usize,
+            total_fixes_applied: fixes.max(0) as usize,
+            top_surfaces,
+        })
+    }
+
+    /// Save an opt-in local scratchpad draft snapshot for the active profile (retains latest 50).
+    pub fn save_draft_snapshot(
+        &self,
+        surface_id: &str,
+        title: Option<&str>,
+        content: &str,
+    ) -> Result<DraftSnapshot, DbError> {
+        let active = self.active_profile()?;
+        let id = Uuid::new_v4().to_string();
+        let now = now_millis();
+        let word_count = content.split_whitespace().count();
+        let resolved_title = title
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                let first_line = content
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("Untitled draft")
+                    .trim();
+                let clipped: String = first_line.chars().take(48).collect();
+                if first_line.chars().count() > 48 {
+                    format!("{clipped}...")
+                } else {
+                    clipped
+                }
+            });
+
+        self.conn.execute(
+            "INSERT INTO draft_snapshots (id, profile_id, surface_id, title, content, word_count, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                id,
+                active.id,
+                surface_id,
+                resolved_title,
+                content,
+                word_count as i64,
+                now
+            ],
+        )?;
+
+        self.conn.execute(
+            "DELETE FROM draft_snapshots
+             WHERE profile_id = ?1
+               AND id NOT IN (
+                   SELECT id FROM draft_snapshots
+                   WHERE profile_id = ?1
+                   ORDER BY created_at DESC
+                   LIMIT 50
+               )",
+            params![active.id],
+        )?;
+
+        Ok(DraftSnapshot {
+            id,
+            profile_id: active.id,
+            surface_id: surface_id.to_owned(),
+            title: resolved_title,
+            content: content.to_owned(),
+            word_count,
+            created_at: now,
+        })
+    }
+
+    /// List saved draft snapshots for the active profile, newest first.
+    pub fn list_draft_snapshots(&self, limit: usize) -> Result<Vec<DraftSnapshot>, DbError> {
+        let active = self.active_profile()?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, profile_id, surface_id, title, content, word_count, created_at
+             FROM draft_snapshots
+             WHERE profile_id = ?1
+             ORDER BY created_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![active.id, limit as i64], |r| {
+            Ok(DraftSnapshot {
+                id: r.get(0)?,
+                profile_id: r.get(1)?,
+                surface_id: r.get(2)?,
+                title: r.get(3)?,
+                content: r.get(4)?,
+                word_count: r.get::<_, i64>(5)?.max(0) as usize,
+                created_at: r.get(6)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Delete one draft snapshot by ID for the active profile.
+    pub fn delete_draft_snapshot(&self, id: &str) -> Result<bool, DbError> {
+        let active = self.active_profile()?;
+        let changed = self.conn.execute(
+            "DELETE FROM draft_snapshots WHERE id = ?1 AND profile_id = ?2",
+            params![id, active.id],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Export all profiles and voice memory as a portable JSON backup.
     pub fn export_backup(&self) -> Result<DatabaseBackup, DbError> {
         let profiles = self.list_profiles()?;
@@ -595,6 +838,8 @@ impl LexelDb {
             self.conn.execute_batch(
                 "DELETE FROM voice_examples_fts;
                  DELETE FROM voice_examples;
+                 DELETE FROM writing_events;
+                 DELETE FROM draft_snapshots;
                  DELETE FROM sub_contexts;
                  DELETE FROM profiles;",
             )?;
@@ -666,11 +911,13 @@ impl LexelDb {
         }
     }
 
-    /// Purge all stored user voice examples and reset profiles back to a clean default.
+    /// Purge all stored user voice examples, analytics, drafts, and reset profiles back to a clean default.
     pub fn purge_all(&self) -> Result<LexelProfile, DbError> {
         self.conn.execute_batch(
             "DELETE FROM voice_examples_fts;
              DELETE FROM voice_examples;
+             DELETE FROM writing_events;
+             DELETE FROM draft_snapshots;
              DELETE FROM sub_contexts;
              DELETE FROM profiles;",
         )?;
