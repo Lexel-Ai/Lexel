@@ -581,67 +581,89 @@ impl LexelDb {
         })
     }
 
-    /// Restore profiles and voice memory from an exported JSON backup.
+    /// Restore profiles and voice memory from an exported JSON backup atomically.
     pub fn import_backup(&self, backup: DatabaseBackup) -> Result<LexelProfile, DbError> {
         if backup.profiles.is_empty() {
             return Err(DbError::InvalidBackup(
                 "backup contains no profiles".to_owned(),
             ));
         }
-        self.purge_all()?;
-        self.conn.execute("DELETE FROM profiles", [])?;
 
-        let mut any_active = false;
-        for p in &backup.profiles {
-            if p.is_active {
-                any_active = true;
+        // Run inside an explicit SAVEPOINT so a malformed backup never wipes existing user data.
+        self.conn.execute_batch("SAVEPOINT import_backup")?;
+        let outcome = (|| -> Result<LexelProfile, DbError> {
+            self.conn.execute_batch(
+                "DELETE FROM voice_examples_fts;
+                 DELETE FROM voice_examples;
+                 DELETE FROM sub_contexts;
+                 DELETE FROM profiles;",
+            )?;
+
+            let mut any_active = false;
+            for p in &backup.profiles {
+                if p.is_active {
+                    any_active = true;
+                }
+                let json = serde_json::to_string(&p.settings)?;
+                self.conn.execute(
+                    "INSERT INTO profiles (id, name, is_active, settings_json, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        p.id,
+                        p.name,
+                        if p.is_active { 1 } else { 0 },
+                        json,
+                        p.created_at,
+                        p.updated_at
+                    ],
+                )?;
             }
-            let json = serde_json::to_string(&p.settings)?;
-            self.conn.execute(
-                "INSERT INTO profiles (id, name, is_active, settings_json, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    p.id,
-                    p.name,
-                    if p.is_active { 1 } else { 0 },
-                    json,
-                    p.created_at,
-                    p.updated_at
-                ],
-            )?;
-        }
-        if !any_active {
-            self.ensure_default_profile()?;
-        }
+            if !any_active {
+                self.ensure_default_profile()?;
+            }
 
-        for ex in &backup.voice_examples {
-            self.conn.execute(
-                "INSERT OR IGNORE INTO voice_examples (id, profile_id, surface_id, subcontext, original, rewritten, action, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    ex.id,
-                    ex.profile_id,
-                    ex.surface_id,
-                    ex.subcontext,
-                    ex.original,
-                    ex.rewritten,
-                    ex.action,
-                    ex.created_at
-                ],
-            )?;
-            self.conn.execute(
-                "INSERT INTO voice_examples_fts (id, profile_id, surface_id, original, rewritten)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    ex.id,
-                    ex.profile_id,
-                    ex.surface_id,
-                    ex.original,
-                    ex.rewritten
-                ],
-            )?;
+            for ex in &backup.voice_examples {
+                self.conn.execute(
+                    "INSERT INTO voice_examples (id, profile_id, surface_id, subcontext, original, rewritten, action, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        ex.id,
+                        ex.profile_id,
+                        ex.surface_id,
+                        ex.subcontext,
+                        ex.original,
+                        ex.rewritten,
+                        ex.action,
+                        ex.created_at
+                    ],
+                )?;
+                self.conn.execute(
+                    "INSERT INTO voice_examples_fts (id, profile_id, surface_id, original, rewritten)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        ex.id,
+                        ex.profile_id,
+                        ex.surface_id,
+                        ex.original,
+                        ex.rewritten
+                    ],
+                )?;
+            }
+            self.active_profile()
+        })();
+
+        match outcome {
+            Ok(profile) => {
+                self.conn.execute_batch("RELEASE SAVEPOINT import_backup")?;
+                Ok(profile)
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch(
+                    "ROLLBACK TO SAVEPOINT import_backup; RELEASE SAVEPOINT import_backup",
+                );
+                Err(err)
+            }
         }
-        self.active_profile()
     }
 
     /// Purge all stored user voice examples and reset profiles back to a clean default.

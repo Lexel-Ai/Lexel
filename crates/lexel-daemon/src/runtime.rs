@@ -317,10 +317,8 @@ impl RuntimeManager {
                 if !res.status().is_success() {
                     let status = res.status();
                     let body = res.text().await.unwrap_or_default();
-                    return Err(format!(
-                        "Ollama error ({status}): {}",
-                        &body[..body.len().min(160)]
-                    ));
+                    let snippet: String = body.chars().take(160).collect();
+                    return Err(format!("Ollama error ({status}): {snippet}"));
                 }
                 let payload: serde_json::Value = res
                     .json()
@@ -421,10 +419,8 @@ impl RuntimeManager {
         if !res.status().is_success() {
             let status = res.status();
             let body = res.text().await.unwrap_or_default();
-            return Err(format!(
-                "Local AI server error ({status}): {}",
-                &body[..body.len().min(160)]
-            ));
+            let snippet: String = body.chars().take(160).collect();
+            return Err(format!("Local AI server error ({status}): {snippet}"));
         }
 
         let payload: serde_json::Value = res

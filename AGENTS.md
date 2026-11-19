@@ -17,4 +17,4 @@ Follow [`.agents/rules/architecture-invariants.md`](.agents/rules/architecture-i
 
 ## 3. UI, Copy & Anti-Slop Rules
 - All UI and copy work must obey `antislop` (global/session mode) and Lexel's own zero-slop standard (no em dashes, no generic AI buzzwords, no ungrounded claims).
-- Relevant project skills are installed under `.agents/skills/` (symlinked at `.agent/skills/`). Load the matching `SKILL.md` before specialized work (Rust, Tauri v2, Unsloth/HuggingFace, UI/UX, reverse-engineering, testing).
+- Relevant project skills are installed under `.agents/skills/` (symlinked at `.agent/skills/`), including `ponytail`, `ponytail-review`, and `ponytail-audit` for minimal, senior-dev reviews and changes. Load the matching `SKILL.md` before specialized work (Rust, Tauri v2, Unsloth/HuggingFace, UI/UX, reverse-engineering, testing).

@@ -2,6 +2,7 @@ import { defineManifest } from '@crxjs/vite-plugin';
 import packageData from '../package.json' with { type: 'json' };
 
 const isDev = process.env.NODE_ENV === 'development';
+const isFirefox = process.env.TARGET_BROWSER === 'firefox';
 
 export function makeExtensionCSP(dev: boolean): string {
   const scriptSrc = ["'self'", "'wasm-unsafe-eval'"];
@@ -45,9 +46,18 @@ export default defineManifest({
       128: 'icons/icon-128.png',
     },
   },
-  side_panel: {
-    default_path: 'sidepanel.html',
-  },
+  ...(isFirefox
+    ? {
+        sidebar_action: {
+          default_panel: 'sidepanel.html',
+          default_title: 'Lexel Workbench',
+        },
+      }
+    : {
+        side_panel: {
+          default_path: 'sidepanel.html',
+        },
+      }),
   options_page: 'options.html',
   browser_specific_settings: {
     gecko: {
@@ -89,7 +99,9 @@ export default defineManifest({
       ],
     },
   ],
-  permissions: ['storage', 'tabs', 'sidePanel', 'activeTab', 'nativeMessaging'],
+  permissions: isFirefox
+    ? ['storage', 'tabs', 'activeTab', 'nativeMessaging']
+    : ['storage', 'tabs', 'sidePanel', 'activeTab', 'nativeMessaging'],
   host_permissions: ['http://127.0.0.1/*', 'http://localhost/*'],
   content_security_policy: {
     extension_pages: makeExtensionCSP(isDev),

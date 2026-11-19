@@ -71,3 +71,23 @@ fn patches_settings_and_persists_fts5_voice_memory() {
     db.update_active_settings(&clean_settings).unwrap();
     assert!(db.active_profile().unwrap().settings.ai_enabled);
 }
+
+#[test]
+fn failed_backup_import_rolls_back_without_wiping_existing_data() {
+    let db = LexelDb::open_in_memory().expect("in-memory db");
+    db.patch_active_settings(json!({ "dialect": 2, "userDictionary": ["KeepMe"] }))
+        .expect("patch");
+    db.save_voice_example("general", None, "Old", "Kept voice example.", "accepted")
+        .expect("voice");
+
+    let mut bad_backup = db.export_backup().expect("export");
+    // Corrupt foreign key: point a voice example to a profile ID that does not exist.
+    bad_backup.voice_examples[0].profile_id = "missing-profile".to_owned();
+
+    assert!(db.import_backup(bad_backup).is_err());
+
+    let after = db.active_profile().expect("profile preserved");
+    assert_eq!(after.settings.dialect, 2);
+    assert_eq!(after.settings.user_dictionary, vec!["KeepMe"]);
+    assert_eq!(db.list_voice_examples(None, 20).unwrap().len(), 1);
+}

@@ -226,6 +226,16 @@ where
         .await
         .map_err(|e| format!("model download failed: {e}"))?;
 
+    // If a stale or oversized .part triggers 416 Range Not Satisfiable, discard it and restart cleanly.
+    if resume_from > 0 && response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+        let _ = fs::remove_file(&part_path);
+        response = client
+            .get(&spec.gguf_url)
+            .send()
+            .await
+            .map_err(|e| format!("model download failed: {e}"))?;
+    }
+
     let resumed = resume_from > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
     if !resumed && !response.status().is_success() {
         return Err(format!(

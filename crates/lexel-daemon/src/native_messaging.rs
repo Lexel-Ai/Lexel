@@ -60,6 +60,18 @@ pub fn write_frame<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> {
     writer.flush()
 }
 
+fn safe_path_segment(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.contains(['/', '\\', '?', '#', '%'])
+    {
+        return None;
+    }
+    Some(trimmed)
+}
+
 /// Forward runtime-stateful and mutating RPC commands to a running Desktop/daemon loopback server
 /// so the browser extension shares one loaded AI model in RAM and triggers live UI updates in Desktop.
 pub async fn forward_rpc_to_loopback(
@@ -91,7 +103,8 @@ pub async fn forward_rpc_to_loopback(
                 let id = payload
                     .get("modelId")
                     .or_else(|| payload.get("model"))
-                    .and_then(|v| v.as_str())?;
+                    .and_then(|v| v.as_str())
+                    .and_then(safe_path_segment)?;
                 (reqwest::Method::DELETE, format!("/v1/models/{id}"), None)
             }
             "rewrite" | "aiRewrite" => (
@@ -132,7 +145,10 @@ pub async fn forward_rpc_to_loopback(
                 Some(payload.clone()),
             ),
             "renameProfile" => {
-                let id = payload.get("profileId").and_then(|v| v.as_str())?;
+                let id = payload
+                    .get("profileId")
+                    .and_then(|v| v.as_str())
+                    .and_then(safe_path_segment)?;
                 (
                     reqwest::Method::PATCH,
                     format!("/v1/profiles/{id}"),
@@ -140,7 +156,10 @@ pub async fn forward_rpc_to_loopback(
                 )
             }
             "deleteProfile" => {
-                let id = payload.get("profileId").and_then(|v| v.as_str())?;
+                let id = payload
+                    .get("profileId")
+                    .and_then(|v| v.as_str())
+                    .and_then(safe_path_segment)?;
                 (reqwest::Method::DELETE, format!("/v1/profiles/{id}"), None)
             }
             "applyRulePreset" => (
@@ -160,7 +179,10 @@ pub async fn forward_rpc_to_loopback(
                 )
             }
             "deleteVoiceExample" => {
-                let id = payload.get("id").and_then(|v| v.as_str())?;
+                let id = payload
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .and_then(safe_path_segment)?;
                 (
                     reqwest::Method::DELETE,
                     format!("/v1/voice-examples/{id}"),

@@ -98,13 +98,21 @@ export function App() {
   }, [theme]);
 
   async function handlePatchSettings(patch: Partial<UnifiedDaemonSettings>) {
-    await daemonRpc('patchSettings', { patch });
-    await refreshAll();
+    try {
+      await daemonRpc('patchSettings', { patch });
+      await refreshAll();
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function handleSwitchProfile(profileId: string) {
-    await daemonRpc('switchProfile', { profileId });
-    await refreshAll();
+    try {
+      await daemonRpc('switchProfile', { profileId });
+      await refreshAll();
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   const aiState: AiHealthState = !status
