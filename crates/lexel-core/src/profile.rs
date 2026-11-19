@@ -94,6 +94,17 @@ pub enum AiTaskId {
     ReplyDraft,
 }
 
+/// User-installed or custom-built Harper `.weirpack` synced across Desktop, CLI, and Browser.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredWeirpack {
+    pub name: String,
+    pub bytes_base64: String,
+    pub rule_count: usize,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
 /// Unified per-profile settings synchronized across Extension, Lab, Desktop, and IDE.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -134,6 +145,8 @@ pub struct UnifiedSettings {
     pub disabled_slop_terms: Vec<String>,
     #[serde(default)]
     pub custom_surfaces: Vec<SurfaceProfile>,
+    #[serde(default)]
+    pub weirpacks: Vec<StoredWeirpack>,
 }
 
 impl Default for UnifiedSettings {
@@ -176,6 +189,7 @@ impl Default for UnifiedSettings {
             custom_slop_terms: Vec::new(),
             disabled_slop_terms: Vec::new(),
             custom_surfaces: Vec::new(),
+            weirpacks: Vec::new(),
         }
     }
 }

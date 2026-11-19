@@ -12,9 +12,9 @@ use serde::Deserialize;
 
 use crate::auth::{constant_time_eq, is_allowed_origin};
 use crate::service::{
-    ApplyPresetRequest, DaemonError, DaemonService, FixAllSafeRequest, ReadabilityRequest,
-    RewriteRequest, SaveVoiceRequest, SynonymsRequest, Tier0CheckRequest, Tier0FixSafeRequest,
-    TitleCaseRequest,
+    ApplyPresetRequest, BuildWeirpackRequest, DaemonError, DaemonService, FixAllSafeRequest,
+    ReadabilityRequest, RewriteRequest, SaveVoiceRequest, SynonymsRequest, Tier0CheckRequest,
+    Tier0FixSafeRequest, TitleCaseRequest, ValidateWeirpackRequest,
 };
 
 pub type StateChangeHook = Arc<dyn Fn(&str) + Send + Sync>;
@@ -119,6 +119,8 @@ pub fn build_router_with_notifier(
         .route("/v1/harper/rules", get(get_harper_rules))
         .route("/v1/harper/structured-rules", get(get_structured_rules))
         .route("/v1/harper/apply-preset", post(post_harper_apply_preset))
+        .route("/v1/harper/weirpack/build", post(post_weirpack_build))
+        .route("/v1/harper/weirpack/validate", post(post_weirpack_validate))
         .route("/v1/tier0/check", post(post_tier0_check))
         .route("/v1/tier0/fix-safe", post(post_tier0_fix_safe))
         .route("/v1/tier0/fix-all-safe", post(post_tier0_fix_all_safe))
@@ -379,6 +381,27 @@ async fn post_harper_apply_preset(
 ) -> Result<impl IntoResponse, DaemonError> {
     let res = state.service.apply_rule_preset(&body.preset)?;
     state.notify("settings");
+    Ok(Json(res))
+}
+
+async fn post_weirpack_build(
+    State(state): State<AppState>,
+    Json(body): Json<BuildWeirpackRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    let res = state.service.build_custom_weirpack(body)?;
+    state.notify("settings");
+    Ok(Json(res))
+}
+
+async fn post_weirpack_validate(
+    State(state): State<AppState>,
+    Json(body): Json<ValidateWeirpackRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    let saved = body.save;
+    let res = state.service.validate_weirpack(body)?;
+    if saved {
+        state.notify("settings");
+    }
     Ok(Json(res))
 }
 

@@ -8,6 +8,13 @@ export interface Hotkey {
   key: string;
 }
 
+export interface StoredWeirpack {
+  name: string;
+  bytesBase64: string;
+  ruleCount: number;
+  enabled: boolean;
+}
+
 export interface InstalledModelStatus {
   id: string;
   tier: string;
@@ -64,6 +71,7 @@ export interface UnifiedDaemonSettings {
   customSlopTerms: string[];
   disabledSlopTerms: string[];
   customSurfaces: SurfaceProfile[];
+  weirpacks?: StoredWeirpack[];
 }
 
 export interface DaemonProfile {

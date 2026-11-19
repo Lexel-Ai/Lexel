@@ -236,3 +236,35 @@ fn custom_surface_prompt_and_rule_overrides_propagate_through_prompt_and_verifie
         gates.warnings
     );
 }
+
+#[test]
+fn custom_weirpack_builder_verifies_tests_and_loads_into_engine() {
+    let (name, bytes, summary) = lexel_core::build_custom_weirpack_bytes(
+        "AvoidSynergy",
+        "synergy",
+        "coordination",
+        Some("Prefer coordination over synergy."),
+        Some("We need synergy today."),
+        Some("We need coordination today."),
+    )
+    .expect("build custom weirpack");
+    assert_eq!(name, "AvoidSynergy.weirpack");
+    assert_eq!(summary.rule_count, 1);
+    assert!(summary.failures.is_empty());
+
+    let encoded = lexel_core::encode_weirpack_base64(&bytes);
+    let stored = lexel_core::StoredWeirpack {
+        name,
+        bytes_base64: encoded,
+        rule_count: summary.rule_count,
+        enabled: true,
+    };
+
+    let mut engine = HarperEngine::new(0, &BTreeMap::new(), &[], "").expect("engine");
+    engine.load_stored_weirpacks(&[stored]);
+    let diags = engine.check_text("Our synergy helps teams.");
+    assert!(
+        diags.iter().any(|d| d.rule == "AvoidSynergy"),
+        "expected AvoidSynergy diagnostic, got: {diags:?}"
+    );
+}

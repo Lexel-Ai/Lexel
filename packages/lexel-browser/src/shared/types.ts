@@ -109,6 +109,7 @@ export interface UnifiedDaemonSettings {
   customSlopTerms?: string[];
   disabledSlopTerms?: string[];
   customSurfaces?: SurfaceProfile[];
+  weirpacks?: StoredWeirpack[];
 }
 
 export interface DaemonProfile {

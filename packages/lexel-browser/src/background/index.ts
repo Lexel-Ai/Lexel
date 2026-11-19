@@ -143,12 +143,14 @@ async function applyDaemonSnapshotToExtension(
     'lintConfig',
     'userDictionary',
     'ignoredLints',
+    'lexel_weirpacks',
   ]);
   const prevGrammarFingerprint = JSON.stringify([
     prev.dialect ?? null,
     prev.lintConfig ?? null,
     prev.userDictionary ?? null,
     prev.ignoredLints ?? null,
+    prev.lexel_weirpacks ?? null,
   ]);
 
   await applyUnifiedSettingsToStorage(profile.settings);
@@ -159,6 +161,7 @@ async function applyDaemonSnapshotToExtension(
     JSON.stringify(profile.settings.lintConfig ?? {}),
     profile.settings.userDictionary,
     profile.settings.ignoredLints,
+    profile.settings.weirpacks ?? [],
   ]);
 
   if (linter && (forceLinterReload || prevGrammarFingerprint !== nextGrammarFingerprint)) {
@@ -876,25 +879,31 @@ async function handleRequest(
         return { ok: false, failures };
       }
       const existing = await getStoredWeirpacks();
-      await setStoredWeirpacks([
+      const updated = [
         ...existing.filter((p) => p.name !== req.name),
         { name: req.name, bytesBase64: req.bytesBase64, ruleCount, enabled: true },
-      ]);
+      ];
+      await setStoredWeirpacks(updated);
+      await pushPatchToDaemon({ weirpacks: updated });
       return { ok: true, ruleCount };
     }
     case 'getWeirpacks':
       return { weirpacks: await getStoredWeirpacks() };
     case 'toggleWeirpack': {
       const existing = await getStoredWeirpacks();
-      await setStoredWeirpacks(
-        existing.map((p) => (p.name === req.name ? { ...p, enabled: req.enabled } : p)),
+      const updated = existing.map((p) =>
+        p.name === req.name ? { ...p, enabled: req.enabled } : p,
       );
+      await setStoredWeirpacks(updated);
+      await pushPatchToDaemon({ weirpacks: updated });
       await initLinter();
       return { kind: 'unit' };
     }
     case 'removeWeirpack': {
       const existing = await getStoredWeirpacks();
-      await setStoredWeirpacks(existing.filter((p) => p.name !== req.name));
+      const updated = existing.filter((p) => p.name !== req.name);
+      await setStoredWeirpacks(updated);
+      await pushPatchToDaemon({ weirpacks: updated });
       await initLinter();
       return { kind: 'unit' };
     }

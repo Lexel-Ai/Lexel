@@ -167,6 +167,16 @@ pub async fn forward_rpc_to_loopback(
                 "/v1/harper/apply-preset".to_owned(),
                 Some(payload.clone()),
             ),
+            "buildWeirpack" => (
+                reqwest::Method::POST,
+                "/v1/harper/weirpack/build".to_owned(),
+                Some(payload.clone()),
+            ),
+            "validateWeirpack" => (
+                reqwest::Method::POST,
+                "/v1/harper/weirpack/validate".to_owned(),
+                Some(payload.clone()),
+            ),
             "saveVoiceExample" => {
                 let ex = payload
                     .get("example")

@@ -1,8 +1,13 @@
-import { HARPER_RULE_PRESETS, type RulePresetId, SLOP_TERMS } from 'lexel-ui';
+import { BUILTIN_SURFACES, HARPER_RULE_PRESETS, type RulePresetId, SLOP_TERMS } from 'lexel-ui';
 import type React from 'react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { daemonRpc } from '../lib/desktopClient';
-import type { HarperRulesPayload, Hotkey, UnifiedDaemonSettings } from '../lib/types';
+import type {
+  HarperRulesPayload,
+  Hotkey,
+  StoredWeirpack,
+  UnifiedDaemonSettings,
+} from '../lib/types';
 
 interface RulesPaneProps {
   settings: UnifiedDaemonSettings;
@@ -30,8 +35,40 @@ export function RulesPane({
   const [slopInput, setSlopInput] = useState('');
   const [dictInput, setDictInput] = useState('');
   const [blockDomainInput, setBlockDomainInput] = useState('');
+  const [siteDomainInput, setSiteDomainInput] = useState('');
+  const [siteEnabledInput, setSiteEnabledInput] = useState(true);
+  const [siteSurfaceInput, setSiteSurfaceInput] = useState('auto');
+  const [weirRuleName, setWeirRuleName] = useState('CustomAvoidSynergy');
+  const [weirExpr, setWeirExpr] = useState('synergy');
+  const [weirReplacement, setWeirReplacement] = useState('coordination');
+  const [weirMessage, setWeirMessage] = useState('Use plain phrasing instead of buzzword.');
+  const [weirTestBad, setWeirTestBad] = useState('We need team synergy now.');
+  const [weirTestGood, setWeirTestGood] = useState('We need team coordination now.');
+  const [weirNotice, setWeirNotice] = useState<string | null>(null);
+  const [weirError, setWeirError] = useState<string | null>(null);
+  const weirUploadRef = useRef<HTMLInputElement | null>(null);
 
   const activeHotkey: Hotkey = settings.hotkey ?? { modifiers: ['Alt'], key: 'l' };
+  const weirpacks: StoredWeirpack[] = settings.weirpacks ?? [];
+
+  const allSurfaces = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const s of BUILTIN_SURFACES) {
+      map.set(s.id, s.label);
+    }
+    for (const s of settings.customSurfaces ?? []) {
+      map.set(s.id, s.label);
+    }
+    return [...map.entries()].map(([id, label]) => ({ id, label }));
+  }, [settings.customSurfaces]);
+
+  const managedDomains = useMemo(() => {
+    const keys = new Set([
+      ...Object.keys(settings.domainStatuses ?? {}),
+      ...Object.keys(settings.surfaceOverrides ?? {}),
+    ]);
+    return [...keys].sort();
+  }, [settings.domainStatuses, settings.surfaceOverrides]);
 
   const visibleRules = useMemo(() => {
     const rules = harperRules?.rules ?? [];
@@ -116,6 +153,87 @@ export function RulesPane({
     await onPatchSettings({
       hotkey: { ...activeHotkey, modifiers: nextMods },
     });
+  }
+
+  async function addManagedSite(e: React.FormEvent) {
+    e.preventDefault();
+    const clean = siteDomainInput.trim().toLowerCase();
+    if (!clean) return;
+    const nextStatuses = { ...settings.domainStatuses, [clean]: siteEnabledInput };
+    const nextOverrides = { ...settings.surfaceOverrides };
+    if (siteSurfaceInput === 'auto') {
+      delete nextOverrides[clean];
+    } else {
+      nextOverrides[clean] = siteSurfaceInput;
+    }
+    await onPatchSettings({
+      domainStatuses: nextStatuses,
+      surfaceOverrides: nextOverrides,
+    });
+    setSiteDomainInput('');
+  }
+
+  async function removeManagedSite(domain: string) {
+    await onPatchSettings({
+      domainStatuses: { [domain]: null } as unknown as Record<string, boolean>,
+      surfaceOverrides: { [domain]: null } as unknown as Record<string, string>,
+    });
+  }
+
+  async function handleBuildWeirpack(e: React.FormEvent) {
+    e.preventDefault();
+    setWeirNotice(null);
+    setWeirError(null);
+    try {
+      const res = await daemonRpc<{ weirpack: StoredWeirpack }>('buildWeirpack', {
+        ruleName: weirRuleName,
+        expr: weirExpr,
+        replacement: weirReplacement,
+        message: weirMessage,
+        testBad: weirTestBad,
+        testGood: weirTestGood,
+      });
+      await onRefreshRules();
+      setWeirNotice(`Built and synced ${res.weirpack.name} (${res.weirpack.ruleCount} rule).`);
+    } catch (err) {
+      setWeirError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleUploadWeirpack(file: File | undefined) {
+    if (!file) return;
+    setWeirNotice(null);
+    setWeirError(null);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < bytes.length; i++) {
+        bin += String.fromCharCode(bytes[i]);
+      }
+      const res = await daemonRpc<{ weirpack: StoredWeirpack }>('validateWeirpack', {
+        name: file.name,
+        bytesBase64: btoa(bin),
+        save: true,
+      });
+      await onRefreshRules();
+      setWeirNotice(`Validated and synced ${res.weirpack.name} (${res.weirpack.ruleCount} rules).`);
+    } catch (err) {
+      setWeirError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function toggleWeirpack(name: string, enabled: boolean) {
+    await onPatchSettings({
+      weirpacks: weirpacks.map((p) => (p.name === name ? { ...p, enabled } : p)),
+    });
+    await onRefreshRules();
+  }
+
+  async function removeWeirpack(name: string) {
+    await onPatchSettings({
+      weirpacks: weirpacks.filter((p) => p.name !== name),
+    });
+    await onRefreshRules();
   }
 
   return (
@@ -630,6 +748,356 @@ export function RulesPane({
             </button>
           ))}
         </div>
+      </section>
+
+      <section
+        className="space-y-3 rounded-[8px] border p-3"
+        style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+      >
+        <div>
+          <h2 className="text-[13px] font-semibold">Managed Websites ({managedDomains.length})</h2>
+          <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+            Control per-site pause/enable state and surface overrides for Chrome, Brave, Edge, and
+            Firefox from one place.
+          </p>
+        </div>
+
+        <form onSubmit={addManagedSite} className="grid gap-2 sm:grid-cols-4">
+          <input
+            type="text"
+            value={siteDomainInput}
+            onChange={(e) => setSiteDomainInput(e.target.value)}
+            placeholder="mail.google.com or github.com"
+            aria-label="Website hostname"
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px] lexel-mono sm:col-span-2"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          />
+          <select
+            aria-label="Site surface override"
+            value={siteSurfaceInput}
+            onChange={(e) => setSiteSurfaceInput(e.target.value)}
+            className="rounded-[6px] border px-2 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          >
+            <option value="auto">Auto-detect surface</option>
+            {allSurfaces.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 text-[11px]">
+              <input
+                type="checkbox"
+                checked={siteEnabledInput}
+                onChange={(e) => setSiteEnabledInput(e.target.checked)}
+              />
+              Active
+            </label>
+            <button
+              type="submit"
+              className="ml-auto rounded-[6px] border px-2.5 py-1.5 text-[12px] font-medium"
+              style={{
+                backgroundColor: 'var(--lx-muted)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            >
+              Save Site
+            </button>
+          </div>
+        </form>
+
+        {managedDomains.length === 0 ? (
+          <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
+            No per-site overrides yet. Lexel follows your default website setting everywhere.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {managedDomains.map((domain) => {
+              const enabled = settings.domainStatuses[domain] ?? settings.defaultEnable;
+              const surface = settings.surfaceOverrides[domain] ?? 'auto';
+              return (
+                <div
+                  key={domain}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border px-2.5 py-2 text-[12px]"
+                  style={{
+                    backgroundColor: 'var(--lx-surface)',
+                    borderColor: 'var(--lx-border)',
+                  }}
+                >
+                  <span className="font-medium lexel-mono">{domain}</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      aria-label={`Surface override for ${domain}`}
+                      value={surface}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        void onPatchSettings({
+                          surfaceOverrides: {
+                            [domain]: val === 'auto' ? null : val,
+                          } as unknown as Record<string, string>,
+                        });
+                      }}
+                      className="rounded-[4px] border px-2 py-0.5 text-[11px]"
+                      style={{
+                        backgroundColor: 'var(--lx-card)',
+                        borderColor: 'var(--lx-border)',
+                        color: 'var(--lx-fg)',
+                      }}
+                    >
+                      <option value="auto">Auto</option>
+                      {allSurfaces.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void onPatchSettings({
+                          domainStatuses: { [domain]: !enabled },
+                        })
+                      }
+                      className="rounded-[4px] border px-2 py-0.5 text-[11px] font-medium"
+                      style={{
+                        backgroundColor: enabled ? 'var(--lx-accent)' : 'var(--lx-muted)',
+                        borderColor: 'var(--lx-border)',
+                        color: enabled ? 'var(--lx-on-accent)' : 'var(--lx-fg)',
+                      }}
+                    >
+                      {enabled ? 'Enabled' : 'Paused'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void removeManagedSite(domain)}
+                      className="rounded-[4px] border px-2 py-0.5 text-[11px]"
+                      style={{
+                        backgroundColor: 'var(--lx-card)',
+                        borderColor: 'var(--lx-border)',
+                        color: 'var(--lx-fg-muted)',
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section
+        className="space-y-3 rounded-[8px] border p-3"
+        style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-[13px] font-semibold">Weirpack Studio ({weirpacks.length})</h2>
+            <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+              Build or import deterministic Harper `.weirpack` bundles. Packs run embedded tests and
+              sync to Browser Extension, CLI, and LSP.
+            </p>
+          </div>
+          <div>
+            <input
+              ref={weirUploadRef}
+              type="file"
+              accept=".weirpack,.zip"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                void handleUploadWeirpack(file);
+                e.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => weirUploadRef.current?.click()}
+              className="rounded-[6px] border px-2.5 py-1 text-[12px] font-medium"
+              style={{
+                backgroundColor: 'var(--lx-muted)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            >
+              Upload .weirpack
+            </button>
+          </div>
+        </div>
+
+        {weirNotice && (
+          <div
+            className="rounded-[6px] border px-2.5 py-1.5 text-[11px]"
+            style={{
+              backgroundColor: 'var(--lx-signal-bg)',
+              borderColor: 'var(--lx-signal)',
+              color: 'var(--lx-signal)',
+            }}
+          >
+            {weirNotice}
+          </div>
+        )}
+        {weirError && (
+          <div
+            className="rounded-[6px] border px-2.5 py-1.5 text-[11px]"
+            style={{
+              backgroundColor: 'var(--lx-danger-bg)',
+              borderColor: 'var(--lx-danger)',
+              color: 'var(--lx-danger)',
+            }}
+          >
+            {weirError}
+          </div>
+        )}
+
+        <form onSubmit={handleBuildWeirpack} className="grid gap-2 sm:grid-cols-2">
+          <input
+            type="text"
+            value={weirRuleName}
+            onChange={(e) => setWeirRuleName(e.target.value)}
+            placeholder="Rule name (PascalCase)"
+            aria-label="Weir rule name"
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px] lexel-mono"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          />
+          <input
+            type="text"
+            value={weirMessage}
+            onChange={(e) => setWeirMessage(e.target.value)}
+            placeholder="Diagnostic message"
+            aria-label="Weir diagnostic message"
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          />
+          <input
+            type="text"
+            value={weirExpr}
+            onChange={(e) => setWeirExpr(e.target.value)}
+            placeholder="Target word or phrase"
+            aria-label="Weir target phrase"
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          />
+          <input
+            type="text"
+            value={weirReplacement}
+            onChange={(e) => setWeirReplacement(e.target.value)}
+            placeholder="Preferred replacement"
+            aria-label="Weir replacement"
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          />
+          <input
+            type="text"
+            value={weirTestBad}
+            onChange={(e) => setWeirTestBad(e.target.value)}
+            placeholder="Unit test before sentence"
+            aria-label="Weir test before"
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          />
+          <input
+            type="text"
+            value={weirTestGood}
+            onChange={(e) => setWeirTestGood(e.target.value)}
+            placeholder="Unit test expected sentence"
+            aria-label="Weir test expected"
+            className="rounded-[6px] border px-2.5 py-1.5 text-[12px]"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          />
+          <div className="sm:col-span-2">
+            <button
+              type="submit"
+              className="rounded-[6px] px-3 py-1.5 text-[12px] font-semibold"
+              style={{
+                backgroundColor: 'var(--lx-accent)',
+                color: 'var(--lx-on-accent)',
+              }}
+            >
+              Build, Test &amp; Sync Weirpack
+            </button>
+          </div>
+        </form>
+
+        {weirpacks.length > 0 && (
+          <div className="space-y-1.5 pt-1">
+            {weirpacks.map((pack) => (
+              <div
+                key={pack.name}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border px-2.5 py-2 text-[12px]"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                }}
+              >
+                <div>
+                  <span className="font-medium lexel-mono">{pack.name}</span>
+                  <span className="ml-2 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                    {pack.ruleCount} rule(s)
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-1.5 text-[11px]">
+                    <input
+                      type="checkbox"
+                      checked={pack.enabled}
+                      onChange={(e) => void toggleWeirpack(pack.name, e.target.checked)}
+                    />
+                    Enabled
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => void removeWeirpack(pack.name)}
+                    className="rounded-[4px] border px-2 py-0.5 text-[11px]"
+                    style={{
+                      backgroundColor: 'var(--lx-card)',
+                      borderColor: 'var(--lx-border)',
+                      color: 'var(--lx-fg-muted)',
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );

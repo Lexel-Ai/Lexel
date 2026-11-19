@@ -5,10 +5,12 @@ use std::time::Instant;
 use lexel_core::{
     AiTaskId, GateCheckSummary, HarperDiagnostic, HarperEngine, HarperRuleInfo, LexelProfile,
     ReadabilityReport, RulePreset, SafeFixResult, SecretMatch, SlopHit, SlopScanner,
-    SurfaceCatalog, SurfaceViolation, UnifiedSettings, VoiceExample, analyze_readability,
-    apply_safe_deterministic_fixes, build_rewrite_messages_with_surfaces, normalize_typography,
-    preset_rule_overrides, sanitize_model_output, scan_secrets, structured_lint_config,
-    synonyms_for, to_sentence_case, to_title_case, verify_rewrite_with_surfaces,
+    StoredWeirpack, SurfaceCatalog, SurfaceViolation, UnifiedSettings, VoiceExample,
+    WeirpackValidationSummary, analyze_readability, apply_safe_deterministic_fixes,
+    build_custom_weirpack_bytes, build_rewrite_messages_with_surfaces, decode_weirpack_base64,
+    encode_weirpack_base64, normalize_typography, preset_rule_overrides, sanitize_model_output,
+    scan_secrets, structured_lint_config, synonyms_for, to_sentence_case, to_title_case,
+    validate_weirpack_bytes, verify_rewrite_with_surfaces,
 };
 use lexel_db::{DatabaseBackup, DbError, LexelDb};
 use serde::{Deserialize, Serialize};
@@ -131,6 +133,34 @@ pub struct FixAllSafeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ApplyPresetRequest {
     pub preset: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildWeirpackRequest {
+    pub rule_name: String,
+    pub expr: String,
+    pub replacement: String,
+    pub message: Option<String>,
+    pub test_bad: Option<String>,
+    pub test_good: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidateWeirpackRequest {
+    pub name: String,
+    pub bytes_base64: String,
+    #[serde(default)]
+    pub save: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeirpackMutationResponse {
+    pub weirpack: StoredWeirpack,
+    pub summary: WeirpackValidationSummary,
+    pub profile: LexelProfile,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -448,12 +478,13 @@ impl DaemonService {
 
     pub fn harper_rules(&self) -> Result<HarperRulesPayload, DaemonError> {
         let profile = self.active_profile()?;
-        let engine = HarperEngine::new(
+        let mut engine = HarperEngine::new(
             profile.settings.dialect,
             &profile.settings.lint_config,
             &profile.settings.user_dictionary,
             &profile.settings.ignored_lints,
         )?;
+        engine.load_stored_weirpacks(&profile.settings.weirpacks);
         Ok(HarperRulesPayload {
             rules: engine.rule_catalog(),
             lint_config: profile.settings.lint_config,
@@ -513,6 +544,7 @@ impl DaemonService {
             &profile.settings.user_dictionary,
             &profile.settings.ignored_lints,
         )?;
+        engine.load_stored_weirpacks(&profile.settings.weirpacks);
         let grammar = engine.apply_safe_harper_fixes(&deterministic.text, language);
 
         let mut categories = deterministic.categories;
@@ -548,6 +580,81 @@ impl DaemonService {
         synonyms_for(word)
     }
 
+    pub fn build_custom_weirpack(
+        &self,
+        req: BuildWeirpackRequest,
+    ) -> Result<WeirpackMutationResponse, DaemonError> {
+        let (name, bytes, summary) = build_custom_weirpack_bytes(
+            &req.rule_name,
+            &req.expr,
+            &req.replacement,
+            req.message.as_deref(),
+            req.test_bad.as_deref(),
+            req.test_good.as_deref(),
+        )
+        .map_err(|err| DaemonError::BadRequest(err.to_string()))?;
+
+        let stored = StoredWeirpack {
+            name: name.clone(),
+            bytes_base64: encode_weirpack_base64(&bytes),
+            rule_count: summary.rule_count,
+            enabled: true,
+        };
+
+        let mut settings = self.active_profile()?.settings;
+        settings.weirpacks.retain(|p| p.name != name);
+        settings.weirpacks.push(stored.clone());
+        let profile = self.update_settings(&settings)?;
+        Ok(WeirpackMutationResponse {
+            weirpack: stored,
+            summary,
+            profile,
+        })
+    }
+
+    pub fn validate_weirpack(
+        &self,
+        req: ValidateWeirpackRequest,
+    ) -> Result<WeirpackMutationResponse, DaemonError> {
+        let bytes = decode_weirpack_base64(&req.bytes_base64)
+            .map_err(|err| DaemonError::BadRequest(err.to_string()))?;
+        let summary = validate_weirpack_bytes(&bytes)
+            .map_err(|err| DaemonError::BadRequest(err.to_string()))?;
+        if !summary.failures.is_empty() {
+            return Err(DaemonError::BadRequest(format!(
+                "Weirpack failed embedded tests: {:?}",
+                summary.failures
+            )));
+        }
+
+        let name = if req.name.trim().is_empty() {
+            "custom.weirpack".to_owned()
+        } else {
+            req.name.trim().to_owned()
+        };
+        let stored = StoredWeirpack {
+            name: name.clone(),
+            bytes_base64: req.bytes_base64.trim().to_owned(),
+            rule_count: summary.rule_count,
+            enabled: true,
+        };
+
+        let profile = if req.save {
+            let mut settings = self.active_profile()?.settings;
+            settings.weirpacks.retain(|p| p.name != name);
+            settings.weirpacks.push(stored.clone());
+            self.update_settings(&settings)?
+        } else {
+            self.active_profile()?
+        };
+
+        Ok(WeirpackMutationResponse {
+            weirpack: stored,
+            summary,
+            profile,
+        })
+    }
+
     pub fn tier0_check(&self, req: Tier0CheckRequest) -> Result<Tier0CheckResponse, DaemonError> {
         let profile = self.active_profile()?;
         if let Some(domain) = req.domain.as_deref()
@@ -574,6 +681,7 @@ impl DaemonService {
             &profile.settings.user_dictionary,
             &profile.settings.ignored_lints,
         )?;
+        engine.load_stored_weirpacks(&profile.settings.weirpacks);
         let language = req
             .language
             .as_deref()
@@ -805,6 +913,19 @@ impl DaemonService {
                     serde_json::from_value(payload).map_err(DbError::from)?;
                 Ok(serde_json::to_value(self.apply_rule_preset(&req.preset)?)
                     .map_err(DbError::from)?)
+            }
+            "buildWeirpack" => {
+                let req: BuildWeirpackRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(
+                    serde_json::to_value(self.build_custom_weirpack(req)?)
+                        .map_err(DbError::from)?,
+                )
+            }
+            "validateWeirpack" => {
+                let req: ValidateWeirpackRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::to_value(self.validate_weirpack(req)?).map_err(DbError::from)?)
             }
             "synonyms" => {
                 let req: SynonymsRequest =

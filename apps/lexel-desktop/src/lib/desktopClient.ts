@@ -96,6 +96,7 @@ export function createDefaultSettings(): UnifiedDaemonSettings {
     customSlopTerms: [],
     disabledSlopTerms: [],
     customSurfaces: [],
+    weirpacks: [],
   };
 }
 
@@ -313,6 +314,50 @@ function handlePreviewRpc(kind: string, payload: Record<string, unknown>): unkno
       active.settings.lintConfig = applyRulePreset(active.settings.lintConfig, preset);
       savePreviewStore(store);
       return active;
+    }
+    case 'buildWeirpack': {
+      const rawName = String(payload.ruleName ?? 'CustomLexelRule').replace(/[^A-Za-z0-9_]/g, '');
+      const name = `${rawName || 'CustomLexelRule'}.weirpack`;
+      const stored = {
+        name,
+        bytesBase64: '',
+        ruleCount: 1,
+        enabled: true,
+      };
+      const existing = active.settings.weirpacks ?? [];
+      active.settings.weirpacks = [...existing.filter((p) => p.name !== name), stored];
+      active.updatedAt = Date.now();
+      savePreviewStore(store);
+      return {
+        weirpack: stored,
+        summary: {
+          ruleCount: 1,
+          ruleNames: [rawName || 'CustomLexelRule'],
+          hasDictionary: false,
+          failures: {},
+        },
+        profile: active,
+      };
+    }
+    case 'validateWeirpack': {
+      const name = String(payload.name ?? 'custom.weirpack').trim() || 'custom.weirpack';
+      const stored = {
+        name,
+        bytesBase64: String(payload.bytesBase64 ?? ''),
+        ruleCount: 1,
+        enabled: true,
+      };
+      if (payload.save) {
+        const existing = active.settings.weirpacks ?? [];
+        active.settings.weirpacks = [...existing.filter((p) => p.name !== name), stored];
+        active.updatedAt = Date.now();
+        savePreviewStore(store);
+      }
+      return {
+        weirpack: stored,
+        summary: { ruleCount: 1, ruleNames: [], hasDictionary: false, failures: {} },
+        profile: active,
+      };
     }
     case 'tier0Check': {
       const text = String(payload.text ?? '');

@@ -114,6 +114,48 @@ async fn zero_ai_tier0_routes_and_presets_work_end_to_end() {
         .expect("rpc curated preset");
     assert_eq!(rpc_preset["settings"]["lintConfig"], serde_json::json!({}));
 
+    let weir_res = client
+        .post(format!("{base}/v1/harper/weirpack/build"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "ruleName": "NoBuzzSynergy",
+            "expr": "synergy",
+            "replacement": "coordination",
+            "message": "Prefer coordination.",
+            "testBad": "Team synergy wins.",
+            "testGood": "Team coordination wins."
+        }))
+        .send()
+        .await
+        .expect("build weirpack");
+    assert_eq!(weir_res.status(), StatusCode::OK);
+    let weir_json: serde_json::Value = weir_res.json().await.expect("weir json");
+    assert_eq!(weir_json["weirpack"]["name"], "NoBuzzSynergy.weirpack");
+    assert_eq!(
+        weir_json["profile"]["settings"]["weirpacks"]
+            .as_array()
+            .map(|a| a.len()),
+        Some(1)
+    );
+
+    let tier0_with_weir = client
+        .post(format!("{base}/v1/tier0/check"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "text": "Our synergy helps.",
+            "surfaceId": "general"
+        }))
+        .send()
+        .await
+        .expect("tier0 check with synced weirpack");
+    assert_eq!(tier0_with_weir.status(), StatusCode::OK);
+    let check_json: serde_json::Value = tier0_with_weir.json().await.expect("check json");
+    let harper_hits = check_json["harper"].as_array().expect("harper array");
+    assert!(
+        harper_hits.iter().any(|h| h["rule"] == "NoBuzzSynergy"),
+        "expected synced weirpack rule to fire: {harper_hits:?}"
+    );
+
     server.abort();
     let _ = std::fs::remove_dir_all(&tmp);
 }

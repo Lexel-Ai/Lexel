@@ -310,7 +310,7 @@ export function PopupApp() {
               style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
             >
               <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                Synced Account
+                Managed by Desktop
               </span>
               {aiHealth.profiles && aiHealth.profiles.length > 1 ? (
                 <select

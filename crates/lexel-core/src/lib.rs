@@ -12,14 +12,14 @@ use thiserror::Error;
 pub use harper::{
     HarperDiagnostic, HarperEngine, HarperRuleInfo, ReadabilityReport, RulePreset,
     WeirpackValidationSummary, analyze_readability, build_antislop_weirpack,
-    build_antislop_weirpack_bytes, detect_language_from_path, normalize_typography,
-    preset_rule_overrides, structured_lint_config, synonyms_for, to_sentence_case, to_title_case,
-    validate_weirpack_bytes,
+    build_antislop_weirpack_bytes, build_custom_weirpack_bytes, decode_weirpack_base64,
+    detect_language_from_path, encode_weirpack_base64, normalize_typography, preset_rule_overrides,
+    structured_lint_config, synonyms_for, to_sentence_case, to_title_case, validate_weirpack_bytes,
 };
 pub use models::{ModelManifest, ModelSpec, default_model_manifest};
 pub use profile::{
-    ActivationKey, AiTaskId, Hotkey, LexelProfile, MainModelTier, RuntimeKind, UnifiedSettings,
-    VoiceExample,
+    ActivationKey, AiTaskId, Hotkey, LexelProfile, MainModelTier, RuntimeKind, StoredWeirpack,
+    UnifiedSettings, VoiceExample,
 };
 pub use prompt::{
     ChatMessage, build_rewrite_messages, build_rewrite_messages_with_surfaces,

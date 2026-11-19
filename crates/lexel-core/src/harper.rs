@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use harper_asciidoc::AsciidocParser;
 use harper_comments::CommentParser;
 use harper_core::linting::{
@@ -18,7 +20,7 @@ use harper_tex::TeX;
 use harper_typst::Typst;
 use serde::{Deserialize, Serialize};
 
-use crate::{CoreError, SafeFixResult};
+use crate::{CoreError, SafeFixResult, StoredWeirpack};
 
 /// Curated Harper rule presets that tune deterministic checks without loading any LLM.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -286,6 +288,18 @@ impl HarperEngine {
             .map_err(|err| CoreError::InvalidLintConfig(err.to_string()))?;
         self.group.merge_from(pack_group);
         Ok(summary)
+    }
+
+    /// Merge all enabled user-synced `.weirpack` archives into this engine, skipping invalid entries.
+    pub fn load_stored_weirpacks(&mut self, packs: &[StoredWeirpack]) {
+        for pack in packs {
+            if !pack.enabled || pack.bytes_base64.trim().is_empty() {
+                continue;
+            }
+            if let Ok(bytes) = decode_weirpack_base64(&pack.bytes_base64) {
+                let _ = self.add_weirpack_bytes(&bytes);
+            }
+        }
     }
 
     /// Return every Harper curated rule with its effective state, default state, and description.
@@ -1006,4 +1020,94 @@ pub fn build_antislop_weirpack_bytes() -> Result<Vec<u8>, CoreError> {
     build_antislop_weirpack()?
         .to_bytes()
         .map_err(|err| CoreError::InvalidLintConfig(err.to_string()))
+}
+
+/// Encode `.weirpack` ZIP bytes as standard base64 for cross-surface sync.
+pub fn encode_weirpack_base64(bytes: &[u8]) -> String {
+    BASE64_STANDARD.encode(bytes)
+}
+
+/// Decode base64-encoded `.weirpack` bytes.
+pub fn decode_weirpack_base64(encoded: &str) -> Result<Vec<u8>, CoreError> {
+    BASE64_STANDARD
+        .decode(encoded.trim())
+        .map_err(|err| CoreError::InvalidLintConfig(format!("invalid base64 weirpack: {err}")))
+}
+
+/// Build and test-verify a single-rule custom `.weirpack` archive from Desktop or CLI inputs.
+pub fn build_custom_weirpack_bytes(
+    rule_name: &str,
+    expr: &str,
+    replacement: &str,
+    message: Option<&str>,
+    test_bad: Option<&str>,
+    test_good: Option<&str>,
+) -> Result<(String, Vec<u8>, WeirpackValidationSummary), CoreError> {
+    let clean_name: String = rule_name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    let clean_name = if clean_name.is_empty() {
+        "CustomLexelRule".to_owned()
+    } else {
+        clean_name
+    };
+
+    let raw_expr = expr.trim();
+    let raw_replacement = replacement.trim();
+    if raw_expr.is_empty() || raw_replacement.is_empty() {
+        return Err(CoreError::InvalidLintConfig(
+            "Both a target phrase and a replacement are required.".to_owned(),
+        ));
+    }
+
+    let expr_clause = if raw_expr.contains(' ') && !raw_expr.starts_with('(') {
+        format!("({raw_expr})")
+    } else {
+        raw_expr.to_owned()
+    };
+    let esc = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
+    let msg = message
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Prefer {raw_replacement}."));
+
+    let mut lines = vec![
+        format!("expr main {expr_clause}"),
+        format!("let message \"{}\"", esc(&msg)),
+        "let description \"Custom Lexel Weir rule\"".to_owned(),
+        "let kind \"Style\"".to_owned(),
+        format!("let becomes \"{}\"", esc(raw_replacement)),
+        "let strategy \"MatchCase\"".to_owned(),
+    ];
+
+    if let (Some(bad), Some(good)) = (test_bad, test_good) {
+        let bad = bad.trim();
+        let good = good.trim();
+        if !bad.is_empty() && !good.is_empty() {
+            lines.push(format!("test \"{}\" \"{}\"", esc(bad), esc(good)));
+        }
+    }
+
+    let mut manifest = WeirpackManifest::new();
+    manifest.set_author("Lexel User");
+    manifest.set_version("0.1.0");
+    manifest.set_description(format!("Custom rule for {raw_expr}"));
+    manifest.set_license("Apache-2.0");
+
+    let mut pack = Weirpack::new(manifest);
+    pack.add_rule(&clean_name, lines.join("\n"));
+
+    let summary = summarize_weirpack(&pack)?;
+    if !summary.failures.is_empty() {
+        return Err(CoreError::InvalidLintConfig(format!(
+            "Weirpack test failed ({:?})",
+            summary.failures
+        )));
+    }
+    let bytes = pack
+        .to_bytes()
+        .map_err(|err| CoreError::InvalidLintConfig(err.to_string()))?;
+    Ok((format!("{clean_name}.weirpack"), bytes, summary))
 }

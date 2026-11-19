@@ -193,6 +193,7 @@ export async function applyUnifiedSettingsToStorage(
     [KEYS.customSlopTerms]: settings.customSlopTerms ?? [],
     [KEYS.disabledSlopTerms]: settings.disabledSlopTerms ?? [],
     [KEYS.customSurfaces]: settings.customSurfaces ?? [],
+    [KEYS.weirpacks]: settings.weirpacks ?? [],
   };
 
   if (settings.hotkey) {
