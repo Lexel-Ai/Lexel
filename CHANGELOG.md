@@ -4,10 +4,10 @@ All notable changes to Lexel are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-11-20
 
 ### Added
-- **Tier 0 Deterministic Engine (`lexel-core`, `lexel-ui`, `lexel-cli`):**
+- **Instant Local Writing Engine (`lexel-core`, `lexel-ui`, `lexel-cli`):**
   - Wraps upstream Harper grammar, spelling, multi-language code comment parsers, readability metrics, offline thesaurus (`harper-thesaurus`), Chicago Title Case, Sentence Case, and typography normalization.
   - Aho-Corasick anti-slop scanner, em-dash ban, custom slop overrides, and verified `.weirpack` archive (`rules/lexel-antislop.weirpack`).
   - Deterministic Secrets Guard blocking API keys, JWTs, private keys, SSNs, and Luhn-valid payment cards.

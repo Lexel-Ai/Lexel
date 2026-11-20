@@ -120,7 +120,7 @@ export function OptionsApp() {
 
   const statusLabel = connected
     ? `Connected to Lexel Desktop (${aiHealth?.activeProfile?.name ?? 'Default'})`
-    : 'Standalone Tier 0 Mode (Desktop App Not Connected)';
+    : 'Standalone Mode (Desktop App Not Connected)';
 
   return (
     <div data-theme={theme} className="lexel-root min-h-screen">
@@ -236,7 +236,7 @@ export function OptionsApp() {
                 className="rounded-[6px] border p-3 text-xs"
                 style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
               >
-                <div style={{ color: 'var(--lx-fg-muted)' }}>Local AI Engine (Tier 1)</div>
+                <div style={{ color: 'var(--lx-fg-muted)' }}>Local AI Engine</div>
                 <div className="mt-1 font-semibold lexel-mono">
                   {!aiSettings?.enabled
                     ? 'Disabled in Desktop (0 MB RAM)'
@@ -284,7 +284,7 @@ export function OptionsApp() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-sm font-semibold m-0">
-                  Tier 0 Grammar &amp; Anti-Slop Check Is Active
+                  Grammar &amp; Anti-Slop Check Is Active
                 </h2>
                 <p className="text-xs m-0 mt-1" style={{ color: 'var(--lx-fg-muted)' }}>
                   Harper grammar, spelling, anti-slop, platform rules, and Secrets Guard work right

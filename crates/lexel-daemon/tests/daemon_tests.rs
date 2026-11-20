@@ -297,6 +297,19 @@ async fn downloads_verifies_sha256_and_forwards_runtime_rpc_to_running_daemon() 
     assert!(err.contains("SHA-256 verification failed"));
     assert!(!models_dir.join("bad.gguf").exists());
 
+    // A stale .part file from an older interrupted download is discarded and re-downloaded cleanly.
+    let stale_spec = ModelSpec {
+        gguf_filename: "recovered-0.5b.gguf".to_owned(),
+        ..valid_spec.clone()
+    };
+    std::fs::write(models_dir.join("recovered-0.5b.gguf.part"), b"stale-bytes").unwrap();
+    let recovered = download_model_spec(&models_dir, &stale_spec)
+        .await
+        .expect("stale part should recover cleanly");
+    assert!(recovered.verified);
+    assert_eq!(recovered.sha256, expected_sha);
+    assert!(!models_dir.join("recovered-0.5b.gguf.part").exists());
+
     // Loopback forwarding reaches live daemon when up, fires state-change notifications on writes,
     // and returns None when down.
     let token = ensure_token(&token_path).expect("token");

@@ -322,7 +322,7 @@ export function RulesPane({
       <header>
         <h1 className="text-[18px] font-semibold">Grammar, Anti-Slop, Extension &amp; Privacy</h1>
         <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-          Every deterministic Tier 0 rule and browser extension preference lives in lexel.db and
+          Every grammar rule, anti-slop list, and browser extension preference lives in lexel.db and
           syncs automatically.
         </p>
       </header>

@@ -2,20 +2,20 @@
 
 This document summarizes how Lexel's Rust crates, Tauri Desktop app, browser extension, and shared SQLite database fit together.
 
-## 1. Three-Tier Execution Pipeline
+## 1. Local Writing Pipeline
 
 ```mermaid
 flowchart TD
-    A["User Draft (Browser / Desktop / CLI)"] --> B["Tier 0: Deterministic Engine (< 5 ms, 0 MB AI RAM)"]
+    A["User Draft (Browser / Desktop / CLI / IDE)"] --> B["Instant Local Checks (< 5 ms, 0 MB AI RAM)"]
     B --> B1["Harper Grammar & Spelling (Rust / WASM)"]
     B --> B2["Aho-Corasick Anti-Slop + Em-Dash Scanner"]
-    B --> B3["Surface Validator + Secrets Guard"]
+    B --> B3["Surface Validator + Secrets Guard + Quality Checks"]
     B --> C{"Explicit AI Rewrite Trigger?"}
     C -- No --> D["Display Underlines & Instant Safe Fixes"]
-    C -- Yes --> E["Tier 1: Local AI Runtime (Lazy-Loaded)"]
+    C -- Yes --> E["On-Demand Local AI Runtime (Lazy-Loaded)"]
     E --> E1["lexel-daemon (llama-server / Ollama / OpenAI-Compat on 127.0.0.1)"]
     E1 --> E2["Surface Directive + SQLite FTS5 Voice Memory"]
-    E2 --> F["Tier 2: Post-AI Deterministic Gatekeeper"]
+    E2 --> F["Post-Rewrite Verification Gate"]
     F --> F1["Zero-Slop + Zero Em-Dash + Number/Code Grounding + Surface Limits + Harper Check"]
     F1 --> G["Diff Card with Gate Badges"]
 ```

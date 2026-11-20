@@ -171,7 +171,7 @@ export function PopupApp() {
           : 'loading';
 
   const aiLabel = !connected
-    ? 'Tier 0 Only'
+    ? 'Grammar Only'
     : !aiSettings?.enabled
       ? 'AI Off'
       : aiHealth?.ok && aiHealth.modelAvailable !== false
@@ -315,7 +315,7 @@ export function PopupApp() {
             ) : (
               <>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold">Tier 0 Grammar Check Active</span>
+                  <span className="text-xs font-semibold">Grammar &amp; Anti-Slop Active</span>
                   <button
                     type="button"
                     disabled={syncing}

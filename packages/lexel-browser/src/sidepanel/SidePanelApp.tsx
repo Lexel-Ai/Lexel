@@ -213,7 +213,7 @@ export function SidePanelApp() {
         : 'error';
 
   const aiLabel = !connected
-    ? 'Tier 0 Only'
+    ? 'Grammar Only'
     : !aiSettings?.enabled
       ? 'AI Off'
       : aiHealth?.ok && aiHealth.modelAvailable !== false
@@ -261,7 +261,7 @@ export function SidePanelApp() {
           }}
         >
           <div className="leading-snug">
-            <strong style={{ color: 'var(--lx-fg)' }}>Tier 0 Grammar &amp; Anti-Slop Ready.</strong>{' '}
+            <strong style={{ color: 'var(--lx-fg)' }}>Grammar &amp; Anti-Slop Ready.</strong>{' '}
             Download and connect <strong>Lexel Desktop</strong> to configure settings and run the
             local AI model.
           </div>
@@ -489,7 +489,7 @@ export function SidePanelApp() {
             className="font-semibold"
             style={{ color: tier0.secretLints.length > 0 ? 'var(--lx-danger)' : 'var(--lx-warn)' }}
           >
-            Tier 0 Checks (
+            Writing Checks (
             {tier0.secretLints.length + tier0.slopLints.length + tier0.surfaceLints.length})
           </div>
           {[...tier0.secretLints, ...tier0.slopLints, ...tier0.surfaceLints].map((lint) => (

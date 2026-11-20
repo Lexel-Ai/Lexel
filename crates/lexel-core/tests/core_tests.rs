@@ -22,6 +22,25 @@ fn manifest_contains_both_required_models() {
         manifest.find("lexel-1.5b").unwrap().ollama_tag,
         "qwen2.5:1.5b"
     );
+    for spec in &manifest.models {
+        assert!(
+            spec.gguf_url.starts_with("https://"),
+            "model URL must use HTTPS: {}",
+            spec.gguf_url
+        );
+        assert!(spec.size_bytes > 0, "model size must be positive");
+        assert_eq!(
+            spec.sha256.len(),
+            64,
+            "SHA-256 must be 64 hex chars for {}",
+            spec.id
+        );
+        assert!(
+            spec.sha256.chars().all(|c| c.is_ascii_hexdigit()),
+            "SHA-256 must be hex for {}",
+            spec.id
+        );
+    }
 }
 
 #[test]

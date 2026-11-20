@@ -103,7 +103,7 @@ elif [[ "${NON_INTERACTIVE}" -eq 1 || ! -t 0 ]]; then
   MAIN_MODEL="lexel-1.5b"
 else
   echo "Choose your main local AI model (both 0.5B and 1.5B will be installed):"
-  echo "  1) Lexel 1.5B (Standard - ~1.04 GB, best rewrite quality)"
+  echo "  1) Lexel 1.5B (Standard - ~940 MB, fine-tuned rewrite quality)"
   echo "  2) Lexel 0.5B (Lite     - ~469 MB, fastest on 4-8 GB laptops)"
   read -r -p "Main model [1]: " choice
   case "${choice}" in

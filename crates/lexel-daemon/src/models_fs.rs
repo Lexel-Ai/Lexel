@@ -199,149 +199,169 @@ where
     }
 
     let part_path = models_dir.join(format!("{}.part", spec.gguf_filename));
-    let existing_part_len = fs::metadata(&part_path)
-        .ok()
-        .filter(|m| m.is_file())
-        .map(|m| m.len())
-        .unwrap_or(0);
-    let resume_from =
-        if existing_part_len > 0 && (spec.size_bytes == 0 || existing_part_len < spec.size_bytes) {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("Lexel-Desktop/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(3600))
+        .build()
+        .map_err(|e| format!("failed to construct HTTP client: {e}"))?;
+
+    // Try resuming an existing .part file once; if stale bytes cause a size or SHA mismatch,
+    // discard the stale .part file and restart cleanly from byte 0.
+    for attempt in 0..2 {
+        let existing_part_len = if attempt == 0 {
+            fs::metadata(&part_path)
+                .ok()
+                .filter(|m| m.is_file())
+                .map(|m| m.len())
+                .unwrap_or(0)
+        } else {
+            let _ = fs::remove_file(&part_path);
+            0
+        };
+        let resume_from = if existing_part_len > 0
+            && (spec.size_bytes == 0 || existing_part_len < spec.size_bytes)
+        {
             existing_part_len
         } else {
             0
         };
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3600))
-        .build()
-        .map_err(|e| format!("failed to construct HTTP client: {e}"))?;
+        let mut req = client.get(&spec.gguf_url);
+        if resume_from > 0 {
+            req = req.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
+        }
 
-    let mut req = client.get(&spec.gguf_url);
-    if resume_from > 0 {
-        req = req.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
-    }
-
-    let mut response = req
-        .send()
-        .await
-        .map_err(|e| format!("model download failed: {e}"))?;
-
-    // If a stale or oversized .part triggers 416 Range Not Satisfiable, discard it and restart cleanly.
-    if resume_from > 0 && response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-        let _ = fs::remove_file(&part_path);
-        response = client
-            .get(&spec.gguf_url)
+        let mut response = req
             .send()
             .await
             .map_err(|e| format!("model download failed: {e}"))?;
-    }
 
-    let resumed = resume_from > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-    if !resumed && !response.status().is_success() {
-        return Err(format!(
-            "model download returned HTTP {}",
-            response.status()
-        ));
-    }
-
-    let expected_total = if spec.size_bytes > 0 {
-        spec.size_bytes
-    } else {
-        response
-            .content_length()
-            .map(|len| if resumed { resume_from + len } else { len })
-            .unwrap_or(0)
-    };
-
-    let mut hasher = Sha256::new();
-    let mut total_bytes: u64 = 0;
-
-    let mut file = if resumed {
-        hash_existing_file(&part_path, &mut hasher)
-            .map_err(|e| format!("failed to hash partial model file: {e}"))?;
-        total_bytes = resume_from;
-        OpenOptions::new()
-            .append(true)
-            .open(&part_path)
-            .map_err(|e| format!("failed to open partial model file for resume: {e}"))?
-    } else {
-        File::create(&part_path).map_err(|e| format!("failed to create temp model file: {e}"))?
-    };
-
-    let initial_pct = compute_percent(total_bytes, expected_total);
-    on_progress(DownloadProgress {
-        model_id: spec.id.clone(),
-        bytes_downloaded: total_bytes,
-        total_bytes: expected_total,
-        percent: initial_pct,
-    });
-    let mut last_reported_percent = Some(initial_pct);
-
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| format!("stream error downloading model: {e}"))?
-    {
-        if let Err(e) = file.write_all(&chunk) {
-            return Err(format!("failed to write model chunk: {e}"));
+        // If a stale or oversized .part triggers 416 Range Not Satisfiable, discard it and restart cleanly.
+        if resume_from > 0 && response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+            let _ = fs::remove_file(&part_path);
+            response = client
+                .get(&spec.gguf_url)
+                .send()
+                .await
+                .map_err(|e| format!("model download failed: {e}"))?;
         }
-        hasher.update(&chunk);
-        total_bytes += chunk.len() as u64;
 
-        let pct = compute_percent(total_bytes, expected_total);
-        if last_reported_percent != Some(pct) {
-            last_reported_percent = Some(pct);
-            on_progress(DownloadProgress {
-                model_id: spec.id.clone(),
-                bytes_downloaded: total_bytes,
-                total_bytes: expected_total.max(total_bytes),
-                percent: pct,
-            });
+        let resumed = resume_from > 0 && response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+        if !resumed && !response.status().is_success() {
+            return Err(format!(
+                "model download returned HTTP {}",
+                response.status()
+            ));
         }
+
+        let expected_total = if spec.size_bytes > 0 {
+            spec.size_bytes
+        } else {
+            response
+                .content_length()
+                .map(|len| if resumed { resume_from + len } else { len })
+                .unwrap_or(0)
+        };
+
+        let mut hasher = Sha256::new();
+        let mut total_bytes: u64 = 0;
+
+        let mut file = if resumed {
+            hash_existing_file(&part_path, &mut hasher)
+                .map_err(|e| format!("failed to hash partial model file: {e}"))?;
+            total_bytes = resume_from;
+            OpenOptions::new()
+                .append(true)
+                .open(&part_path)
+                .map_err(|e| format!("failed to open partial model file for resume: {e}"))?
+        } else {
+            File::create(&part_path)
+                .map_err(|e| format!("failed to create temp model file: {e}"))?
+        };
+
+        let initial_pct = compute_percent(total_bytes, expected_total);
+        on_progress(DownloadProgress {
+            model_id: spec.id.clone(),
+            bytes_downloaded: total_bytes,
+            total_bytes: expected_total,
+            percent: initial_pct,
+        });
+        let mut last_reported_percent = Some(initial_pct);
+
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| format!("stream error downloading model: {e}"))?
+        {
+            if let Err(e) = file.write_all(&chunk) {
+                return Err(format!("failed to write model chunk: {e}"));
+            }
+            hasher.update(&chunk);
+            total_bytes += chunk.len() as u64;
+
+            let pct = compute_percent(total_bytes, expected_total);
+            if last_reported_percent != Some(pct) {
+                last_reported_percent = Some(pct);
+                on_progress(DownloadProgress {
+                    model_id: spec.id.clone(),
+                    bytes_downloaded: total_bytes,
+                    total_bytes: expected_total.max(total_bytes),
+                    percent: pct,
+                });
+            }
+        }
+
+        if let Err(e) = file.flush() {
+            return Err(format!("failed to flush model file: {e}"));
+        }
+        drop(file);
+
+        if spec.size_bytes > 0 && total_bytes != spec.size_bytes {
+            let _ = fs::remove_file(&part_path);
+            if resumed && attempt == 0 {
+                continue;
+            }
+            return Err(format!(
+                "downloaded size mismatch for {}: expected {} bytes, got {} bytes",
+                spec.id, spec.size_bytes, total_bytes
+            ));
+        }
+
+        let actual_sha = encode_hex(&hasher.finalize());
+        if !spec.sha256.is_empty() && !actual_sha.eq_ignore_ascii_case(&spec.sha256) {
+            let _ = fs::remove_file(&part_path);
+            if resumed && attempt == 0 {
+                continue;
+            }
+            return Err(format!(
+                "SHA-256 verification failed for {}: expected {}, got {}",
+                spec.id, spec.sha256, actual_sha
+            ));
+        }
+
+        fs::rename(&part_path, &dest).map_err(|e| {
+            let _ = fs::remove_file(&part_path);
+            format!("failed to move verified model into place: {e}")
+        })?;
+
+        on_progress(DownloadProgress {
+            model_id: spec.id.clone(),
+            bytes_downloaded: total_bytes,
+            total_bytes: expected_total.max(total_bytes),
+            percent: 100,
+        });
+
+        return Ok(DownloadModelReport {
+            id: spec.id.clone(),
+            gguf_path: dest.display().to_string(),
+            bytes_downloaded: total_bytes,
+            sha256: actual_sha,
+            verified: true,
+            already_present: false,
+        });
     }
 
-    if let Err(e) = file.flush() {
-        return Err(format!("failed to flush model file: {e}"));
-    }
-    drop(file);
-
-    if spec.size_bytes > 0 && total_bytes != spec.size_bytes {
-        let _ = fs::remove_file(&part_path);
-        return Err(format!(
-            "downloaded size mismatch for {}: expected {} bytes, got {} bytes",
-            spec.id, spec.size_bytes, total_bytes
-        ));
-    }
-
-    let actual_sha = encode_hex(&hasher.finalize());
-    if !spec.sha256.is_empty() && !actual_sha.eq_ignore_ascii_case(&spec.sha256) {
-        let _ = fs::remove_file(&part_path);
-        return Err(format!(
-            "SHA-256 verification failed for {}: expected {}, got {}",
-            spec.id, spec.sha256, actual_sha
-        ));
-    }
-
-    fs::rename(&part_path, &dest).map_err(|e| {
-        let _ = fs::remove_file(&part_path);
-        format!("failed to move verified model into place: {e}")
-    })?;
-
-    on_progress(DownloadProgress {
-        model_id: spec.id.clone(),
-        bytes_downloaded: total_bytes,
-        total_bytes: expected_total.max(total_bytes),
-        percent: 100,
-    });
-
-    Ok(DownloadModelReport {
-        id: spec.id.clone(),
-        gguf_path: dest.display().to_string(),
-        bytes_downloaded: total_bytes,
-        sha256: actual_sha,
-        verified: true,
-        already_present: false,
-    })
+    Err(format!("model download failed for {}", spec.id))
 }
 
 fn compute_percent(downloaded: u64, total: u64) -> u8 {

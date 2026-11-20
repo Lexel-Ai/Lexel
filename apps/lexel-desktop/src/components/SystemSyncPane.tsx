@@ -372,7 +372,7 @@ export function SystemSyncPane({
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-[14px] font-semibold">Local AI Engine (Tier 1)</h2>
+            <h2 className="text-[14px] font-semibold">Local AI Engine</h2>
             <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
               Backend: <span className="lexel-mono">{status.runtime.activeBackend}</span>
               {status.runtime.loadedModel ? ` (${status.runtime.loadedModel} loaded)` : ' (idle)'}

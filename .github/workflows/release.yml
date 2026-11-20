@@ -14,8 +14,8 @@ permissions:
   contents: write
 
 jobs:
-  build-extension:
-    name: Build Chrome & Firefox Extensions
+  build-extensions-and-plugins:
+    name: Build Browser, VS Code & Obsidian Extensions
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,13 +47,26 @@ jobs:
           pnpm --filter lexel-ui build
           pnpm --filter lexel-browser zip:chrome
           pnpm --filter lexel-browser zip:firefox
+          pnpm --filter lexel-vscode build
+          pnpm --filter lexel-obsidian build
           mkdir -p release-artifacts
           cp packages/lexel-browser/lexel-chrome.zip release-artifacts/
           cp packages/lexel-browser/lexel-firefox.zip release-artifacts/
+          (
+            cd packages/lexel-obsidian
+            cp manifest.json dist/manifest.json
+            cd dist
+            zip -qr "${GITHUB_WORKSPACE}/release-artifacts/lexel-obsidian-plugin.zip" manifest.json main.js
+          )
+          (
+            cd packages/lexel-vscode
+            zip -qr "${GITHUB_WORKSPACE}/release-artifacts/lexel-vscode.zip" package.json dist
+          )
+          ls -lh release-artifacts
 
       - uses: actions/upload-artifact@v4
         with:
-          name: browser-extensions
+          name: extensions-and-plugins
           path: release-artifacts/*.zip
 
   build-desktop-and-cli:
@@ -78,7 +91,15 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libgtk-3-dev \
+            libssl-dev \
+            libxdo-dev \
+            patchelf \
+            rpm
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -98,27 +119,52 @@ jobs:
         run: cargo build --release -p lexel-cli -p lexel-daemon -p lexel-ls
 
       - name: Build Tauri Desktop bundles
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          NO_STRIP: "true"
         run: pnpm run tauri:build
 
       - name: Collect platform artifacts
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p release-artifacts
           if [ "${RUNNER_OS}" = "Windows" ]; then
             cp target/release/lexel.exe "release-artifacts/lexel-cli-${{ matrix.target }}.exe"
             cp target/release/lexel-daemon.exe "release-artifacts/lexel-daemon-${{ matrix.target }}.exe"
             cp target/release/lexel-ls.exe "release-artifacts/lexel-ls-${{ matrix.target }}.exe"
             find apps/lexel-desktop/src-tauri/target/release/bundle -type f \( -name "*.msi" -o -name "*.exe" \) -exec cp {} release-artifacts/ \;
+            first_exe="$(find apps/lexel-desktop/src-tauri/target/release/bundle -type f -name "*-setup.exe" | head -n 1 || true)"
+            if [ -n "${first_exe}" ]; then
+              cp "${first_exe}" "release-artifacts/lexel-desktop-${{ matrix.target }}-setup.exe"
+            fi
+            first_msi="$(find apps/lexel-desktop/src-tauri/target/release/bundle -type f -name "*.msi" | head -n 1 || true)"
+            if [ -n "${first_msi}" ]; then
+              cp "${first_msi}" "release-artifacts/lexel-desktop-${{ matrix.target }}.msi"
+            fi
           elif [ "${RUNNER_OS}" = "macOS" ]; then
             cp target/release/lexel "release-artifacts/lexel-cli-${{ matrix.target }}"
             cp target/release/lexel-daemon "release-artifacts/lexel-daemon-${{ matrix.target }}"
             cp target/release/lexel-ls "release-artifacts/lexel-ls-${{ matrix.target }}"
             find apps/lexel-desktop/src-tauri/target/release/bundle -type f -name "*.dmg" -exec cp {} release-artifacts/ \;
+            first_dmg="$(find apps/lexel-desktop/src-tauri/target/release/bundle -type f -name "*.dmg" | head -n 1 || true)"
+            if [ -n "${first_dmg}" ]; then
+              cp "${first_dmg}" "release-artifacts/lexel-desktop-${{ matrix.target }}.dmg"
+            fi
           else
             cp target/release/lexel "release-artifacts/lexel-cli-${{ matrix.target }}"
             cp target/release/lexel-daemon "release-artifacts/lexel-daemon-${{ matrix.target }}"
             cp target/release/lexel-ls "release-artifacts/lexel-ls-${{ matrix.target }}"
+            cp apps/lexel-desktop/src-tauri/target/release/lexel-desktop "release-artifacts/lexel-desktop-${{ matrix.target }}"
             find apps/lexel-desktop/src-tauri/target/release/bundle -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.rpm" \) -exec cp {} release-artifacts/ \;
+            first_appimage="$(find apps/lexel-desktop/src-tauri/target/release/bundle -type f -name "*.AppImage" | head -n 1 || true)"
+            if [ -n "${first_appimage}" ]; then
+              cp "${first_appimage}" "release-artifacts/lexel-desktop-${{ matrix.target }}.AppImage"
+            fi
+            first_deb="$(find apps/lexel-desktop/src-tauri/target/release/bundle -type f -name "*.deb" | head -n 1 || true)"
+            if [ -n "${first_deb}" ]; then
+              cp "${first_deb}" "release-artifacts/lexel-desktop-${{ matrix.target }}.deb"
+            fi
           fi
           ls -lh release-artifacts
 
@@ -129,7 +175,7 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    needs: [build-extension, build-desktop-and-cli]
+    needs: [build-extensions-and-plugins, build-desktop-and-cli]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -147,5 +193,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
+          name: Lexel ${{ inputs.tag || github.ref_name }}
+          make_latest: true
           generate_release_notes: true
           files: all-artifacts/*

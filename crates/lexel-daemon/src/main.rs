@@ -47,6 +47,8 @@ enum Commands {
     },
     /// Set the active profile's main AI model (0.5b, 1.5b, or custom).
     SetMainModel { model: String },
+    /// Download and SHA-256 verify a manifest GGUF model (lexel-1.5b or lexel-0.5b).
+    DownloadModel { model: String },
     /// Print (or create) the local Bearer token used to pair CLI tools or local HTTP clients.
     Token,
     /// Print daemon, model, and active profile status as JSON.
@@ -147,6 +149,24 @@ async fn main() -> anyhow::Result<()> {
         Commands::SetMainModel { model } => {
             let profile = service.set_main_model_persisted(&model)?;
             println!("{}", serde_json::to_string_pretty(&profile)?);
+        }
+        Commands::DownloadModel { model } => {
+            let mut last_pct: Option<u8> = None;
+            let report = service
+                .download_model_with_progress(&model, |progress| {
+                    if last_pct != Some(progress.percent) && progress.percent % 10 == 0 {
+                        last_pct = Some(progress.percent);
+                        eprintln!(
+                            "[download] {}: {}% ({} / {} MB)",
+                            progress.model_id,
+                            progress.percent,
+                            progress.bytes_downloaded / (1024 * 1024),
+                            progress.total_bytes / (1024 * 1024),
+                        );
+                    }
+                })
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Commands::Token => {
             let token = service.token()?;

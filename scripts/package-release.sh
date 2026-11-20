@@ -22,6 +22,7 @@ Builds downloadable local release artifacts into dist-release/ with SHA256SUMS.t
   - lexel-chrome.zip (Chrome / Brave / Edge / Chromium MV3 package)
   - lexel-firefox.zip (Firefox 128+ MV3 package)
   - lexel-obsidian-plugin.zip (Obsidian plugin bundle)
+  - lexel-vscode.zip (VS Code / Cursor / Windsurf extension bundle)
   - Optional: Tauri Desktop bundles (.deb, .AppImage, .dmg, .msi, .exe) when --with-desktop is passed
 EOF
       exit 0
@@ -51,6 +52,10 @@ mv "${ROOT_DIR}/packages/lexel-browser/lexel-firefox.zip" "${OUT_DIR}/lexel-fire
   cp manifest.json dist/manifest.json
   cd dist
   zip -qr "${OUT_DIR}/lexel-obsidian-plugin.zip" manifest.json main.js
+)
+(
+  cd "${ROOT_DIR}/packages/lexel-vscode"
+  zip -qr "${OUT_DIR}/lexel-vscode.zip" package.json dist
 )
 
 if [[ "${WITH_DESKTOP}" -eq 1 ]]; then

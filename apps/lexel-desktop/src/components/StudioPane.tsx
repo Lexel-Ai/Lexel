@@ -479,7 +479,7 @@ export function StudioPane({ settings, incomingDraft, onRefreshStatus }: StudioP
               color: 'var(--lx-fg)',
             }}
           >
-            Run Tier 0 Check
+            Run Grammar &amp; Slop Check
           </button>
           <button
             type="button"
@@ -772,12 +772,12 @@ export function StudioPane({ settings, incomingDraft, onRefreshStatus }: StudioP
 
       {tier0 && (
         <section
-          aria-label="Tier 0 Findings"
+          aria-label="Check Findings"
           className="space-y-2 rounded-[8px] border p-3"
           style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
         >
           <h2 className="text-[13px] font-semibold">
-            Tier 0 Findings ({tier0.harper.length} grammar, {tier0.slop.length} slop,{' '}
+            Check Findings ({tier0.harper.length} grammar, {tier0.slop.length} slop,{' '}
             {tier0.surface.length} surface, {tier0.secrets.length} secrets,{' '}
             {(tier0.invisibleChars?.length ?? 0) +
               (tier0.structure?.length ?? 0) +
