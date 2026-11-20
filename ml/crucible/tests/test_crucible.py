@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 import sys
@@ -9,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from ml.crucible.alignment import PreferenceBatchCollator
+from ml.crucible.build_notebooks import write_all_kaggle_notebooks
 from ml.crucible.collator import (
     PackedBatchCollator,
     PackingItem,
@@ -700,11 +703,45 @@ def test_generated_datasets_and_kaggle_notebooks_valid() -> None:
     assert preflight_json["train"]["issue_count"] == 0
     assert preflight_json["eval"]["issue_count"] == 0
 
-    # Verify Jupyter notebooks in ml/kaggle/*.ipynb are valid nbformat v4 JSON
+    # Verify Jupyter notebooks in ml/kaggle/*.ipynb are valid nbformat v4 JSON and every code cell compiles as pure Python
     kaggle_dir = REPO_ROOT / "ml" / "kaggle"
-    for nb_name in ("lexel-sft-kaggle.ipynb", "lexel-dpo-gguf-kaggle.ipynb"):
+    written_nbs = write_all_kaggle_notebooks(kaggle_dir)
+    assert len(written_nbs) == 3
+
+    for nb_name in (
+        "lexel-sft-kaggle.ipynb",
+        "lexel-dpo-gguf-kaggle.ipynb",
+        "lexel-end-to-end-kaggle.ipynb",
+    ):
         nb_path = kaggle_dir / nb_name
         assert nb_path.is_file()
         nb_data = json.loads(nb_path.read_text(encoding="utf-8"))
         assert nb_data["nbformat"] == 4
-        assert len(nb_data["cells"]) >= 5
+        assert len(nb_data["cells"]) >= 6
+        for cell_idx, cell in enumerate(nb_data["cells"]):
+            if cell["cell_type"] == "code":
+                source_code = "".join(cell["source"])
+                assert "!pip" not in source_code, (
+                    f"{nb_name} cell {cell_idx} contains shell magic !pip"
+                )
+                ast.parse(source_code, filename=f"{nb_name}#cell_{cell_idx}")
+
+    # Verify Kaggle Dataset metadata and rule copies exist in ml/datasets/
+    assert (datasets_dir / "dataset-metadata.json").is_file()
+    assert (datasets_dir / "slop_terms.json").is_file()
+    assert (datasets_dir / "surfaces.json").is_file()
+
+    # Verify PreferenceBatchCollator aligns token masks and pads cleanly
+    pref_collator = PreferenceBatchCollator(
+        tokenizer=None, max_seq_length=256, pad_to_multiple_of=8, return_tensors="list"
+    )
+    from ml.crucible.counterfactual import _WhitespaceFallbackTokenizer
+
+    pref_collator.tokenizer = _WhitespaceFallbackTokenizer()
+    collated_dpo = pref_collator(dpo_rows[:2])
+    assert len(collated_dpo["chosen_input_ids"]) == 2
+    assert len(collated_dpo["rejected_input_ids"]) == 2
+    assert len(collated_dpo["chosen_input_ids"][0]) % 8 == 0
+    assert len(collated_dpo["rejected_input_ids"][0]) % 8 == 0
+    assert sum(collated_dpo["rejected_token_mask"][0]) >= 1
+    assert sum(collated_dpo["rejected_token_mask"][1]) >= 1

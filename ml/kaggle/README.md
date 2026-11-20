@@ -1,12 +1,12 @@
 # Lexel QLoRA SFT, Masked-SimPO Alignment & GGUF Export Guide
 
-This directory contains the reproducible two-stage training and GGUF quantization workflow for **Lexel** (`Qwen2.5-1.5B-Instruct` Standard tier and `Qwen2.5-0.5B-Instruct` Lite tier).
+This directory contains the reproducible, self-contained two-stage training and GGUF quantization workflow for **Lexel** (`Qwen2.5-1.5B-Instruct` Standard tier and `Qwen2.5-0.5B-Instruct` Lite tier).
 
 ---
 
-## 1. Preflight Dataset Verification (Offline CPU)
+## 1. Build Datasets & Kaggle Notebooks Locally (Offline CPU)
 
-Before starting a GPU training run, build and verify the Crucible-filtered datasets locally:
+Run a single command to build the 6-Gate Crucible-filtered datasets (`ml/datasets/`), Kaggle Dataset metadata (`dataset-metadata.json`), and all three Kaggle Jupyter notebooks (`ml/kaggle/*.ipynb`):
 
 ```bash
 python3 -m ml.crucible.dataset_builder
@@ -20,40 +20,43 @@ uv run pytest
 Confirm that:
 - `ok: true`, `issue_count: 0`, and `overlap_unique_rows: 0` in the preflight JSON output.
 - All 6 Data Crucible gates (`ZeroSlopGate`, `NumericAndTokenGroundingGate`, `SurfaceComplianceGate`, `ActiveVerbAndDirectnessGate`, `LexicalDensityAndBurstinessGate`, `IntegrityAndLeakageGate`) report 100% pass rate on the final splits in `ml/datasets/manifest.json`.
+- All three notebooks are generated in `ml/kaggle/`:
+  - `ml/kaggle/lexel-end-to-end-kaggle.ipynb` (**Recommended**: single all-in-one notebook running Stage 1 SFT -> Stage 2 Masked-SimPO -> Held-Out Eval -> GGUF Export in one session).
+  - `ml/kaggle/lexel-sft-kaggle.ipynb` (Stage 1 QLoRA SFT only).
+  - `ml/kaggle/lexel-dpo-gguf-kaggle.ipynb` (Stage 2 Surgical Token-Masked SimPO + Held-Out Eval + GGUF Export).
 
 ---
 
-## 2. Training in Unsloth Studio Desktop (`~/.local/bin/unsloth-studio`)
+## 2. Training on Kaggle Free Tier GPUs (`GPU T4 x2` or `P100`)
+
+### Step A: Create Your Kaggle Dataset (`lexel-crucible-datasets`)
+Upload the `ml/datasets/` folder (`lexel_sft_train.jsonl`, `lexel_sft_val.jsonl`, `lexel_dpo_train.jsonl`, `lexel_heldout_eval.jsonl`, `manifest.json`, `slop_terms.json`, `surfaces.json`, `dataset-metadata.json`) via the Kaggle Web UI (**Datasets -> New Dataset**) or the Kaggle CLI:
+
+```bash
+kaggle datasets create -p ml/datasets
+```
+
+### Step B: Import & Run the Notebook on Kaggle
+1. Open **Kaggle Notebooks -> New Notebook -> File -> Import Notebook** and upload `ml/kaggle/lexel-end-to-end-kaggle.ipynb` (or run `lexel-sft-kaggle.ipynb` followed by `lexel-dpo-gguf-kaggle.ipynb`).
+2. In the right sidebar:
+   - Set **Accelerator** to **GPU T4 x2** (or **GPU P100**).
+   - Enable **Internet** (so Cell 1 can install `unsloth` and download `unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit`).
+   - Click **Add Input** and attach your `lexel-crucible-datasets` dataset. (The notebook automatically discovers `lexel_sft_train.jsonl` and `lexel_dpo_train.jsonl` anywhere under `/kaggle/input` without needing manual environment variables.)
+3. Click **Run All**.
+   - **Cell 1** pins `CUDA_VISIBLE_DEVICES=0`, disables `wandb` interactive prompts, installs `unsloth` cleanly via `subprocess.check_call` (no `!pip` magic or `xformers` ABI conflicts), and bootstraps self-contained Crucible verifiers and `MaskedSimPOLoss`.
+   - **Stage 1 Cells** inspect the installed `trl.SFTConfig` / `trl.SFTTrainer` signature (`processing_class` vs `tokenizer`, `max_length` vs `max_seq_length`), apply `train_on_responses_only` completion-only loss masking, verify supervised token counts on a real batch, and train for 2 epochs.
+   - **Stage 2 Cells** run surgical token-masked preference alignment (`MaskedSimPOLoss` with `beta=2.0`, `gamma=1.0`, `sft_weight=0.05`, `unmasked_token_weight=0.05`, `lr=5e-6`, `1.5` epochs) focusing negative gradients strictly on hallucinated numbers, dropped code tokens, em dashes, and slop spans.
+   - **Evaluation & Export Cells** evaluate all 13 surfaces on `lexel_heldout_eval.jsonl` and export `qwen2.5-1.5b-instruct-q4_k_m.gguf` (or `qwen2.5-0.5b-instruct-q4_k_m.gguf`), `SHA256SUMS`, and `manifest.json` under `./outputs/lexel-1.5b-dpo-aligned/gguf/`.
+
+---
+
+## 3. Training in Unsloth Studio Desktop (`~/.local/bin/unsloth-studio`)
 
 1. Launch Unsloth Studio Desktop on your local Linux workstation:
    ```bash
    ~/.local/bin/unsloth-studio
    ```
-2. Open **Dataset Manager** and import:
-   - Training split: `/home/lawand/Lexel/ml/datasets/lexel_sft_train.jsonl`
-   - Validation split: `/home/lawand/Lexel/ml/datasets/lexel_sft_val.jsonl`
-3. Configure Stage 1 QLoRA SFT parameters:
-   - **Base Model**: `unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit` (or `unsloth/Qwen2.5-0.5B-Instruct-bnb-4bit`)
-   - **LoRA Rank / Alpha / Dropout**: `r = 32`, `lora_alpha = 64`, `lora_dropout = 0`
-   - **Target Modules**: `q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj`
-   - **Context & Packing**: `max_seq_length = 1536`, Sequence Packing enabled, `train_on_responses_only` enabled
-   - **Optimizer & Schedule**: `adamw_8bit`, `lr = 2e-4`, `cosine` scheduler, `warmup_ratio = 0.05`, `2` epochs
-4. Or run `ml/kaggle/lexel-sft-kaggle.ipynb` and `ml/kaggle/lexel-dpo-gguf-kaggle.ipynb` directly inside Unsloth Studio's Jupyter kernel.
-
----
-
-## 3. Training on Kaggle Free Tier GPUs (`2x T4 16GB` or `P100`)
-
-1. Upload the `ml/datasets/` folder (`lexel_sft_train.jsonl`, `lexel_sft_val.jsonl`, `lexel_dpo_train.jsonl`, `lexel_heldout_eval.jsonl`, `manifest.json`) as a private Kaggle Dataset named `lexel-crucible-datasets`.
-2. Import `ml/kaggle/lexel-sft-kaggle.ipynb` into Kaggle Notebooks:
-   - Set **Accelerator** to **GPU T4 x2**.
-   - Set environment variable `LEXEL_DATA_DIR=/kaggle/input/lexel-crucible-datasets`.
-   - Run all cells. Stage 1 finishes 2 packed epochs in ~12 minutes on T4 GPUs and saves `./outputs/lexel-1.5b-sft-adapter/adapter` and `run_manifest.json`.
-3. Import `ml/kaggle/lexel-dpo-gguf-kaggle.ipynb`:
-   - Attach the Stage 1 output directory.
-   - Run Stage 2 preference alignment (`MaskedSimPOLoss` with `beta=2.0`, `gamma=1.0`, `sft_weight=0.05`, `unmasked_token_weight=0.05`, `lr=5e-6`, `1.5` epochs).
-   - Cell 4 runs the deterministic 13-surface held-out benchmark gate on `lexel_heldout_eval.jsonl` (requiring Zero-Slop >= 95%, Number & Token Preservation == 100%, Surface Compliance >= 90%).
-   - Cell 5 exports `qwen2.5-1.5b-instruct-q4_k_m.gguf` (or `qwen2.5-0.5b-instruct-q4_k_m.gguf`), `SHA256SUMS`, and `manifest.json`.
+2. Open `ml/kaggle/lexel-end-to-end-kaggle.ipynb` (or `lexel-sft-kaggle.ipynb` and `lexel-dpo-gguf-kaggle.ipynb`) directly inside Unsloth Studio's Jupyter kernel, or import `/home/lawand/Lexel/ml/datasets/lexel_sft_train.jsonl` and `/home/lawand/Lexel/ml/datasets/lexel_sft_val.jsonl` into Dataset Manager.
 
 ---
 

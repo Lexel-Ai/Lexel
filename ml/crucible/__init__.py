@@ -1,5 +1,16 @@
 """Lexel Data Crucible, Surgical Counterfactual Mutation, and Preference Optimization."""
 
+from ml.crucible.alignment import (
+    AlignmentSummary,
+    PreferenceBatchCollator,
+    run_masked_simpo_alignment,
+)
+from ml.crucible.build_notebooks import (
+    build_all_in_one_notebook,
+    build_dpo_gguf_notebook,
+    build_sft_notebook,
+    write_all_kaggle_notebooks,
+)
 from ml.crucible.collator import (
     PackedBatchCollator,
     PackedBin,
@@ -101,6 +112,7 @@ __all__ = [
     "ALL_SURFACE_IDS",
     "ALL_TASK_IDS",
     "ActiveVerbAndDirectnessGate",
+    "AlignmentSummary",
     "CalibrationReport",
     "ChatMessage",
     "CrucibleAuditResult",
@@ -126,6 +138,7 @@ __all__ = [
     "PairwiseComparison",
     "PerturbationType",
     "PerturbedSpan",
+    "PreferenceBatchCollator",
     "PreferencePair",
     "SLOP_SUBSTITUTIONS",
     "SlopConfig",
@@ -141,8 +154,11 @@ __all__ = [
     "WritingBenchDimensionScores",
     "ZeroSlopGate",
     "align_spans_to_token_mask",
+    "build_all_in_one_notebook",
+    "build_dpo_gguf_notebook",
     "build_rewrite_messages",
     "build_rewrite_messages_with_surfaces",
+    "build_sft_notebook",
     "build_tagged_prompt_pair",
     "clopper_pearson_interval",
     "compute_packing_summary",
@@ -170,6 +186,7 @@ __all__ = [
     "perturb_numerical",
     "perturb_slop",
     "perturb_surface_violation",
+    "run_masked_simpo_alignment",
     "sanitize_model_output",
     "scan_slop_terms",
     "select_relevant_voice_examples",
@@ -178,4 +195,5 @@ __all__ = [
     "tokenize_completion_only",
     "validate_surface_compliance",
     "verify_rewrite",
+    "write_all_kaggle_notebooks",
 ]

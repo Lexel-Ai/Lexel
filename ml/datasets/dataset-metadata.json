@@ -1,0 +1,10 @@
+{
+  "title": "Lexel Crucible Datasets",
+  "id": "lawandsoran/lexel-crucible-datasets",
+  "licenses": [
+    {
+      "name": "MIT"
+    }
+  ],
+  "description": "6-Gate Data Crucible SFT, Surgical Counterfactual Masked-SimPO/DPO, and 13-surface held-out benchmark datasets for Lexel local writing models."
+}

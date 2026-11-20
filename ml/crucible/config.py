@@ -10,14 +10,45 @@ Implements Architecture Invariant #3:
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SLOP_TERMS_PATH = REPO_ROOT / "rules" / "slop_terms.json"
-SURFACES_PATH = REPO_ROOT / "ml" / "personas" / "surfaces.json"
+
+
+def _resolve_rule_path(env_key: str, default_rel: Path, fallback_filename: str) -> Path:
+    env_val = os.environ.get(env_key)
+    if env_val and Path(env_val).is_file():
+        return Path(env_val)
+    primary = REPO_ROOT / default_rel
+    if primary.is_file():
+        return primary
+    for base in (
+        Path(os.environ.get("LEXEL_DATA_DIR", "")),
+        Path.cwd(),
+        Path.cwd() / "ml" / "datasets",
+        Path("/kaggle/input/lexel-crucible-datasets"),
+        Path("/kaggle/working"),
+    ):
+        cand = base / fallback_filename
+        if cand.is_file():
+            return cand
+    if Path("/kaggle/input").is_dir():
+        matches = sorted(Path("/kaggle/input").rglob(fallback_filename))
+        if matches:
+            return matches[0]
+    return primary
+
+
+SLOP_TERMS_PATH = _resolve_rule_path(
+    "LEXEL_SLOP_TERMS_PATH", Path("rules") / "slop_terms.json", "slop_terms.json"
+)
+SURFACES_PATH = _resolve_rule_path(
+    "LEXEL_SURFACES_PATH", Path("ml") / "personas" / "surfaces.json", "surfaces.json"
+)
 
 ALL_SURFACE_IDS: tuple[str, ...] = (
     "web_reddit",

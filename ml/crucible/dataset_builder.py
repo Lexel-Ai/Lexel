@@ -29,12 +29,16 @@ import re
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
+import shutil
 from typing import Any
 
+from ml.crucible.build_notebooks import write_all_kaggle_notebooks
 from ml.crucible.config import (
     ALL_SURFACE_IDS,
     ALL_TASK_IDS,
     REPO_ROOT,
+    SLOP_TERMS_PATH,
+    SURFACES_PATH,
     VoiceExample,
     build_rewrite_messages,
     load_slop_config,
@@ -601,8 +605,9 @@ def _map_prose_surface_and_task(
 
 
 def _ingest_prose_sft_records() -> list[dict[str, Any]]:
-    """Ingest and adapt Prose SFT datasets (`wlab_session2_clean/train.jsonl` and `categories/*.jsonl`)."""
+    """Ingest and adapt Prose SFT datasets (`wlab_session2_clean/train.jsonl` and `categories/*.jsonl`), deduplicating identical target prose across files."""
     records: list[dict[str, Any]] = []
+    seen_target_hashes: set[str] = set()
 
     # 1. wlab_session2_clean/train.jsonl (300 human/curated examples)
     s2_path = (
@@ -633,6 +638,11 @@ def _ingest_prose_sft_records() -> list[dict[str, Any]]:
                 surface_id = "docs_markdown" if fmt == "b2b_explainer" else "web_substack"
 
             clean_target = _sanitize_target_prose(raw_target, surface_id)
+            tgt_hash = hashlib.sha256(clean_target.encode("utf-8")).hexdigest()
+            if tgt_hash in seen_target_hashes:
+                continue
+            seen_target_hashes.add(tgt_hash)
+
             source_draft = inject_reverse_slop(
                 clean_target, surface_id=surface_id, task=task, seed=1000 + idx
             )
@@ -670,6 +680,11 @@ def _ingest_prose_sft_records() -> list[dict[str, Any]]:
                     cat_file.stem, prompt_text, idx
                 )
                 clean_target = _sanitize_target_prose(raw_target, surface_id)
+                tgt_hash = hashlib.sha256(clean_target.encode("utf-8")).hexdigest()
+                if tgt_hash in seen_target_hashes:
+                    continue
+                seen_target_hashes.add(tgt_hash)
+
                 source_draft = inject_reverse_slop(
                     clean_target,
                     surface_id=surface_id,
@@ -921,6 +936,277 @@ def _generate_additional_surface_examples() -> list[dict[str, Any]]:
             "reply_draft",
             "lexel-rs/lexel",
             "Good catch on #98. I added `--flag` extraction to `extract_code_and_url_tokens` so CLI flags cannot be dropped by the 1.5B rewrite.",
+        ),
+        (
+            "web_github_pr",
+            "deslop",
+            "lexel-rs/lexel",
+            "Replaces dynamic regex compilation in `crates/lexel-core/src/slop.rs` with a lazy `OnceLock` automaton for #149, reducing cold-start time from 3.8ms to 0.2ms.",
+        ),
+        (
+            "web_github_pr",
+            "shorten",
+            "lexel-rs/lexel",
+            "Pins `serde_json` and `aho-corasick` workspace versions in `Cargo.toml` for #156 and cuts `lexel-daemon` binary size by 640KB.",
+        ),
+        (
+            "web_github_pr",
+            "fix_grammar_flow",
+            "lexel-rs/lexel",
+            "The loopback origin check in `crates/lexel-daemon/src/http.rs` rejected requests when `--allow-extension-origin` included a trailing slash in #162.",
+        ),
+        # ide_git_commit (additional)
+        (
+            "ide_git_commit",
+            "polish_commit",
+            "git",
+            "feat(browser): attach Shadow DOM overlay to `contenteditable` nodes in #112",
+        ),
+        (
+            "ide_git_commit",
+            "polish_commit",
+            "git",
+            "fix(core): preserve `$42` currency prefix during unit-bound metric check in #118",
+        ),
+        (
+            "ide_git_commit",
+            "polish_commit",
+            "git",
+            "perf(daemon): unload `qwen2.5-1.5b-instruct-q4_k_m.gguf` after 180s idle window",
+        ),
+        (
+            "ide_git_commit",
+            "polish_commit",
+            "git",
+            "sec(browser): skip attachment on 1Password and Bitwarden vaults in #129",
+        ),
+        (
+            "ide_git_commit",
+            "polish_commit",
+            "git",
+            "refactor(ui): extract shared `SurfaceBadge` component into `packages/lexel-ui`",
+        ),
+        (
+            "ide_git_commit",
+            "polish_commit",
+            "git",
+            "test(crucible): verify zero unmasked token gradient in `MaskedSimPOLoss`",
+        ),
+        (
+            "ide_git_commit",
+            "polish_commit",
+            "git",
+            "ml(kaggle): export `qwen2.5-0.5b-instruct-q4_k_m.gguf` with SHA256SUMS manifest",
+        ),
+        (
+            "ide_git_commit",
+            "polish_commit",
+            "git",
+            "arch(ls): cache workspace `surfaces.json` profile overrides across LSP requests",
+        ),
+        # ide_code_comment (additional)
+        (
+            "ide_code_comment",
+            "polish_comment",
+            "rust",
+            "Drop the `MutexGuard` before awaiting the HTTP stream so concurrent health probes on `127.0.0.1:7878` respond under 1ms.",
+        ),
+        (
+            "ide_code_comment",
+            "polish_comment",
+            "python",
+            "Pre-render ChatML with `add_generation_prompt=False` and mask prompt tokens as `-100` before running FFD bin packing.",
+        ),
+        (
+            "ide_code_comment",
+            "polish_comment",
+            "typescript",
+            "Use `requestAnimationFrame` when repositioning the lint underline canvas to stay within the 16ms frame budget.",
+        ),
+        (
+            "ide_code_comment",
+            "polish_comment",
+            "rust",
+            "Reject HTTP requests missing a constant-time verified 256-bit `Authorization: Bearer` token on loopback endpoints.",
+        ),
+        (
+            "ide_code_comment",
+            "polish_comment",
+            "python",
+            "Normalize `chosen` and `rejected` log-probabilities by active mask count `sum(w_t)` to prevent length bias during SimPO updates.",
+        ),
+        (
+            "ide_code_comment",
+            "polish_comment",
+            "rust",
+            "Compile `UNIT_BOUND_REGEX` once via `std::sync::LazyLock` to avoid per-keystroke regex allocation overhead.",
+        ),
+        (
+            "ide_code_comment",
+            "polish_comment",
+            "typescript",
+            "Clean up the `chrome.runtime.Port` disconnect listener inside `useEffect` teardown to avoid stale background ports.",
+        ),
+        # web_x (additional)
+        (
+            "web_x",
+            "rewrite_surface",
+            "x.com",
+            "Replaced 12 regex passes with a single Aho-Corasick automaton in `lexel-core`. Scan latency dropped from 2.1ms to 0.19ms.",
+        ),
+        (
+            "web_x",
+            "shorten",
+            "x.com",
+            "Dual-band token weighting (`alpha=0.05`) in `MaskedSimPOLoss` prevents factual hallucinations without hurting syntax.",
+        ),
+        (
+            "web_x",
+            "deslop",
+            "x.com",
+            "Zero cloud calls, zero telemetry, 1.8ms grammar checks in WebAssembly, and an on-demand 1.5B local GGUF rewriter.",
+        ),
+        (
+            "web_x",
+            "reply_draft",
+            "x.com",
+            "We cap `n_ctx` at 1536 tokens in `lexel-ai` so `qwen2.5-1.5b-instruct-q4_k_m.gguf` stays under 1050MB RSS on 8GB machines.",
+        ),
+        (
+            "web_x",
+            "fix_grammar_flow",
+            "x.com",
+            "Both the VS Code extension and the Neovim client connect to `lexel-ls` over stdio with 1.4ms median diagnostic latency.",
+        ),
+        (
+            "web_x",
+            "rewrite_surface",
+            "x.com",
+            "Every rewrite candidate passes a deterministic Rust gatekeeper checking numbers, `--flags`, backticks, and surface char limits.",
+        ),
+        # web_reddit (additional)
+        (
+            "web_reddit",
+            "rewrite_surface",
+            "r/rust",
+            "Moving our SQLite voice memory index in `lexel-db` to FTS5 with BM25 ranking cut lookup latency to 0.7ms across 5000 examples.",
+        ),
+        (
+            "web_reddit",
+            "deslop",
+            "r/LocalLLaMA",
+            "If you fine-tune `Qwen2.5-1.5B-Instruct` on Kaggle 2x T4 GPUs, set `per_device_train_batch_size=2` and `fp16=True` to keep VRAM under 7.8GB.",
+        ),
+        (
+            "web_reddit",
+            "reply_draft",
+            "r/neovim",
+            "You can pass `--stdio` to `lexel-ls` in `nvim-lspconfig`. Diagnostics update in 1.5ms without spawning a background daemon.",
+        ),
+        (
+            "web_reddit",
+            "shorten",
+            "r/programming",
+            "Our Tier 2 verifier rejects any LLM rewrite that alters a unit-bound metric (`18ms`, `42%`, `$42`, `#42`) or drops a code span.",
+        ),
+        (
+            "web_reddit",
+            "fix_grammar_flow",
+            "r/linux",
+            "Packaging the Tauri v2 desktop binary with system WebKitGTK shrank the `.AppImage` bundle from 84MB to 19MB.",
+        ),
+        (
+            "web_reddit",
+            "deslop",
+            "r/selfhosted",
+            "All voice examples and custom slop rules stay in a local SQLite database at `~/.local/share/lexel/lexel.db` with 0 outbound traffic.",
+        ),
+        # web_discord_slack (additional)
+        (
+            "web_discord_slack",
+            "fix_grammar_flow",
+            "#eng-ml",
+            "Finished the 2-epoch SFT + 1.5-epoch Masked-SimPO run on Kaggle T4. Held-out number and token preservation hit 100% across all 26 tasks.",
+        ),
+        (
+            "web_discord_slack",
+            "shorten",
+            "#eng-desktop",
+            "Merged the Tauri v2 IPC bridge in #138. Extension auto-pairing over `127.0.0.1:7878` now completes in 3ms.",
+        ),
+        (
+            "web_discord_slack",
+            "deslop",
+            "#general",
+            "Reminder: run `cargo clippy --workspace --all-targets -- -D warnings` and `uv run pytest` before pushing to `main`.",
+        ),
+        (
+            "web_discord_slack",
+            "reply_draft",
+            "#support",
+            "Pass `--model-tier lexel-0.5b` if your laptop has 8GB RAM. It uses 450MB RSS and generates 65 tokens/sec on CPU.",
+        ),
+        (
+            "web_discord_slack",
+            "rewrite_surface",
+            "#release",
+            "Tagged `v0.6.0` with updated `qwen2.5-1.5b-instruct-q4_k_m.gguf` checksums in `models/manifest.json`.",
+        ),
+        (
+            "web_discord_slack",
+            "shorten",
+            "#incident",
+            "Fixed the NaN gradient issue on T4 GPUs by casting logits to `float32` inside `compute_token_logprobs`.",
+        ),
+        # docs_markdown (additional)
+        (
+            "docs_markdown",
+            "deslop",
+            "docs/training.md",
+            "Run `python3 -m ml.crucible.dataset_builder` to generate `lexel_sft_train.jsonl`, `lexel_dpo_train.jsonl`, and `manifest.json` in `ml/datasets/`.",
+        ),
+        (
+            "docs_markdown",
+            "shorten",
+            "docs/security.md",
+            "Browser extensions communicate with `lexel-daemon` via Native Messaging or an Origin-verified `127.0.0.1` loopback port with a 256-bit Bearer token.",
+        ),
+        (
+            "docs_markdown",
+            "fix_grammar_flow",
+            "docs/surfaces.md",
+            "Each surface profile in `ml/personas/surfaces.json` defines character bounds (`minChars`, `maxChars`), register rules, and banned openers.",
+        ),
+        (
+            "docs_markdown",
+            "rewrite_surface",
+            "docs/verifier.md",
+            "Tier 2 verification in `crates/lexel-core/src/verifier.rs` guarantees 100% preservation of unit-bound numbers, inline backticks, URLs, and `--cli-flags`.",
+        ),
+        # web_substack & web_wordpress & web_discourse (additional)
+        (
+            "web_substack",
+            "reply_draft",
+            "substack.com",
+            "Pre-packing completion-masked sequences with First-Fit Decreasing cuts padding overhead from 68% to 2.4% while keeping `position_ids` isolated per document.",
+        ),
+        (
+            "web_wordpress",
+            "reply_draft",
+            "wordpress.com",
+            "Serving quantized `q4_k_m` GGUF models locally eliminates API tail latency and keeps private engineering drafts off third-party cloud servers.",
+        ),
+        (
+            "web_discourse",
+            "reply_draft",
+            "meta.discourse.org",
+            "Enabling `--enable-fts5` in the SQLite store reduced thread context retrieval latency from 19ms to 0.8ms across 2500 cached posts.",
+        ),
+        (
+            "web_email",
+            "reply_draft",
+            "mail.google.com",
+            "We confirmed that all 36 held-out benchmark prompts pass 100% numeric grounding and zero-slop checks on `lexel-1.5b`.",
         ),
     ]
 
@@ -1479,12 +1765,30 @@ def build_all_datasets(output_dir: Path = DATASETS_DIR) -> dict[str, Any]:
                 }
             )
 
-    # 5. Write JSONL files to disk
+    # 5. Write JSONL files, rules/surfaces copies, and Kaggle Dataset metadata to disk
     sft_train_path = output_dir / "lexel_sft_train.jsonl"
     sft_val_path = output_dir / "lexel_sft_val.jsonl"
     dpo_train_path = output_dir / "lexel_dpo_train.jsonl"
     heldout_eval_path = output_dir / "lexel_heldout_eval.jsonl"
     manifest_path = output_dir / "manifest.json"
+    slop_copy_path = output_dir / "slop_terms.json"
+    surfaces_copy_path = output_dir / "surfaces.json"
+    kaggle_meta_path = output_dir / "dataset-metadata.json"
+
+    if SLOP_TERMS_PATH.is_file() and SLOP_TERMS_PATH.resolve() != slop_copy_path.resolve():
+        shutil.copyfile(SLOP_TERMS_PATH, slop_copy_path)
+    if SURFACES_PATH.is_file() and SURFACES_PATH.resolve() != surfaces_copy_path.resolve():
+        shutil.copyfile(SURFACES_PATH, surfaces_copy_path)
+
+    kaggle_meta = {
+        "title": "Lexel Crucible Datasets",
+        "id": "lawandsoran/lexel-crucible-datasets",
+        "licenses": [{"name": "MIT"}],
+        "description": "6-Gate Data Crucible SFT, Surgical Counterfactual Masked-SimPO/DPO, and 13-surface held-out benchmark datasets for Lexel local writing models.",
+    }
+    kaggle_meta_path.write_text(
+        json.dumps(kaggle_meta, indent=2) + "\n", encoding="utf-8"
+    )
 
     # Note: unsloth_preflight.py inspects `messages` in SFT train/val JSONL
     with sft_train_path.open("w", encoding="utf-8") as f:
@@ -1598,6 +1902,7 @@ def build_all_datasets(output_dir: Path = DATASETS_DIR) -> dict[str, Any]:
     manifest_path.write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
+    write_all_kaggle_notebooks()
     return manifest
 
 

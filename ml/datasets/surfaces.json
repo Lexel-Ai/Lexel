@@ -1,0 +1,276 @@
+{
+  "version": 1,
+  "surfaces": [
+    {
+      "id": "web_reddit",
+      "label": "Reddit",
+      "hostPatterns": ["reddit.com", "*.reddit.com"],
+      "pathRegex": "^/r/([^/]+)",
+      "register": "direct_peer",
+      "minChars": 20,
+      "maxChars": 900,
+      "allowLinks": false,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": [
+        "check out our",
+        "we built",
+        "dm me",
+        "great question",
+        "thanks for sharing",
+        "game-changer"
+      ],
+      "promptDirective": "Write as a direct technical peer in this subreddit. Concrete tradeoffs, zero marketing tone, zero emojis, zero hashtags, zero links, zero em dashes.",
+      "quickActions": [
+        { "id": "rewrite_surface", "label": "Rewrite for Reddit" },
+        { "id": "deslop", "label": "Remove AI tone" },
+        { "id": "shorten", "label": "Shorten" },
+        { "id": "reply_draft", "label": "Draft reply" }
+      ]
+    },
+    {
+      "id": "web_x",
+      "label": "X",
+      "hostPatterns": ["x.com", "twitter.com", "*.x.com", "*.twitter.com"],
+      "register": "dense_sharp",
+      "minChars": 10,
+      "maxChars": 280,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": ["great thread", "totally agree", "100% this", "underrated take"],
+      "promptDirective": "Keep under 240 characters (strict max 280). High signal density, concrete detail, zero hashtags, zero emojis, zero engagement-bait openers, zero em dashes.",
+      "quickActions": [
+        { "id": "rewrite_surface", "label": "Fit for X (<=280)" },
+        { "id": "shorten", "label": "Tighten" },
+        { "id": "deslop", "label": "Remove AI tone" },
+        { "id": "reply_draft", "label": "Draft reply" }
+      ]
+    },
+    {
+      "id": "web_github_pr",
+      "label": "GitHub",
+      "hostPatterns": ["github.com", "*.github.com"],
+      "pathRegex": "^/([^/]+/[^/]+)",
+      "register": "concise_engineering",
+      "minChars": 8,
+      "maxChars": 4000,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": ["great job!", "awesome work!", "thank you for your contribution"],
+      "promptDirective": "Write concisely for engineers reviewing code or issues. Preserve all backticks, file paths, issue IDs (#42), and metrics exactly. Remove sycophancy and fluff.",
+      "quickActions": [
+        { "id": "rewrite_surface", "label": "Polish engineering note" },
+        { "id": "deslop", "label": "Remove fluff" },
+        { "id": "fix_grammar_flow", "label": "Fix grammar" },
+        { "id": "shorten", "label": "Make concise" }
+      ]
+    },
+    {
+      "id": "web_linkedin",
+      "label": "LinkedIn",
+      "hostPatterns": ["linkedin.com", "*.linkedin.com"],
+      "register": "grounded_professional",
+      "minChars": 20,
+      "maxChars": 1500,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": [
+        "great post",
+        "love this insight",
+        "couldn't agree more",
+        "spot on",
+        "thrilled to announce",
+        "humbled to share"
+      ],
+      "promptDirective": "Grounded, direct professional voice. Replace buzzwords and hype with plain facts. Zero decorative emojis, zero hashtag spam, zero sycophantic openers, zero em dashes.",
+      "quickActions": [
+        { "id": "rewrite_surface", "label": "Grounded LinkedIn" },
+        { "id": "deslop", "label": "Strip corporate slop" },
+        { "id": "shorten", "label": "Tighten" },
+        { "id": "reply_draft", "label": "Draft comment" }
+      ]
+    },
+    {
+      "id": "web_discord_slack",
+      "label": "Chat",
+      "hostPatterns": ["discord.com", "*.discord.com", "app.slack.com"],
+      "register": "casual_clear",
+      "minChars": 2,
+      "maxChars": 2000,
+      "allowLinks": true,
+      "allowEmojis": true,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": [],
+      "promptDirective": "Keep natural chat brevity and directness. Clarify wording without making it sound formal or robotic. Preserve code blocks and handles.",
+      "quickActions": [
+        { "id": "fix_grammar_flow", "label": "Clean up" },
+        { "id": "shorten", "label": "Make brief" },
+        { "id": "deslop", "label": "Sound natural" }
+      ]
+    },
+    {
+      "id": "web_email",
+      "label": "Email",
+      "hostPatterns": ["mail.google.com", "outlook.live.com", "outlook.office.com"],
+      "register": "direct_email",
+      "minChars": 15,
+      "maxChars": 4000,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": [
+        "i hope this email finds you well",
+        "thank you for being a valued",
+        "per my last email"
+      ],
+      "promptDirective": "Write a clear, respectful, direct email. Lead with the point or ask, drop filler greetings, preserve every date, dollar figure, and name exactly.",
+      "quickActions": [
+        { "id": "rewrite_surface", "label": "Clear & direct email" },
+        { "id": "shorten", "label": "Make concise" },
+        { "id": "fix_grammar_flow", "label": "Fix grammar" }
+      ]
+    },
+    {
+      "id": "web_substack",
+      "label": "Substack",
+      "hostPatterns": ["substack.com", "*.substack.com"],
+      "register": "clear_editorial",
+      "minChars": 20,
+      "maxChars": 15000,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": ["happy monday", "welcome back to another", "in this week's issue"],
+      "promptDirective": "Write sharp editorial prose with concrete examples and clear transitions. Avoid newsletter throat-clearing, buzzwords, and em dashes.",
+      "quickActions": [
+        { "id": "fix_grammar_flow", "label": "Polish prose" },
+        { "id": "deslop", "label": "Remove AI tone" },
+        { "id": "shorten", "label": "Tighten" }
+      ]
+    },
+    {
+      "id": "web_wordpress",
+      "label": "WordPress",
+      "hostPatterns": ["wordpress.com", "*.wordpress.com"],
+      "register": "clear_article",
+      "minChars": 20,
+      "maxChars": 15000,
+      "allowLinks": true,
+      "allowEmojis": true,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": ["in today's digital age", "without further ado"],
+      "promptDirective": "Write direct, readable blog prose with active voice. Keep links intact and avoid filler intros and em dashes.",
+      "quickActions": [
+        { "id": "fix_grammar_flow", "label": "Polish article" },
+        { "id": "deslop", "label": "Remove AI tone" },
+        { "id": "shorten", "label": "Tighten" }
+      ]
+    },
+    {
+      "id": "web_discourse",
+      "label": "Discourse",
+      "hostPatterns": ["meta.discourse.org"],
+      "register": "technical_forum",
+      "minChars": 10,
+      "maxChars": 6000,
+      "allowLinks": true,
+      "allowEmojis": true,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": ["+1", "bump", "great post"],
+      "promptDirective": "Write clear forum replies with reproducible details and respectful peer tone. Preserve code blocks and links.",
+      "quickActions": [
+        { "id": "rewrite_surface", "label": "Polish forum reply" },
+        { "id": "deslop", "label": "Remove fluff" },
+        { "id": "shorten", "label": "Make concise" }
+      ]
+    },
+    {
+      "id": "ide_git_commit",
+      "label": "Git Commit",
+      "hostPatterns": [],
+      "register": "imperative_changelog",
+      "minChars": 8,
+      "maxChars": 2000,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": ["wip", "misc fixes", "minor changes", "updated stuff"],
+      "promptDirective": "Use imperative mood for the subject line under 72 characters without a trailing period. Keep commit scope, file paths, and issue IDs intact.",
+      "quickActions": [
+        { "id": "rewrite_surface", "label": "Polish commit" },
+        { "id": "shorten", "label": "Shorten subject" },
+        { "id": "fix_grammar_flow", "label": "Fix grammar" }
+      ]
+    },
+    {
+      "id": "ide_code_comment",
+      "label": "Code Comment",
+      "hostPatterns": [],
+      "register": "concise_technical",
+      "minChars": 4,
+      "maxChars": 2000,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": ["this function", "helper method to"],
+      "promptDirective": "Explain why, invariants, or edge cases concisely. Preserve backticks and identifier names untouched.",
+      "quickActions": [
+        { "id": "rewrite_surface", "label": "Concise comment" },
+        { "id": "shorten", "label": "Tighten" },
+        { "id": "fix_grammar_flow", "label": "Fix grammar" }
+      ]
+    },
+    {
+      "id": "docs_markdown",
+      "label": "Docs / Markdown",
+      "hostPatterns": [],
+      "register": "clear_documentation",
+      "minChars": 8,
+      "maxChars": 12000,
+      "allowLinks": true,
+      "allowEmojis": false,
+      "allowHashtags": false,
+      "allowEmDashes": false,
+      "bannedOpeners": ["in this document we will", "welcome to the documentation"],
+      "promptDirective": "Write clear, scannable technical documentation in active voice. Preserve code blocks, CLI flags, URLs, and numbers.",
+      "quickActions": [
+        { "id": "fix_grammar_flow", "label": "Fix grammar" },
+        { "id": "deslop", "label": "Remove AI tone" },
+        { "id": "shorten", "label": "Make concise" }
+      ]
+    },
+    {
+      "id": "general",
+      "label": "General",
+      "hostPatterns": ["*"],
+      "register": "clear_human",
+      "minChars": 4,
+      "maxChars": 8000,
+      "allowLinks": true,
+      "allowEmojis": true,
+      "allowHashtags": true,
+      "allowEmDashes": false,
+      "bannedOpeners": [],
+      "promptDirective": "Edit for clarity, active verbs, and natural human rhythm. Preserve every fact, number, URL, and code token. Never use em dashes or AI buzzwords.",
+      "quickActions": [
+        { "id": "fix_grammar_flow", "label": "Fix & polish" },
+        { "id": "deslop", "label": "Remove AI tone" },
+        { "id": "shorten", "label": "Shorten" }
+      ]
+    }
+  ]
+}

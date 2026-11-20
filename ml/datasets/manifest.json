@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-11-19T17:34:23+00:00",
+  "generated_at": "2026-11-20T08:24:29+00:00",
   "source_corpora": [
     "/home/lawand/Prose/deliverables/datasets/wlab_session2_clean/train.jsonl",
     "/home/lawand/Prose/deliverables/datasets/wlab_session2_clean/heldout.jsonl",
@@ -13,19 +13,19 @@
   ],
   "files": {
     "lexel_sft_train.jsonl": {
-      "rows": 308,
-      "sha256": "5cb3b503b35a1bd995f5f4d68d302cadbf9d1314dea1016247cad7b666acd7a4",
-      "bytes": 806095
+      "rows": 340,
+      "sha256": "c7dd0c5c5bea68ace06f2fd77dad4cdc02c32542b2afbbc2f3ede3bcc202f659",
+      "bytes": 852824
     },
     "lexel_sft_val.jsonl": {
-      "rows": 69,
-      "sha256": "d48b1920cbaa66298cfa79225d9b213f0adb7b146c9135f1b7082cb1a062236e",
-      "bytes": 171310
+      "rows": 75,
+      "sha256": "145b275acacae06128f9ff01cee053107dc81f898b628f67f6a76c0612ebb1df",
+      "bytes": 171726
     },
     "lexel_dpo_train.jsonl": {
-      "rows": 488,
-      "sha256": "df7b99a0847f60015d9bfb56b12a92b5a943f61d20780857c4cb1839917f6310",
-      "bytes": 2704636
+      "rows": 520,
+      "sha256": "9fbd0bb9effc26f0d15223700b241652c2c806098196293352da39165c3aaf27",
+      "bytes": 2810486
     },
     "lexel_heldout_eval.jsonl": {
       "rows": 26,
@@ -35,34 +35,34 @@
   },
   "surface_distribution": {
     "train": {
-      "docs_markdown": 16,
+      "docs_markdown": 20,
       "general": 25,
-      "ide_code_comment": 10,
-      "ide_git_commit": 11,
-      "web_discord_slack": 5,
+      "ide_code_comment": 16,
+      "ide_git_commit": 13,
+      "web_discord_slack": 10,
       "web_discourse": 30,
-      "web_email": 48,
-      "web_github_pr": 18,
+      "web_email": 49,
+      "web_github_pr": 20,
       "web_linkedin": 69,
-      "web_reddit": 10,
-      "web_substack": 32,
-      "web_wordpress": 26,
-      "web_x": 8
+      "web_reddit": 15,
+      "web_substack": 33,
+      "web_wordpress": 27,
+      "web_x": 13
     },
     "val": {
       "docs_markdown": 4,
       "general": 6,
-      "ide_code_comment": 3,
+      "ide_code_comment": 4,
       "ide_git_commit": 3,
-      "web_discord_slack": 1,
-      "web_discourse": 6,
+      "web_discord_slack": 2,
+      "web_discourse": 7,
       "web_email": 10,
-      "web_github_pr": 4,
+      "web_github_pr": 5,
       "web_linkedin": 14,
-      "web_reddit": 3,
+      "web_reddit": 4,
       "web_substack": 7,
       "web_wordpress": 6,
-      "web_x": 2
+      "web_x": 3
     },
     "heldout": {
       "docs_markdown": 2,
@@ -81,52 +81,52 @@
     }
   },
   "task_distribution": {
-    "deslop": 73,
-    "fix_grammar_flow": 57,
-    "polish_comment": 7,
-    "polish_commit": 8,
-    "reply_draft": 4,
-    "rewrite_surface": 62,
-    "shorten": 97
+    "deslop": 74,
+    "fix_grammar_flow": 64,
+    "polish_comment": 13,
+    "polish_commit": 10,
+    "reply_draft": 11,
+    "rewrite_surface": 70,
+    "shorten": 98
   },
   "dpo_perturbation_distribution": {
-    "code_token_drop": 7,
-    "corporate_slop": 261,
-    "em_dash_injection": 44,
-    "entity_swap": 12,
-    "negation_inversion": 28,
-    "numerical_hallucination": 92,
-    "surface_violation": 44
+    "code_token_drop": 11,
+    "corporate_slop": 276,
+    "em_dash_injection": 49,
+    "entity_swap": 10,
+    "negation_inversion": 29,
+    "numerical_hallucination": 97,
+    "surface_violation": 48
   },
   "crucible_gate_stats": {
-    "total_candidates_screened": 505,
-    "total_passed_all_6_gates": 377,
-    "candidate_pass_rate": 0.7465,
+    "total_candidates_screened": 442,
+    "total_passed_all_6_gates": 415,
+    "candidate_pass_rate": 0.9389,
     "final_split_crucible_pass_rate": 1.0,
     "gate_breakdown": {
       "gate1_zero_slop": {
-        "passes": 504,
-        "rate": 0.998
+        "passes": 441,
+        "rate": 0.9977
       },
       "gate2_numeric_and_token_grounding": {
-        "passes": 504,
-        "rate": 0.998
+        "passes": 441,
+        "rate": 0.9977
       },
       "gate3_surface_compliance": {
-        "passes": 504,
-        "rate": 0.998
+        "passes": 435,
+        "rate": 0.9842
       },
       "gate4_active_verb_and_directness": {
-        "passes": 493,
-        "rate": 0.9762
+        "passes": 433,
+        "rate": 0.9796
       },
       "gate5_lexical_density_and_burstiness": {
-        "passes": 501,
-        "rate": 0.9921
+        "passes": 440,
+        "rate": 0.9955
       },
       "gate6_integrity_and_leakage": {
-        "passes": 389,
-        "rate": 0.7703
+        "passes": 433,
+        "rate": 0.9796
       }
     }
   }
