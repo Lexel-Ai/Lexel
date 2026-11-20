@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -745,3 +746,426 @@ def test_generated_datasets_and_kaggle_notebooks_valid() -> None:
     assert len(collated_dpo["rejected_input_ids"][0]) % 8 == 0
     assert sum(collated_dpo["rejected_token_mask"][0]) >= 1
     assert sum(collated_dpo["rejected_token_mask"][1]) >= 1
+
+
+def test_kaggle_notebooks_end_to_end_execution_simulation(tmp_path: Path) -> None:
+    """Execute every code cell of lexel-end-to-end-kaggle.ipynb sequentially with lightweight mocks to prove zero NameError/TypeError/KeyError across all cells."""
+    import types
+
+    nb_path = REPO_ROOT / "ml" / "kaggle" / "lexel-end-to-end-kaggle.ipynb"
+    nb_data = json.loads(nb_path.read_text(encoding="utf-8"))
+
+    # Create mock torch, datasets, trl, and unsloth modules so we can execute every cell in-process on CPU
+    class _FakeTensor:
+        def __init__(self, data: object) -> None:
+            self.data = data
+            if isinstance(data, list) and data and isinstance(data[0], list):
+                self.shape = (len(data), len(data[0]), 4)
+            elif isinstance(data, list):
+                self.shape = (1, len(data))
+            else:
+                self.shape = (1, 4)
+
+        def to(self, *_args: object, **_kwargs: object) -> _FakeTensor:
+            return self
+
+        def float(self) -> _FakeTensor:
+            return self
+
+        def detach(self) -> _FakeTensor:
+            return self
+
+        def cpu(self) -> _FakeTensor:
+            return self
+
+        def mean(self) -> _FakeTensor:
+            return self
+
+        def sum(self, *_args: object, **_kwargs: object) -> _FakeTensor:
+            return _FakeTensor(4.0)
+
+        def clamp(self, *_args: object, **_kwargs: object) -> _FakeTensor:
+            return self
+
+        def contiguous(self) -> _FakeTensor:
+            return self
+
+        def unsqueeze(self, *_args: object, **_kwargs: object) -> _FakeTensor:
+            return self
+
+        def squeeze(self, *_args: object, **_kwargs: object) -> _FakeTensor:
+            return self
+
+        @property
+        def dtype(self) -> str:
+            return "float32"
+
+        def item(self) -> float:
+            return float(self.data) if isinstance(self.data, (int, float)) else 4.0
+
+        def numel(self) -> int:
+            return 16
+
+        def requires_grad_(self, val: bool = True) -> _FakeTensor:
+            self.requires_grad = val
+            return self
+
+        def backward(self) -> None:
+            pass
+
+        def __ne__(self, _other: object) -> _FakeTensor:  # type: ignore[override]
+            return _FakeTensor(4)
+
+        def __gt__(self, _other: object) -> _FakeTensor:
+            return _FakeTensor(1.0)
+
+        def __truediv__(self, _other: object) -> _FakeTensor:
+            return self
+
+        def __mul__(self, _other: object) -> _FakeTensor:
+            return self
+
+        def __rmul__(self, _other: object) -> _FakeTensor:
+            return self
+
+        def __add__(self, _other: object) -> _FakeTensor:
+            return self
+
+        def __radd__(self, _other: object) -> _FakeTensor:
+            return self
+
+        def __sub__(self, _other: object) -> _FakeTensor:
+            return self
+
+        def __rsub__(self, _other: object) -> _FakeTensor:
+            return self
+
+        def __neg__(self) -> _FakeTensor:
+            return self
+
+        def __getitem__(self, _idx: object) -> _FakeTensor:
+            return _FakeTensor([10, 11, 12, 13, 14, 15])
+
+        def tolist(self) -> list[int]:
+            return [10, 11, 12, 13]
+
+    class _FakeParam(_FakeTensor):
+        def __init__(self) -> None:
+            super().__init__(1.0)
+            self.requires_grad = True
+            self.device = "cpu"
+
+    class _FakeModel:
+        def __init__(self) -> None:
+            self._param = _FakeParam()
+
+        def parameters(self):
+            return iter([self._param])
+
+        def named_parameters(self):
+            return [("lora_A", self._param)]
+
+        def print_trainable_parameters(self) -> None:
+            pass
+
+        def train(self) -> None:
+            pass
+
+        def eval(self) -> None:
+            pass
+
+        def save_pretrained(self, out_dir: str) -> None:
+            p = Path(out_dir)
+            p.mkdir(parents=True, exist_ok=True)
+            (p / "adapter_config.json").write_text("{}", encoding="utf-8")
+
+        def save_pretrained_gguf(
+            self, out_dir: str, _tokenizer: object, quantization_method: str = "q4_k_m", maximum_memory_usage: float = 0.75
+        ) -> None:
+            p = Path(out_dir)
+            p.mkdir(parents=True, exist_ok=True)
+            (p / f"mock-{quantization_method}.gguf").write_bytes(b"GGUF_MOCK_WEIGHTS")
+
+        def generate(self, **_kwargs: object) -> list[_FakeTensor]:
+            return [_FakeTensor([1, 2, 3, 4, 5, 6])]
+
+        def __call__(self, **_kwargs: object) -> object:
+            out = types.SimpleNamespace()
+            out.logits = _FakeTensor([[[1.0, 0.2, -0.5, 0.1]] * 6])
+            return out
+
+    class _FakeBatchEncoding(dict):
+        def to(self, _device: object) -> _FakeBatchEncoding:
+            return self
+
+    class _FakeTokenizer:
+        pad_token = "<pad>"
+        eos_token = "<|im_end|>"
+        pad_token_id = 0
+        eos_token_id = 2
+        padding_side = "right"
+
+        def apply_chat_template(
+            self, msgs: list[dict[str, str]], tokenize: bool = False, add_generation_prompt: bool = False
+        ) -> str:
+            text = "".join(f"<|im_start|>{m['role']}\n{m['content']}<|im_end|>\n" for m in msgs)
+            if add_generation_prompt:
+                text += "<|im_start|>assistant\n"
+            return text
+
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            return [1, 2, 3, 4]
+
+        def decode(self, _ids: object, skip_special_tokens: bool = True) -> str:
+            return "Uses `extract_unit_bound_metrics` in `verifier.rs` to fix #42 at 0.4ms."
+
+        def save_pretrained(self, out_dir: str) -> None:
+            p = Path(out_dir)
+            p.mkdir(parents=True, exist_ok=True)
+            (p / "tokenizer_config.json").write_text("{}", encoding="utf-8")
+
+        def __call__(self, _text: str, return_tensors: str = "pt", add_special_tokens: bool = False) -> _FakeBatchEncoding:
+            return _FakeBatchEncoding({"input_ids": _FakeTensor([[1, 2, 3]]), "attention_mask": _FakeTensor([[1, 1, 1]])})
+
+    fake_torch = types.ModuleType("torch")
+    fake_torch.__version__ = "2.6.0+cpu"
+    fake_torch.float32 = "float32"
+    fake_torch.float16 = "float16"
+    fake_torch.bfloat16 = "bfloat16"
+    fake_torch.long = "long"
+    fake_torch.Tensor = _FakeTensor
+    fake_torch.tensor = lambda data, **_kw: _FakeTensor(data)
+    fake_torch.clamp = lambda x, **_kw: x
+    fake_torch.gather = lambda x, **_kw: x
+    fake_torch.cuda = types.SimpleNamespace(
+        is_available=lambda: False,
+        get_device_name=lambda _i: "FakeT4",
+        get_device_capability=lambda _i: (7, 5),
+        reset_peak_memory_stats=lambda: None,
+        max_memory_allocated=lambda: 0,
+    )
+
+    class _NoGrad:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    fake_torch.no_grad = _NoGrad
+    fake_torch.inference_mode = _NoGrad
+    fake_torch.nn = types.ModuleType("torch.nn")
+    fake_torch.nn.functional = types.ModuleType("torch.nn.functional")
+    fake_torch.nn.functional.logsigmoid = lambda x: _FakeTensor(-0.3)
+    fake_torch.nn.functional.log_softmax = lambda x, dim=-1: x
+    fake_torch.nn.utils = types.SimpleNamespace(clip_grad_norm_=lambda *_a, **_kw: None)
+    fake_torch.optim = types.SimpleNamespace(
+        AdamW=lambda params, lr=5e-6, weight_decay=0.01: types.SimpleNamespace(
+            param_groups=[{"lr": lr}],
+            zero_grad=lambda: None,
+            step=lambda: None,
+        ),
+        lr_scheduler=types.SimpleNamespace(
+            LambdaLR=lambda _opt, _fn: types.SimpleNamespace(step=lambda: None)
+        ),
+    )
+
+    fake_unsloth = types.ModuleType("unsloth")
+    fake_unsloth.FastLanguageModel = types.SimpleNamespace(
+        from_pretrained=lambda **_kw: (_FakeModel(), _FakeTokenizer()),
+        get_peft_model=lambda model, **_kw: model,
+        for_training=lambda model: model,
+        for_inference=lambda model: model,
+    )
+    fake_unsloth.PatchDPOTrainer = lambda: None
+    fake_unsloth.is_bfloat16_supported = lambda: False
+
+    fake_chat_templates = types.ModuleType("unsloth.chat_templates")
+    fake_chat_templates.get_chat_template = lambda tok, **_kw: tok
+    fake_chat_templates.train_on_responses_only = lambda trainer, **_kw: trainer
+
+    class _FakeSplit(list):
+        column_names = ["id", "surface_id", "task", "messages"]
+
+    class _FakeDatasetDict(dict):
+        def map(self, fn, batched: bool = True, remove_columns: object = None):
+            out = _FakeDatasetDict()
+            for k, rows in self.items():
+                batch_msgs = [r["messages"] for r in rows]
+                texts = fn({"messages": batch_msgs})["text"]
+                s = _FakeSplit([{"text": t} for t in texts])
+                s.column_names = ["text"]
+                out[k] = s
+            return out
+
+    fake_datasets = types.ModuleType("datasets")
+
+    def _fake_load_dataset(_fmt: str, data_files: dict[str, str]):
+        res = _FakeDatasetDict()
+        for k, path_str in data_files.items():
+            lines = Path(path_str).read_text(encoding="utf-8").splitlines()[:4]
+            res[k] = _FakeSplit([json.loads(line) for line in lines if line.strip()])
+        return res
+
+    fake_datasets.load_dataset = _fake_load_dataset
+
+    fake_trl = types.ModuleType("trl")
+
+    class _FakeSFTConfig:
+        def __init__(
+            self,
+            output_dir: str = "",
+            per_device_train_batch_size: int = 2,
+            per_device_eval_batch_size: int = 2,
+            gradient_accumulation_steps: int = 4,
+            learning_rate: float = 2e-4,
+            lr_scheduler_type: str = "cosine",
+            warmup_ratio: float = 0.05,
+            num_train_epochs: int = 2,
+            optim: str = "adamw_8bit",
+            weight_decay: float = 0.01,
+            fp16: bool = False,
+            bf16: bool = False,
+            logging_steps: int = 5,
+            save_strategy: str = "epoch",
+            eval_strategy: str = "epoch",
+            dataset_text_field: str = "text",
+            max_length: int = 1536,
+            packing: bool = False,
+            padding_free: bool = False,
+            seed: int = 42,
+            report_to: str = "none",
+        ) -> None:
+            self.output_dir = output_dir
+
+    class _FakeSFTTrainer:
+        def __init__(
+            self,
+            model: object,
+            train_dataset: object,
+            eval_dataset: object,
+            args: object,
+            processing_class: object = None,
+        ) -> None:
+            self.model = model
+            self.state = types.SimpleNamespace(global_step=4)
+
+        def get_train_dataloader(self):
+            return [{"input_ids": _FakeTensor([[1, 2, 3, 4]]), "labels": _FakeTensor([[-100, -100, 3, 4]])}]
+
+        def train(self):
+            return types.SimpleNamespace(training_loss=0.4123)
+
+    fake_trl.SFTConfig = _FakeSFTConfig
+    fake_trl.SFTTrainer = _FakeSFTTrainer
+
+    import ml.crucible.alignment as align_mod
+    import ml.crucible.loss as loss_mod
+
+    orig_modules = {
+        k: sys.modules.get(k)
+        for k in (
+            "torch",
+            "torch.nn",
+            "torch.nn.functional",
+            "unsloth",
+            "unsloth.chat_templates",
+            "datasets",
+            "trl",
+            "peft",
+            "accelerate",
+            "bitsandbytes",
+        )
+    }
+    orig_has_torch = loss_mod.HAS_TORCH
+    orig_align_torch = align_mod.HAS_TORCH
+    orig_env_sft = os.environ.get("LEXEL_SFT_OUT")
+    orig_env_s2 = os.environ.get("LEXEL_STAGE2_OUT")
+    orig_env_s1 = os.environ.get("LEXEL_STAGE1_ADAPTER")
+
+    try:
+        sys.modules["torch"] = fake_torch
+        sys.modules["torch.nn"] = fake_torch.nn
+        sys.modules["torch.nn.functional"] = fake_torch.nn.functional
+        sys.modules["unsloth"] = fake_unsloth
+        sys.modules["unsloth.chat_templates"] = fake_chat_templates
+        sys.modules["datasets"] = fake_datasets
+        sys.modules["trl"] = fake_trl
+        sys.modules["peft"] = types.ModuleType("peft")
+        sys.modules["accelerate"] = types.ModuleType("accelerate")
+        sys.modules["bitsandbytes"] = types.ModuleType("bitsandbytes")
+
+        loss_mod.HAS_TORCH = True
+        loss_mod.torch = fake_torch
+        loss_mod.F = fake_torch.nn.functional
+        align_mod.HAS_TORCH = True
+        align_mod.torch = fake_torch
+
+        sft_out = tmp_path / "sft_out"
+        s2_out = tmp_path / "stage2_out"
+        os.environ["LEXEL_SFT_OUT"] = str(sft_out)
+        os.environ["LEXEL_STAGE1_ADAPTER"] = str(sft_out / "adapter")
+        os.environ["LEXEL_STAGE2_OUT"] = str(s2_out)
+
+        # Monkeypatch run_masked_simpo_alignment to run 2 fast steps during the simulation
+        orig_run_simpo = align_mod.run_masked_simpo_alignment
+
+        def _fast_simpo(*args: object, **kwargs: object):
+            kwargs["max_steps"] = 2
+            return orig_run_simpo(*args, **kwargs)
+
+        align_mod.run_masked_simpo_alignment = _fast_simpo  # type: ignore[assignment]
+
+        shared_ns: dict[str, object] = {"__name__": "__main__"}
+        for idx, cell in enumerate(nb_data["cells"]):
+            if cell["cell_type"] != "code":
+                continue
+            code_str = "".join(cell["source"])
+            exec(compile(code_str, f"lexel-end-to-end-kaggle.ipynb#cell_{idx}", "exec"), shared_ns)
+
+        assert (sft_out / "run_manifest.json").is_file()
+        assert (s2_out / "heldout_eval_report.json").is_file()
+        assert (s2_out / "gguf" / "qwen2.5-1.5b-instruct-q4_k_m.gguf").is_file()
+        assert (s2_out / "gguf" / "SHA256SUMS").is_file()
+        assert (s2_out / "gguf" / "manifest.json").is_file()
+
+        # Also execute lexel-sft-kaggle.ipynb and lexel-dpo-gguf-kaggle.ipynb top-to-bottom
+        for single_nb_name in ("lexel-sft-kaggle.ipynb", "lexel-dpo-gguf-kaggle.ipynb"):
+            single_doc = json.loads((REPO_ROOT / "ml" / "kaggle" / single_nb_name).read_text(encoding="utf-8"))
+            single_ns: dict[str, object] = {"__name__": "__main__"}
+            for c_idx, c_cell in enumerate(single_doc["cells"]):
+                if c_cell["cell_type"] != "code":
+                    continue
+                c_src = "".join(c_cell["source"])
+                exec(compile(c_src, f"{single_nb_name}#cell_{c_idx}", "exec"), single_ns)
+
+        # Also test standalone Kaggle mode (where ml.crucible is NOT on the filesystem and the notebook uses its built-in bootstrap)
+        dpo_doc = json.loads((REPO_ROOT / "ml" / "kaggle" / "lexel-dpo-gguf-kaggle.ipynb").read_text(encoding="utf-8"))
+        standalone_ns: dict[str, object] = {"__name__": "__main__"}
+        for c_idx, c_cell in enumerate(dpo_doc["cells"]):
+            if c_cell["cell_type"] != "code":
+                continue
+            c_src = "".join(c_cell["source"]).replace(
+                "from ml.crucible.alignment import",
+                "from _nonexistent_kaggle_pkg import",
+            )
+            if "for idx, row in enumerate(dpo_pairs):" in c_src:
+                c_src = c_src.replace("for idx, row in enumerate(dpo_pairs):", "for idx, row in enumerate(dpo_pairs[:4]):")
+            exec(compile(c_src, f"standalone#cell_{c_idx}", "exec"), standalone_ns)
+    finally:
+        loss_mod.HAS_TORCH = orig_has_torch
+        align_mod.HAS_TORCH = orig_align_torch
+        for k, mod in orig_modules.items():
+            if mod is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = mod
+        for env_k, orig_v in (
+            ("LEXEL_SFT_OUT", orig_env_sft),
+            ("LEXEL_STAGE2_OUT", orig_env_s2),
+            ("LEXEL_STAGE1_ADAPTER", orig_env_s1),
+        ):
+            if orig_v is None:
+                os.environ.pop(env_k, None)
+            else:
+                os.environ[env_k] = orig_v

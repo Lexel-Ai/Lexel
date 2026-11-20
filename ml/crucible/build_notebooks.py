@@ -82,38 +82,63 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 if "KAGGLE_KERNEL_RUN_TYPE" in os.environ and "CUDA_VISIBLE_DEVICES" not in os.environ:
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
+def _pkg_installed(name: str) -> bool:
+    if name in sys.modules:
+        return True
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ValueError, ImportError):
+        return False
+
 def ensure_training_packages() -> None:
     required = ("trl", "peft", "datasets", "accelerate", "bitsandbytes")
-    missing = [pkg for pkg in required if importlib.util.find_spec(pkg) is None]
-    has_unsloth = importlib.util.find_spec("unsloth") is not None
+    missing = [pkg for pkg in required if not _pkg_installed(pkg)]
+    has_unsloth = _pkg_installed("unsloth")
 
     if "KAGGLE_KERNEL_RUN_TYPE" in os.environ and (missing or not has_unsloth):
         print("Installing Unsloth + QLoRA training dependencies for Kaggle GPU...")
-        subprocess.check_call(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "-q",
-                "--upgrade",
-                "unsloth",
-                "unsloth_zoo",
-                "trl",
-                "peft",
-                "accelerate",
-                "bitsandbytes",
-                "datasets",
-            ]
-        )
+        try:
+            subprocess.check_call(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "-q",
+                    "--upgrade",
+                    "unsloth",
+                    "unsloth_zoo",
+                    "trl",
+                    "peft",
+                    "accelerate",
+                    "bitsandbytes",
+                    "datasets",
+                ]
+            )
+        except Exception as pip_exc:
+            print(f"WARNING: pip install failed ({pip_exc}). Make sure 'Internet' is enabled in Kaggle Settings -> Turn on Internet.")
     elif missing:
         print(f"Installing missing packages: {missing}")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", *missing])
 
 ensure_training_packages()
 
+# Import unsloth BEFORE torch/transformers/trl so Unsloth's kernel patches apply cleanly
+try:
+    import unsloth
+    from unsloth import FastLanguageModel, is_bfloat16_supported
+    from unsloth.chat_templates import get_chat_template, train_on_responses_only
+    HAS_UNSLOTH = True
+except Exception as exc:
+    print(f"Unsloth fast path unavailable ({exc}); using standard Transformers + PEFT + TRL fallback.")
+    HAS_UNSLOTH = False
+
 import torch
-print(f"PyTorch: {torch.__version__} | CUDA available: {torch.cuda.is_available()}")
+if not HAS_UNSLOTH:
+    def is_bfloat16_supported() -> bool:
+        return torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8
+
+print(f"PyTorch: {torch.__version__} | CUDA available: {torch.cuda.is_available()} | Unsloth active: {HAS_UNSLOTH}")
 if torch.cuda.is_available():
     print(f"Active GPU: {torch.cuda.get_device_name(0)}")"""
         ),
@@ -125,18 +150,6 @@ import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-
-# Import unsloth first if installed so its kernel optimizations patch transformers/trl cleanly
-try:
-    import unsloth
-    from unsloth import FastLanguageModel, is_bfloat16_supported
-    from unsloth.chat_templates import get_chat_template, train_on_responses_only
-    HAS_UNSLOTH = True
-except Exception as exc:
-    print(f"Unsloth fast path unavailable ({exc}); using standard Transformers + PEFT + TRL fallback.")
-    HAS_UNSLOTH = False
-    def is_bfloat16_supported() -> bool:
-        return torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8
 
 from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer
@@ -503,30 +516,41 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 if "KAGGLE_KERNEL_RUN_TYPE" in os.environ and "CUDA_VISIBLE_DEVICES" not in os.environ:
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
+def _pkg_installed(name: str) -> bool:
+    if name in sys.modules:
+        return True
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ValueError, ImportError):
+        return False
+
 def ensure_stage2_packages() -> None:
     required = ("trl", "peft", "datasets", "accelerate", "bitsandbytes")
-    missing = [pkg for pkg in required if importlib.util.find_spec(pkg) is None]
-    has_unsloth = importlib.util.find_spec("unsloth") is not None
+    missing = [pkg for pkg in required if not _pkg_installed(pkg)]
+    has_unsloth = _pkg_installed("unsloth")
 
     if "KAGGLE_KERNEL_RUN_TYPE" in os.environ and (missing or not has_unsloth):
         print("Installing Unsloth + Stage 2 alignment dependencies for Kaggle GPU...")
-        subprocess.check_call(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "-q",
-                "--upgrade",
-                "unsloth",
-                "unsloth_zoo",
-                "trl",
-                "peft",
-                "accelerate",
-                "bitsandbytes",
-                "datasets",
-            ]
-        )
+        try:
+            subprocess.check_call(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "install",
+                    "-q",
+                    "--upgrade",
+                    "unsloth",
+                    "unsloth_zoo",
+                    "trl",
+                    "peft",
+                    "accelerate",
+                    "bitsandbytes",
+                    "datasets",
+                ]
+            )
+        except Exception as pip_exc:
+            print(f"WARNING: pip install failed ({pip_exc}). Make sure 'Internet' is enabled in Kaggle Settings -> Turn on Internet.")
     elif missing:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", *missing])
 
@@ -536,6 +560,7 @@ ensure_stage2_packages()
 try:
     import unsloth
     from unsloth import FastLanguageModel, PatchDPOTrainer, is_bfloat16_supported
+    from unsloth.chat_templates import get_chat_template, train_on_responses_only
     PatchDPOTrainer()
     HAS_UNSLOTH = True
 except Exception as exc:
