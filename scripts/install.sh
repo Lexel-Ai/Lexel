@@ -143,7 +143,7 @@ install_from_repo() {
     (cd "${repo_dir}" && pnpm install && pnpm run build:desktop)
 
     echo "[3/4] Building Lexel Desktop native application..."
-    if (cd "${repo_dir}" && cargo build --release --manifest-path apps/lexel-desktop/src-tauri/Cargo.toml); then
+    if (cd "${repo_dir}" && cargo build --release --manifest-path apps/lexel-desktop/src-tauri/Cargo.toml --features tauri/custom-protocol); then
       local desktop_bin="${repo_dir}/apps/lexel-desktop/src-tauri/target/release/lexel-desktop"
       if [[ -x "${desktop_bin}" ]]; then
         install -m 0755 "${desktop_bin}" "${BIN_DIR}/lexel-desktop"
