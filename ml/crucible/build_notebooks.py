@@ -1115,11 +1115,12 @@ if HAS_UNSLOTH and hasattr(model, "save_pretrained_gguf"):
     except Exception as gguf_exc:
         print(f"Note: Unsloth GGUF conversion encountered environment limit ({gguf_exc}).")
 
-# Locate exported .gguf (Unsloth may write to GGUF_OUT_DIR or current working directory)
+# Locate exported .gguf (Unsloth may write to GGUF_OUT_DIR, gguf_gguf, STAGE2_OUT_DIR, or current working directory)
 exported_ggufs = [
     *sorted(GGUF_OUT_DIR.glob("*.gguf")),
-    *sorted(STAGE2_OUT_DIR.glob("*.gguf")),
-    *sorted(Path.cwd().glob("*.gguf")),
+    *sorted(STAGE2_OUT_DIR.glob("gguf_gguf/*.gguf")),
+    *sorted(STAGE2_OUT_DIR.rglob("*.gguf")),
+    *sorted(Path.cwd().rglob("*.gguf")),
 ]
 if exported_ggufs and not target_gguf.exists():
     exported_ggufs[0].rename(target_gguf)
@@ -1136,11 +1137,11 @@ else:
     model.save_pretrained(str(merged_dir))
     tokenizer.save_pretrained(str(merged_dir))
     gguf_sha256 = (
-        "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e"
+        "2c5b06b2b2a8d9aaa5cfbebb8993f86ccd10fec779790db3168abd89d8314e50"
         if MODEL_TIER == "lexel-1.5b"
         else "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db"
     )
-    gguf_size_bytes = 1117320736 if MODEL_TIER == "lexel-1.5b" else 491400032
+    gguf_size_bytes = 986048224 if MODEL_TIER == "lexel-1.5b" else 491400032
 
 sha256sums_path = GGUF_OUT_DIR / "SHA256SUMS"
 sha256sums_path.write_text(f"{gguf_sha256}  {canonical_filename}\\n", encoding="utf-8")
@@ -1170,10 +1171,10 @@ desktop_manifest = {
             "ollamaTag": "qwen2.5:1.5b",
             "ggufRepo": "Qwen/Qwen2.5-1.5B-Instruct-GGUF",
             "ggufFilename": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-            "ggufUrl": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf".replace("Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/", "Qwen2.5-1.5B-Instruct-GGUF/resolve/main/"),
-            "sha256": gguf_sha256 if MODEL_TIER == "lexel-1.5b" else "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
-            "sizeBytes": gguf_size_bytes if MODEL_TIER == "lexel-1.5b" else 1117320736,
-            "approxRamMb": 1050,
+            "ggufUrl": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+            "sha256": gguf_sha256 if MODEL_TIER == "lexel-1.5b" else "2c5b06b2b2a8d9aaa5cfbebb8993f86ccd10fec779790db3168abd89d8314e50",
+            "sizeBytes": gguf_size_bytes if MODEL_TIER == "lexel-1.5b" else 986048224,
+            "approxRamMb": 950,
         },
     ],
 }
