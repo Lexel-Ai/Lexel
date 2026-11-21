@@ -1,0 +1,33 @@
+{
+  "generatedAt": "2026-11-21T15:34:49+00:00",
+  "modelTier": "lexel-1.5b",
+  "status": "exported",
+  "entries": [
+    {
+      "id": "lexel-1.5b",
+      "tier": "standard",
+      "label": "Lexel 1.5B (Standard)",
+      "description": "Fine-tuned Lexel 1.5B (Standard) (Q4_K_M) anti-slop rewrite model.",
+      "ollamaTag": "qwen2.5:1.5b",
+      "ggufRepo": "Lexel-Ai/Lexel",
+      "ggufFilename": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      "ggufUrl": "https://github.com/Lexel-Ai/Lexel/releases/download/models-v2/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      "sha256": "c5956aa380b5c16456f581e35731c047f3c7b5601f817aaf38f0a9e78457fb30",
+      "sizeBytes": 986048224,
+      "approxRamMb": 950
+    },
+    {
+      "id": "lexel-1.5b-q5",
+      "tier": "standard",
+      "label": "Lexel 1.5B (Standard) [Q5_K_M]",
+      "description": "Fine-tuned Lexel 1.5B (Standard) (Q5_K_M) anti-slop rewrite model.",
+      "ollamaTag": "qwen2.5:1.5b",
+      "ggufRepo": "Lexel-Ai/Lexel",
+      "ggufFilename": "qwen2.5-1.5b-instruct-q5_k_m.gguf",
+      "ggufUrl": "https://github.com/Lexel-Ai/Lexel/releases/download/models-v2/qwen2.5-1.5b-instruct-q5_k_m.gguf",
+      "sha256": "5930b3269aed7a1bf9951b36cef95bc0728ce9242a05d992f493e718cac7ecb9",
+      "sizeBytes": 1125050080,
+      "approxRamMb": 1150
+    }
+  ]
+}

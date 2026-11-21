@@ -23,8 +23,8 @@
       "ollamaTag": "qwen2.5:1.5b",
       "ggufRepo": "Lexel-Ai/Lexel",
       "ggufFilename": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-      "ggufUrl": "https://github.com/Lexel-Ai/Lexel/releases/download/models-v1/qwen2.5-1.5b-instruct-q4_k_m.gguf",
-      "sha256": "2c5b06b2b2a8d9aaa5cfbebb8993f86ccd10fec779790db3168abd89d8314e50",
+      "ggufUrl": "https://github.com/Lexel-Ai/Lexel/releases/download/models-v2/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      "sha256": "c5956aa380b5c16456f581e35731c047f3c7b5601f817aaf38f0a9e78457fb30",
       "sizeBytes": 986048224,
       "approxRamMb": 950
     }

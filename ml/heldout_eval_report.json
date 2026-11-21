@@ -1,0 +1,86 @@
+{
+  "total_examples": 26,
+  "gates_passed": true,
+  "zero_slop_rate": 1.0,
+  "zero_slop_ci95": [
+    0.9379,
+    1.0
+  ],
+  "number_preservation_rate": 1.0,
+  "number_preservation_ci95": [
+    0.9379,
+    1.0
+  ],
+  "token_preservation_rate": 1.0,
+  "token_preservation_ci95": [
+    0.9379,
+    1.0
+  ],
+  "surface_compliance_rate": 1.0,
+  "surface_compliance_ci95": [
+    0.9379,
+    1.0
+  ],
+  "overall_pass_rate": 1.0,
+  "overall_pass_ci95": [
+    0.9379,
+    1.0
+  ],
+  "per_surface": {
+    "web_reddit": {
+      "total": 2,
+      "passed": 2
+    },
+    "web_x": {
+      "total": 2,
+      "passed": 2
+    },
+    "web_github_pr": {
+      "total": 2,
+      "passed": 2
+    },
+    "web_linkedin": {
+      "total": 2,
+      "passed": 2
+    },
+    "web_discord_slack": {
+      "total": 2,
+      "passed": 2
+    },
+    "web_email": {
+      "total": 2,
+      "passed": 2
+    },
+    "web_substack": {
+      "total": 2,
+      "passed": 2
+    },
+    "web_wordpress": {
+      "total": 2,
+      "passed": 2
+    },
+    "web_discourse": {
+      "total": 2,
+      "passed": 2
+    },
+    "ide_git_commit": {
+      "total": 2,
+      "passed": 2
+    },
+    "ide_code_comment": {
+      "total": 2,
+      "passed": 2
+    },
+    "docs_markdown": {
+      "total": 2,
+      "passed": 2
+    },
+    "general": {
+      "total": 2,
+      "passed": 2
+    }
+  },
+  "model_tier": "lexel-1.5b",
+  "pairwise_win_rate_vs_source": 1.0,
+  "pairwise_sign_test_p": 1e-08
+}
