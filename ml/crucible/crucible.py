@@ -504,21 +504,28 @@ class IntegrityAndLeakageGate:
         self.leakage_threshold = leakage_threshold
         self.seen_hashes: set[str] = set()
         self.seen_5grams: list[tuple[str, set[tuple[str, ...]]]] = []
+        self._seen_5gram_index: dict[tuple[str, ...], list[int]] = {}
         self.heldout_8grams: list[tuple[str, set[tuple[str, ...]]]] = []
+        self._heldout_8gram_index: dict[tuple[str, ...], list[int]] = {}
 
     def reset_state(self) -> None:
         self.seen_hashes.clear()
         self.seen_5grams.clear()
+        self._seen_5gram_index.clear()
 
     def register_heldout_corpus(
         self, heldout_texts: Sequence[tuple[str, str]]
     ) -> None:
         """Register held-out benchmark examples `(task_id, text)` for 8-gram leakage detection."""
         self.heldout_8grams = []
+        self._heldout_8gram_index = {}
         for task_id, text in heldout_texts:
             shingles_8 = extract_shingles(text, k=8)
             if shingles_8:
+                doc_idx = len(self.heldout_8grams)
                 self.heldout_8grams.append((task_id, shingles_8))
+                for sh in shingles_8:
+                    self._heldout_8gram_index.setdefault(sh, []).append(doc_idx)
 
     def evaluate(
         self,
@@ -565,13 +572,22 @@ class IntegrityAndLeakageGate:
         if is_exact_dup:
             violations.append(f"Exact SHA-256 duplicate detected ({sha256_hex[:12]})")
 
-        # 4. 5-gram Jaccard near-duplicate check (< 0.85)
+        # 4. 5-gram Jaccard near-duplicate check (< 0.85) via inverted index
         shingles_5 = extract_shingles(stripped, k=5)
         max_jaccard = 0.0
         nearest_id = None
-        if len(extract_words(stripped)) >= 8:
-            for prev_id, prev_5 in self.seen_5grams:
-                sim = jaccard_similarity(shingles_5, prev_5)
+        if len(extract_words(stripped)) >= 8 and shingles_5:
+            overlap_counts_5: Counter[int] = Counter()
+            for sh in shingles_5:
+                postings = self._seen_5gram_index.get(sh)
+                if postings:
+                    for doc_idx in postings:
+                        overlap_counts_5[doc_idx] += 1
+            n_curr = len(shingles_5)
+            for doc_idx, inter in overlap_counts_5.items():
+                prev_id, prev_5 = self.seen_5grams[doc_idx]
+                union = n_curr + len(prev_5) - inter
+                sim = inter / union if union > 0 else 0.0
                 if sim > max_jaccard:
                     max_jaccard = sim
                     nearest_id = prev_id
@@ -581,27 +597,38 @@ class IntegrityAndLeakageGate:
                     )
                     break
 
-        # 5. 8-gram train/heldout leakage check (< 0.30 containment)
+        # 5. 8-gram train/heldout leakage check (< 0.30 containment) via inverted index
         shingles_8 = extract_shingles(stripped, k=8)
         max_containment = 0.0
         leaked_task_id = None
-        for h_id, h_8 in self.heldout_8grams:
-            if not h_8:
-                continue
-            containment = len(shingles_8 & h_8) / len(h_8)
-            if containment > max_containment:
-                max_containment = containment
-                leaked_task_id = h_id
-            if containment >= self.leakage_threshold:
-                violations.append(
-                    f"8-gram held-out leakage ({containment:.2f} >= {self.leakage_threshold}) against {h_id}"
-                )
-                break
+        if shingles_8 and self._heldout_8gram_index:
+            overlap_counts_8: Counter[int] = Counter()
+            for sh in shingles_8:
+                postings = self._heldout_8gram_index.get(sh)
+                if postings:
+                    for h_idx in postings:
+                        overlap_counts_8[h_idx] += 1
+            for h_idx, inter in overlap_counts_8.items():
+                h_id, h_8 = self.heldout_8grams[h_idx]
+                if not h_8:
+                    continue
+                containment = inter / len(h_8)
+                if containment > max_containment:
+                    max_containment = containment
+                    leaked_task_id = h_id
+                if containment >= self.leakage_threshold:
+                    violations.append(
+                        f"8-gram held-out leakage ({containment:.2f} >= {self.leakage_threshold}) against {h_id}"
+                    )
+                    break
 
         if register_in_corpus and not violations:
             self.seen_hashes.add(sha256_hex)
             if shingles_5:
+                doc_idx = len(self.seen_5grams)
                 self.seen_5grams.append((example_id, shingles_5))
+                for sh in shingles_5:
+                    self._seen_5gram_index.setdefault(sh, []).append(doc_idx)
 
         passed = len(violations) == 0
         return GateResult(

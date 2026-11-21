@@ -35,6 +35,10 @@ export default defineConfig(({ mode }) => {
             src: '../../vendor/harper/packages/harper.js/dist/harper_wasm_bg.wasm',
             dest: './public/wasm',
           },
+          {
+            src: '../../packages/lexel-wasm/pkg/lexel_wasm_bg.wasm',
+            dest: './public/wasm',
+          },
         ],
       }) as unknown as PluginOption,
       tailwindcss(),

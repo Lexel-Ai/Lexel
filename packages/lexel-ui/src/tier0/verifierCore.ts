@@ -1,6 +1,16 @@
 import surfacesData from '../../../../ml/personas/surfaces.json';
 import type { GateCheckSummary } from '../components/RewriteDiffCard';
 import {
+  detectPastedAi,
+  isBlufSurface,
+  scanBlufAndWalls,
+  scanConsistencyIssues,
+  scanCrutchWords,
+  scanRegretShield,
+  scanWritingGuards,
+  scoreSlopMeter,
+} from './checks';
+import {
   applySafeFixesForProfile,
   applyStyleGuideFixes,
   findSlopMatchesWithConfig,
@@ -15,7 +25,27 @@ import {
   scanStructureIssues,
   scanStyleGuide,
 } from './secretsAndFixes';
-import type { SurfaceId, SurfaceProfile, Tier0Lint, Tier0Options, UnitBoundMetric } from './types';
+import type {
+  ConsistencyIssue,
+  SlopMeterReport,
+  SurfaceId,
+  SurfaceProfile,
+  Tier0Lint,
+  Tier0Options,
+  UnitBoundMetric,
+  WritingGuardHit,
+} from './types';
+
+export {
+  detectPastedAi,
+  isBlufSurface,
+  scanBlufAndWalls,
+  scanConsistencyIssues,
+  scanCrutchWords,
+  scanRegretShield,
+  scanWritingGuards,
+  scoreSlopMeter,
+};
 
 export const BUILTIN_SURFACES: readonly SurfaceProfile[] =
   surfacesData.surfaces as SurfaceProfile[];
@@ -123,7 +153,7 @@ function makeLint(
   };
 }
 
-/** Scan text for deterministic slop, surface violations, commit conventions, secrets, invisible chars, structure, and style guide rules. */
+/** Scan text for deterministic slop, surface violations, commit conventions, secrets, invisible chars, structure, style guide, consistency, guards, and slop meter. */
 export function scanTier0DiagnosticsShared(
   text: string,
   profile: SurfaceProfile,
@@ -135,7 +165,12 @@ export function scanTier0DiagnosticsShared(
   invisibleLints: Tier0Lint[];
   structureLints: Tier0Lint[];
   styleGuideLints: Tier0Lint[];
+  consistencyLints: Tier0Lint[];
+  guardLints: Tier0Lint[];
   secrets: SecretMatch[];
+  slopMeter: SlopMeterReport;
+  consistencyIssues: ConsistencyIssue[];
+  guardHits: WritingGuardHit[];
 } {
   const slopLints: Tier0Lint[] = [];
   const surfaceLints: Tier0Lint[] = [];
@@ -407,6 +442,54 @@ export function scanTier0DiagnosticsShared(
     );
   }
 
+  const consistencyLints: Tier0Lint[] = [];
+  const consistencyIssues = scanConsistencyIssues(text, options?.preferredDialect);
+  for (const issue of consistencyIssues) {
+    consistencyLints.push(
+      makeLint(
+        text,
+        issue.start,
+        issue.end,
+        'Style',
+        'LexelConsistency',
+        escapeHtml(issue.message),
+        [{ kind: 0, replacement_text: issue.preferred }],
+      ),
+    );
+  }
+
+  const guardLints: Tier0Lint[] = [];
+  const guardHits = scanWritingGuards(
+    text,
+    profile.id,
+    options?.crutchWords,
+    options?.hasAttachmentSignal ?? false,
+  );
+  for (const hit of guardHits) {
+    const suggestions =
+      hit.suggestion !== undefined
+        ? [{ kind: hit.suggestion === '' ? 1 : 0, replacement_text: hit.suggestion }]
+        : [];
+    guardLints.push(
+      makeLint(
+        text,
+        hit.start,
+        hit.end,
+        hit.severity === 'warning' ? 'Usage' : 'Style',
+        'LexelGuard',
+        escapeHtml(hit.message),
+        suggestions,
+      ),
+    );
+  }
+
+  const slopMeter = scoreSlopMeter(text, {
+    allowEmDashes: profile.allowEmDashes,
+    customSlopTerms: options?.customSlopTerms,
+    disabledSlopTerms: options?.disabledSlopTerms,
+    surfaceBannedOpeners: profile.bannedOpeners,
+  });
+
   return {
     slopLints,
     surfaceLints,
@@ -414,7 +497,12 @@ export function scanTier0DiagnosticsShared(
     invisibleLints,
     structureLints,
     styleGuideLints,
+    consistencyLints,
+    guardLints,
     secrets,
+    slopMeter,
+    consistencyIssues,
+    guardHits,
   };
 }
 

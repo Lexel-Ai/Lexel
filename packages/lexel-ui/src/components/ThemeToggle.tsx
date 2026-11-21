@@ -1,4 +1,3 @@
-import React from 'react';
 import { MoonIcon, SunIcon } from './Icons';
 
 export interface ThemeToggleProps {
@@ -14,12 +13,7 @@ export function ThemeToggle({ theme, onToggle }: ThemeToggleProps) {
       onClick={onToggle}
       aria-label={nextLabel}
       title={nextLabel}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-[6px] border transition-colors"
-      style={{
-        backgroundColor: 'var(--lx-muted)',
-        borderColor: 'var(--lx-border)',
-        color: 'var(--lx-fg)',
-      }}
+      className="lx-pressable lx-btn-secondary inline-flex h-8 w-8 items-center justify-center"
     >
       {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
     </button>

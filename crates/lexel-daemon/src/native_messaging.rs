@@ -26,6 +26,10 @@ struct NativeResponse {
     id: Option<serde_json::Value>,
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    done: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     data: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
@@ -83,6 +87,18 @@ pub async fn forward_rpc_to_loopback(
     let (method, path, body_payload): (reqwest::Method, String, Option<serde_json::Value>) =
         match kind {
             "status" => (reqwest::Method::GET, "/v1/status".to_owned(), None),
+            "doctor" => {
+                let bench = payload
+                    .get("bench")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let path = if bench {
+                    "/v1/doctor?bench=true".to_owned()
+                } else {
+                    "/v1/doctor".to_owned()
+                };
+                (reqwest::Method::GET, path, None)
+            }
             "toggleAi" => (
                 reqwest::Method::POST,
                 "/v1/ai/toggle".to_owned(),
@@ -111,6 +127,70 @@ pub async fn forward_rpc_to_loopback(
                 reqwest::Method::POST,
                 "/v1/rewrite".to_owned(),
                 Some(payload.clone()),
+            ),
+            "complete" | "ghostComplete" => (
+                reqwest::Method::POST,
+                "/v1/complete".to_owned(),
+                Some(payload.clone()),
+            ),
+            "scopeThreadContext" => (
+                reqwest::Method::POST,
+                "/v1/context/scope".to_owned(),
+                Some(payload.clone()),
+            ),
+            "redactPreview" => (
+                reqwest::Method::POST,
+                "/v1/tier0/redact-preview".to_owned(),
+                Some(payload.clone()),
+            ),
+            "listSnippets" => (reqwest::Method::GET, "/v1/snippets".to_owned(), None),
+            "expandSnippet" => (
+                reqwest::Method::POST,
+                "/v1/snippets/expand".to_owned(),
+                Some(payload.clone()),
+            ),
+            "transcribe" => (
+                reqwest::Method::POST,
+                "/v1/transcribe".to_owned(),
+                Some(payload.clone()),
+            ),
+            "weeklyInsights" => {
+                let days = payload.get("days").and_then(|v| v.as_u64()).unwrap_or(7);
+                (
+                    reqwest::Method::GET,
+                    format!("/v1/analytics/insights?days={days}"),
+                    None,
+                )
+            }
+            "getCrutchWords" => (
+                reqwest::Method::GET,
+                "/v1/settings/crutch-words".to_owned(),
+                None,
+            ),
+            "setCrutchWords" => (
+                reqwest::Method::PUT,
+                "/v1/settings/crutch-words".to_owned(),
+                Some(payload.clone()),
+            ),
+            "toggleCrutchWord" => (
+                reqwest::Method::POST,
+                "/v1/settings/crutch-words/toggle".to_owned(),
+                Some(payload.clone()),
+            ),
+            "importVoiceExamples" => (
+                reqwest::Method::POST,
+                "/v1/voice-examples/import".to_owned(),
+                Some(payload.clone()),
+            ),
+            "voiceStyleStats" => (
+                reqwest::Method::GET,
+                "/v1/voice-examples/style-stats".to_owned(),
+                None,
+            ),
+            "exportSimpo" => (
+                reqwest::Method::GET,
+                "/v1/voice-examples/export-simpo".to_owned(),
+                None,
             ),
             "patchSettings" => {
                 let patch = payload
@@ -262,6 +342,142 @@ pub async fn forward_rpc_to_loopback(
     }
 }
 
+/// Stream SSE frames from a running loopback daemon's `/v1/rewrite/stream` endpoint directly into
+/// Native Messaging chunk frames on `writer`. Returns `None` if no loopback daemon is reachable.
+pub async fn forward_rewrite_stream_to_loopback<W: Write>(
+    http_port: u16,
+    token: &str,
+    id: &Option<serde_json::Value>,
+    payload: &serde_json::Value,
+    writer: &mut W,
+) -> Option<io::Result<()>> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_millis(250))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .ok()?;
+
+    let url = format!("http://127.0.0.1:{http_port}/v1/rewrite/stream");
+    let mut resp = match client
+        .post(&url)
+        .bearer_auth(token)
+        .json(payload)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return None,
+    };
+
+    if !resp.status().is_success() {
+        let err_msg = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "daemon streaming request failed".to_owned());
+        let frame = NativeResponse {
+            id: id.clone(),
+            ok: false,
+            stream: Some(true),
+            done: Some(true),
+            data: None,
+            error: Some(err_msg),
+        };
+        let encoded = match serde_json::to_vec(&frame) {
+            Ok(b) => b,
+            Err(e) => return Some(Err(io::Error::other(e))),
+        };
+        return Some(write_frame(writer, &encoded));
+    }
+
+    let mut pending = String::new();
+    let mut current_event = String::new();
+    let mut saw_terminal = false;
+
+    while let Ok(Some(bytes)) = resp.chunk().await {
+        pending.push_str(&String::from_utf8_lossy(&bytes));
+        while let Some(pos) = pending.find('\n') {
+            let line = pending[..pos].trim_end_matches('\r').to_owned();
+            pending.drain(..=pos);
+            if line.is_empty() {
+                current_event.clear();
+                continue;
+            }
+            if let Some(ev) = line.strip_prefix("event:") {
+                current_event = ev.trim().to_owned();
+                continue;
+            }
+            let Some(data_raw) = line.strip_prefix("data:") else {
+                continue;
+            };
+            let data_raw = data_raw.trim();
+            let parsed = serde_json::from_str::<serde_json::Value>(data_raw).ok();
+
+            let frame = match current_event.as_str() {
+                "chunk" => NativeResponse {
+                    id: id.clone(),
+                    ok: true,
+                    stream: Some(true),
+                    done: Some(false),
+                    data: parsed,
+                    error: None,
+                },
+                "complete" => {
+                    saw_terminal = true;
+                    NativeResponse {
+                        id: id.clone(),
+                        ok: true,
+                        stream: Some(true),
+                        done: Some(true),
+                        data: parsed,
+                        error: None,
+                    }
+                }
+                "error" => {
+                    saw_terminal = true;
+                    let msg = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("error"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| data_raw.to_owned());
+                    NativeResponse {
+                        id: id.clone(),
+                        ok: false,
+                        stream: Some(true),
+                        done: Some(true),
+                        data: None,
+                        error: Some(msg),
+                    }
+                }
+                _ => continue,
+            };
+
+            let encoded = match serde_json::to_vec(&frame) {
+                Ok(b) => b,
+                Err(e) => return Some(Err(io::Error::other(e))),
+            };
+            if let Err(err) = write_frame(writer, &encoded) {
+                return Some(Err(err));
+            }
+        }
+    }
+
+    if !saw_terminal {
+        let frame = NativeResponse {
+            id: id.clone(),
+            ok: false,
+            stream: Some(true),
+            done: Some(true),
+            data: None,
+            error: Some("Streaming rewrite ended before completion.".to_owned()),
+        };
+        if let Ok(encoded) = serde_json::to_vec(&frame) {
+            return Some(write_frame(writer, &encoded));
+        }
+    }
+    Some(Ok(()))
+}
+
 /// Run the Chrome/Firefox Native Messaging stdio loop until stdin closes.
 pub async fn run_stdio_loop(service: Arc<DaemonService>) -> io::Result<()> {
     let stdin = io::stdin();
@@ -271,46 +487,164 @@ pub async fn run_stdio_loop(service: Arc<DaemonService>) -> io::Result<()> {
     let token = service.token().ok();
 
     while let Some(bytes) = read_frame(&mut reader)? {
-        let resp = match serde_json::from_slice::<NativeEnvelope>(&bytes) {
-            Ok(env) => {
-                let forwarded = if let Some(tok) = token.as_deref() {
-                    forward_rpc_to_loopback(service.http_port, tok, &env.kind, &env.payload).await
-                } else {
-                    None
-                };
-
-                let outcome = match forwarded {
-                    Some(res) => res,
-                    None => service
-                        .dispatch_rpc(&env.kind, env.payload)
-                        .await
-                        .map_err(|err| err.to_string()),
-                };
-
-                match outcome {
-                    Ok(data) => NativeResponse {
-                        id: env.id,
-                        ok: true,
-                        data: Some(data),
-                        error: None,
-                    },
-                    Err(error) => NativeResponse {
-                        id: env.id,
-                        ok: false,
-                        data: None,
-                        error: Some(error),
-                    },
-                }
-            }
+        let parsed = serde_json::from_slice::<NativeEnvelope>(&bytes);
+        let env = match parsed {
+            Ok(env) => env,
             Err(err) => {
                 warn!("invalid native messaging JSON: {err}");
-                NativeResponse {
+                let resp = NativeResponse {
                     id: None,
                     ok: false,
+                    stream: None,
+                    done: None,
                     data: None,
                     error: Some(format!("Invalid request JSON: {err}")),
+                };
+                let encoded = serde_json::to_vec(&resp).map_err(io::Error::other)?;
+                write_frame(&mut writer, &encoded)?;
+                continue;
+            }
+        };
+
+        if env.kind == "rewriteStream" {
+            if let Some(tok) = token.as_deref()
+                && let Some(res) = forward_rewrite_stream_to_loopback(
+                    service.http_port,
+                    tok,
+                    &env.id,
+                    &env.payload,
+                    &mut writer,
+                )
+                .await
+            {
+                res?;
+                continue;
+            }
+
+            let req_res: Result<crate::service::RewriteRequest, _> =
+                serde_json::from_value(env.payload);
+            match req_res {
+                Ok(req) => {
+                    let id_clone = env.id.clone();
+                    let (chunk_tx, mut chunk_rx) =
+                        tokio::sync::mpsc::unbounded_channel::<crate::runtime::StreamChunk>();
+                    let svc = Arc::clone(&service);
+                    let mut task = tokio::spawn(async move {
+                        svc.rewrite_stream(req, move |chunk| {
+                            let _ = chunk_tx.send(chunk);
+                        })
+                        .await
+                    });
+
+                    let final_outcome = loop {
+                        tokio::select! {
+                            Some(chunk) = chunk_rx.recv() => {
+                                let frame = NativeResponse {
+                                    id: id_clone.clone(),
+                                    ok: true,
+                                    stream: Some(true),
+                                    done: Some(false),
+                                    data: serde_json::to_value(&chunk).ok(),
+                                    error: None,
+                                };
+                                let encoded = serde_json::to_vec(&frame).map_err(io::Error::other)?;
+                                write_frame(&mut writer, &encoded)?;
+                            }
+                            res = &mut task => {
+                                // Drain any buffered chunks before writing the terminal frame.
+                                while let Ok(chunk) = chunk_rx.try_recv() {
+                                    let frame = NativeResponse {
+                                        id: id_clone.clone(),
+                                        ok: true,
+                                        stream: Some(true),
+                                        done: Some(false),
+                                        data: serde_json::to_value(&chunk).ok(),
+                                        error: None,
+                                    };
+                                    let encoded = serde_json::to_vec(&frame).map_err(io::Error::other)?;
+                                    write_frame(&mut writer, &encoded)?;
+                                }
+                                break res;
+                            }
+                        }
+                    };
+
+                    let terminal = match final_outcome {
+                        Ok(Ok(data)) => NativeResponse {
+                            id: env.id,
+                            ok: true,
+                            stream: Some(true),
+                            done: Some(true),
+                            data: serde_json::to_value(data).ok(),
+                            error: None,
+                        },
+                        Ok(Err(err)) => NativeResponse {
+                            id: env.id,
+                            ok: false,
+                            stream: Some(true),
+                            done: Some(true),
+                            data: None,
+                            error: Some(err.to_string()),
+                        },
+                        Err(join_err) => NativeResponse {
+                            id: env.id,
+                            ok: false,
+                            stream: Some(true),
+                            done: Some(true),
+                            data: None,
+                            error: Some(format!("Streaming task failed: {join_err}")),
+                        },
+                    };
+                    let encoded = serde_json::to_vec(&terminal).map_err(io::Error::other)?;
+                    write_frame(&mut writer, &encoded)?;
+                }
+                Err(err) => {
+                    let terminal = NativeResponse {
+                        id: env.id,
+                        ok: false,
+                        stream: Some(true),
+                        done: Some(true),
+                        data: None,
+                        error: Some(format!("Invalid rewriteStream payload: {err}")),
+                    };
+                    let encoded = serde_json::to_vec(&terminal).map_err(io::Error::other)?;
+                    write_frame(&mut writer, &encoded)?;
                 }
             }
+            continue;
+        }
+
+        let forwarded = if let Some(tok) = token.as_deref() {
+            forward_rpc_to_loopback(service.http_port, tok, &env.kind, &env.payload).await
+        } else {
+            None
+        };
+
+        let outcome = match forwarded {
+            Some(res) => res,
+            None => service
+                .dispatch_rpc(&env.kind, env.payload)
+                .await
+                .map_err(|err| err.to_string()),
+        };
+
+        let resp = match outcome {
+            Ok(data) => NativeResponse {
+                id: env.id,
+                ok: true,
+                stream: None,
+                done: None,
+                data: Some(data),
+                error: None,
+            },
+            Err(error) => NativeResponse {
+                id: env.id,
+                ok: false,
+                stream: None,
+                done: None,
+                data: None,
+                error: Some(error),
+            },
         };
 
         let encoded = serde_json::to_vec(&resp).map_err(io::Error::other)?;

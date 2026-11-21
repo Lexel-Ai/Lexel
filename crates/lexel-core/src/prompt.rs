@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::context_scoper::{DEFAULT_THREAD_CONTEXT_MAX_TOKENS, scope_thread_context};
 use crate::{AiTaskId, CoreError, SurfaceCatalog, SurfaceProfile, VoiceExample};
 
 /// Chat message passed to a local inference backend.
@@ -27,6 +28,18 @@ fn task_instruction(task: AiTaskId) -> &'static str {
         }
         AiTaskId::ReplyDraft => {
             "Draft a concise, grounded reply based only on the author draft/notes and the provided thread context. Do not invent facts."
+        }
+        AiTaskId::Direct => {
+            "Make the message direct, crisp, and free of hedging or filler while keeping the tone respectful."
+        }
+        AiTaskId::Softer => {
+            "Keep the core point clear and direct, but remove abrasive phrasing or sharp edges so it reads constructively."
+        }
+        AiTaskId::Bluf => {
+            "Lead with the main ask, decision, or conclusion in the first sentence, then keep supporting context brief."
+        }
+        AiTaskId::NaturalEnglish => {
+            "Rewrite into natural, idiomatic English that sounds like a clear human writer without stiff corporate wording."
         }
     }
 }
@@ -137,8 +150,13 @@ pub fn build_rewrite_messages_with_surfaces(
 
     let mut user_parts = Vec::new();
     if let Some(ctx) = thread_context.map(str::trim).filter(|s| !s.is_empty()) {
-        let clipped: String = ctx.chars().take(1200).collect();
-        user_parts.push(format!("<thread_context>\n{clipped}\n</thread_context>"));
+        let scoped = scope_thread_context(text, ctx, DEFAULT_THREAD_CONTEXT_MAX_TOKENS);
+        if !scoped.scoped_text.is_empty() {
+            user_parts.push(format!(
+                "<thread_context>\n{}\n</thread_context>",
+                scoped.scoped_text
+            ));
+        }
     }
     user_parts.push(format!("<source>\n{}\n</source>", text.trim()));
 
@@ -152,4 +170,151 @@ pub fn build_rewrite_messages_with_surfaces(
             content: user_parts.join("\n\n"),
         },
     ])
+}
+
+/// Build a single guided repair turn listing the exact Tier 2 gate constraints that failed on pass 1.
+pub fn build_repair_messages(
+    base_messages: &[ChatMessage],
+    failed_draft: &str,
+    failed_constraints: &[String],
+) -> Vec<ChatMessage> {
+    let mut messages = base_messages.to_vec();
+    messages.push(ChatMessage {
+        role: "assistant".to_owned(),
+        content: failed_draft.trim().to_owned(),
+    });
+    let bullet_list = failed_constraints
+        .iter()
+        .take(6)
+        .map(|c| format!("- {c}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    messages.push(ChatMessage {
+        role: "user".to_owned(),
+        content: format!(
+            "Fix these exact violations from your previous draft while preserving every fact, number, URL, `[LEXEL_REDACTED_n]` placeholder, and `code` token from <source>:\n{bullet_list}\n\nOutput ONLY the corrected text with no commentary or quotes."
+        ),
+    });
+    messages
+}
+
+/// Build prompt messages for the "Ultra-Short" second take in 2-takes mode.
+pub fn build_ultra_short_take_messages(
+    text: &str,
+    surface_id: &str,
+    subcontext: Option<&str>,
+    thread_context: Option<&str>,
+    voice_examples: &[VoiceExample],
+    custom_surfaces: &[SurfaceProfile],
+) -> Result<Vec<ChatMessage>, CoreError> {
+    let mut messages = build_rewrite_messages_with_surfaces(
+        text,
+        AiTaskId::Shorten,
+        surface_id,
+        subcontext,
+        thread_context,
+        voice_examples,
+        custom_surfaces,
+    )?;
+    if let Some(sys) = messages.first_mut() {
+        sys.content.push_str(
+            "\n- Take style: Ultra-Short. Use the fewest words possible while keeping the core meaning and every number/code token intact.",
+        );
+    }
+    Ok(messages)
+}
+
+/// Build prompt messages for short local ghost-text inline sentence completion (max ~24 tokens).
+pub fn build_completion_messages(
+    prefix: &str,
+    suffix: Option<&str>,
+    surface_id: &str,
+    subcontext: Option<&str>,
+    voice_examples: &[VoiceExample],
+    custom_surfaces: &[SurfaceProfile],
+) -> Result<Vec<ChatMessage>, CoreError> {
+    let catalog = SurfaceCatalog::load_with_custom(custom_surfaces)?;
+    let profile = catalog.get(surface_id)?;
+    let selected = select_relevant_voice_examples(voice_examples, surface_id, prefix, 2);
+
+    let mut system_lines = vec![
+        "You are Lexel, an inline writing autocomplete engine.".to_owned(),
+        "Rules:".to_owned(),
+        "- Output ONLY the next few words (at most 1 short clause or finish the current sentence) that directly continue <prefix>.".to_owned(),
+        "- Do NOT repeat any words from <prefix> or <suffix>.".to_owned(),
+        "- No quotes, no explanations, no em dashes, and no AI buzzwords.".to_owned(),
+        "- Do not invent numbers, metrics, URLs, or facts not implied by <prefix>.".to_owned(),
+        format!("- Surface: {} ({})", profile.label, profile.id),
+        format!("- Style: {}", profile.prompt_directive),
+    ];
+
+    if let Some(sub) = subcontext.map(str::trim).filter(|s| !s.is_empty()) {
+        system_lines.push(format!("- Subcontext: {sub}"));
+    }
+
+    if !selected.is_empty() {
+        system_lines.push("<voice_examples>".to_owned());
+        for ex in selected {
+            let compact = ex
+                .rewritten
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            system_lines.push(format!("- {compact}"));
+        }
+        system_lines.push("</voice_examples>".to_owned());
+    }
+
+    // Keep only the trailing window of prefix to keep KV prefill tiny (<200 tokens).
+    let tail_prefix: String = prefix
+        .chars()
+        .rev()
+        .take(600)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    let mut user_parts = vec![format!("<prefix>{tail_prefix}</prefix>")];
+    if let Some(suf) = suffix.map(str::trim).filter(|s| !s.is_empty()) {
+        let head_suffix: String = suf.chars().take(200).collect();
+        user_parts.push(format!("<suffix>{head_suffix}</suffix>"));
+    }
+
+    Ok(vec![
+        ChatMessage {
+            role: "system".to_owned(),
+            content: system_lines.join("\n"),
+        },
+        ChatMessage {
+            role: "user".to_owned(),
+            content: user_parts.join("\n"),
+        },
+    ])
+}
+
+/// Build prompt messages to adapt an expanded snippet template to the active surface and thread.
+pub fn build_snippet_adapt_messages(
+    expanded_snippet: &str,
+    surface_id: &str,
+    subcontext: Option<&str>,
+    thread_context: Option<&str>,
+    voice_examples: &[VoiceExample],
+    custom_surfaces: &[SurfaceProfile],
+) -> Result<Vec<ChatMessage>, CoreError> {
+    let mut messages = build_rewrite_messages_with_surfaces(
+        expanded_snippet,
+        AiTaskId::RewriteSurface,
+        surface_id,
+        subcontext,
+        thread_context,
+        voice_examples,
+        custom_surfaces,
+    )?;
+    if let Some(sys) = messages.first_mut() {
+        sys.content.push_str(
+            "\n- Adapt this snippet naturally to the platform and thread context without adding fluff or inventing facts.",
+        );
+    }
+    Ok(messages)
 }

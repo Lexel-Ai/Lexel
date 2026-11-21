@@ -1,0 +1,148 @@
+name: Publish Extensions
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build packages without uploading to stores"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-packages:
+    name: Build Extension Store Packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.10.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Build Harper WASM and JS dependencies
+        run: |
+          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          (cd vendor/harper/harper-wasm && wasm-pack build --target web --out-name harper_wasm && wasm-pack build --target web --out-name harper_wasm_slim --no-default-features)
+          (cd vendor/harper && pnpm install --engine-strict=false && pnpm --filter harper.js build && pnpm --filter lint-framework build)
+
+      - name: Build Browser and VS Code packages
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter lexel-ui build
+          pnpm --filter lexel-browser zip:chrome
+          pnpm --filter lexel-browser zip:firefox
+          pnpm --filter lexel-vscode build
+          mkdir -p store-artifacts
+          cp packages/lexel-browser/lexel-chrome.zip store-artifacts/lexel-chrome.zip
+          cp packages/lexel-browser/lexel-firefox.zip store-artifacts/lexel-firefox.zip
+          npx --yes @vscode/vsce package --no-dependencies --out "${GITHUB_WORKSPACE}/store-artifacts/lexel-vscode.vsix" packages/lexel-vscode
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-store-packages
+          path: store-artifacts/*
+
+  publish-chrome-web-store:
+    name: Publish to Chrome Web Store
+    needs: [build-packages]
+    if: ${{ inputs.dry_run != true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-store-packages
+          path: store-artifacts
+
+      - name: Upload and publish Chrome MV3 package
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          if [ -z "${CHROME_EXTENSION_ID}" ] || [ -z "${CHROME_CLIENT_ID}" ] || [ -z "${CHROME_CLIENT_SECRET}" ] || [ -z "${CHROME_REFRESH_TOKEN}" ]; then
+            echo "Chrome Web Store secrets not configured; skipping publish."
+            exit 0
+          fi
+          npx --yes chrome-webstore-upload-cli upload \
+            --source store-artifacts/lexel-chrome.zip \
+            --extension-id "${CHROME_EXTENSION_ID}" \
+            --client-id "${CHROME_CLIENT_ID}" \
+            --client-secret "${CHROME_CLIENT_SECRET}" \
+            --refresh-token "${CHROME_REFRESH_TOKEN}" \
+            --auto-publish
+
+  publish-firefox-amo:
+    name: Publish to Firefox Add-ons (AMO)
+    needs: [build-packages]
+    if: ${{ inputs.dry_run != true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-store-packages
+          path: store-artifacts
+
+      - name: Submit Firefox MV3 package to AMO
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: |
+          if [ -z "${AMO_JWT_ISSUER}" ] || [ -z "${AMO_JWT_SECRET}" ]; then
+            echo "Firefox AMO secrets not configured; skipping publish."
+            exit 0
+          fi
+          mkdir -p firefox-unpacked
+          unzip -q store-artifacts/lexel-firefox.zip -d firefox-unpacked
+          npx --yes web-ext sign \
+            --channel=listed \
+            --source-dir=firefox-unpacked \
+            --api-key="${AMO_JWT_ISSUER}" \
+            --api-secret="${AMO_JWT_SECRET}"
+
+  publish-vscode-marketplace:
+    name: Publish VS Code Extension (Marketplace and Open VSX)
+    needs: [build-packages]
+    if: ${{ inputs.dry_run != true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-store-packages
+          path: store-artifacts
+
+      - name: Publish VSIX to Visual Studio Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "${VSCE_PAT}" ]; then
+            echo "VSCE_PAT secret not configured; skipping Visual Studio Marketplace publish."
+            exit 0
+          fi
+          npx --yes @vscode/vsce publish --packagePath store-artifacts/lexel-vscode.vsix --pat "${VSCE_PAT}"
+
+      - name: Publish VSIX to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "${OVSX_PAT}" ]; then
+            echo "OVSX_PAT secret not configured; skipping Open VSX publish."
+            exit 0
+          fi
+          npx --yes ovsx publish store-artifacts/lexel-vscode.vsix --pat "${OVSX_PAT}"

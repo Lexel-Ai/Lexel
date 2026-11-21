@@ -89,9 +89,15 @@ pub enum ActivationKey {
 pub enum AiTaskId {
     FixGrammarFlow,
     Deslop,
+    #[serde(alias = "polish_comment", alias = "polish_commit")]
     RewriteSurface,
     Shorten,
     ReplyDraft,
+    Direct,
+    Softer,
+    #[serde(alias = "lead_with_ask")]
+    Bluf,
+    NaturalEnglish,
 }
 
 /// Brand or team style guide terminology rule synced across Desktop, Extension, CLI, and LSP.
@@ -106,7 +112,7 @@ pub struct StyleGuideRule {
     pub note: Option<String>,
 }
 
-/// Personal shortcut trigger that expands automatically while typing (e.g. `;sig` -> signature).
+/// Personal shortcut trigger that expands automatically while typing (e.g. `/lgtm`, `;sig`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TextSnippet {
@@ -114,6 +120,12 @@ pub struct TextSnippet {
     pub expansion: String,
     #[serde(default)]
     pub label: String,
+    #[serde(default)]
+    pub surface_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub adapt_to_surface: bool,
+    #[serde(default)]
+    pub category: Option<String>,
 }
 
 /// User-installed or custom-built Harper `.weirpack` synced across Desktop, CLI, and Browser.
@@ -173,6 +185,14 @@ pub struct UnifiedSettings {
     pub style_guide: Vec<StyleGuideRule>,
     #[serde(default)]
     pub snippets: Vec<TextSnippet>,
+    #[serde(default)]
+    pub redact_secrets: bool,
+    #[serde(default)]
+    pub ghost_text_enabled: bool,
+    #[serde(default)]
+    pub crutch_words: Vec<String>,
+    #[serde(default)]
+    pub whisper_model_path: String,
 }
 
 impl Default for UnifiedSettings {
@@ -218,6 +238,10 @@ impl Default for UnifiedSettings {
             weirpacks: Vec::new(),
             style_guide: Vec::new(),
             snippets: Vec::new(),
+            redact_secrets: false,
+            ghost_text_enabled: false,
+            crutch_words: Vec::new(),
+            whisper_model_path: String::new(),
         }
     }
 }

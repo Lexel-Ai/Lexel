@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +60,12 @@ pub struct SurfaceCatalog {
 }
 
 impl SurfaceCatalog {
+    /// Return a lazily initialized process-wide surface catalog built from `ml/personas/surfaces.json`.
+    pub fn shared() -> &'static Self {
+        static SHARED: OnceLock<SurfaceCatalog> = OnceLock::new();
+        SHARED.get_or_init(|| Self::load_embedded().expect("embedded surfaces.json must parse"))
+    }
+
     /// Load embedded platform surface definitions.
     pub fn load_embedded() -> Result<Self, CoreError> {
         Self::load_with_custom(&[])

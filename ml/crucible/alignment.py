@@ -106,6 +106,10 @@ class PreferenceBatchCollator:
             comp_mask = [1] * len(rejected_ids)
 
         r_mask = ([0] * len(prompt_ids) + comp_mask)[: self.max_seq_length]
+        # If truncation clipped past the mutated span, fall back to the retained completion tokens
+        if not any(m > 0 for m in r_mask) and len(r_mask) > len(prompt_ids):
+            for idx in range(len(prompt_ids), len(r_mask)):
+                r_mask[idx] = 1
 
         return {
             "chosen_input_ids": c_input,

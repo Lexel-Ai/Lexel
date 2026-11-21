@@ -4114,8 +4114,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "clap",
  "dirs 7.0.0",
+ "futures-core",
  "lexel-core",
  "lexel-db",
  "reqwest 0.13.5",
@@ -4136,6 +4138,7 @@ version = "0.1.0"
 dependencies = [
  "dirs 7.0.0",
  "lexel-core",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

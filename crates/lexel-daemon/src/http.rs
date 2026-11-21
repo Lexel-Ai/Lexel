@@ -1,21 +1,29 @@
+use std::convert::Infallible;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
+use futures_core::Stream;
 use lexel_core::UnifiedSettings;
 use lexel_db::DatabaseBackup;
 use serde::Deserialize;
+use tokio::sync::mpsc;
 
 use crate::auth::{constant_time_eq, is_allowed_origin};
 use crate::native_messaging::{install_native_hosts, locate_daemon_binary};
 use crate::service::{
-    ApplyPresetRequest, BuildWeirpackRequest, DaemonError, DaemonService, FixAllSafeRequest,
-    ReadabilityRequest, RewriteRequest, SaveDraftRequest, SaveVoiceRequest, SynonymsRequest,
-    Tier0CheckRequest, Tier0FixSafeRequest, TitleCaseRequest, ValidateWeirpackRequest,
+    ApplyPresetRequest, BuildWeirpackRequest, CompletionRequest, CrutchWordsRequest, DaemonError,
+    DaemonService, ExpandSnippetRequest, FixAllSafeRequest, ImportVoiceRequest, ReadabilityRequest,
+    RedactPreviewRequest, RewriteRequest, SaveDraftRequest, SaveVoiceRequest, ScopeContextRequest,
+    SynonymsRequest, Tier0CheckRequest, Tier0FixSafeRequest, TitleCaseRequest,
+    ToggleCrutchWordRequest, TranscribeRequest, ValidateWeirpackRequest,
 };
 
 pub type StateChangeHook = Arc<dyn Fn(&str) + Send + Sync>;
@@ -35,10 +43,44 @@ impl AppState {
     }
 }
 
+struct ChannelSseStream {
+    rx: mpsc::Receiver<Result<Event, Infallible>>,
+}
+
+impl Stream for ChannelSseStream {
+    type Item = Result<Event, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.rx.poll_recv(cx)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct VoiceQuery {
     #[serde(rename = "surfaceId")]
     surface_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DoctorQuery {
+    #[serde(default)]
+    bench: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct InsightsQuery {
+    #[serde(default = "default_seven")]
+    days: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportSimpoQuery {
+    #[serde(rename = "surfaceId")]
+    surface_id: Option<String>,
+    #[serde(rename = "includeAccepted", default)]
+    include_accepted: bool,
+    #[serde(default = "default_simpo_limit")]
+    limit: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,6 +124,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_seven() -> usize {
+    7
+}
+
+fn default_simpo_limit() -> usize {
+    500
+}
+
 /// Build the token-authenticated, strict-Origin loopback Axum router.
 pub fn build_router(service: Arc<DaemonService>, token: String) -> Router {
     build_router_with_notifier(service, token, None)
@@ -101,6 +151,7 @@ pub fn build_router_with_notifier(
 
     let protected = Router::new()
         .route("/v1/status", get(get_status))
+        .route("/v1/doctor", get(get_doctor))
         .route("/v1/profiles", get(get_profiles).post(post_profile))
         .route("/v1/profiles/switch", post(post_switch_profile))
         .route(
@@ -111,18 +162,33 @@ pub fn build_router_with_notifier(
             "/v1/settings",
             get(get_settings).put(put_settings).patch(patch_settings),
         )
+        .route(
+            "/v1/settings/crutch-words",
+            get(get_crutch_words).put(put_crutch_words),
+        )
+        .route(
+            "/v1/settings/crutch-words/toggle",
+            post(post_toggle_crutch_word),
+        )
         .route("/v1/ai/toggle", post(post_ai_toggle))
         .route("/v1/ai/main-model", post(post_ai_main_model))
         .route("/v1/ai/unload", post(post_ai_unload))
         .route("/v1/models/download", post(post_download_model))
         .route("/v1/models/{id}", delete(delete_model))
         .route("/v1/rewrite", post(post_rewrite))
+        .route("/v1/rewrite/stream", post(post_rewrite_stream))
+        .route("/v1/complete", post(post_complete))
+        .route("/v1/context/scope", post(post_scope_context))
+        .route("/v1/snippets", get(get_snippets))
+        .route("/v1/snippets/expand", post(post_expand_snippet))
+        .route("/v1/transcribe", post(post_transcribe))
         .route("/v1/harper/rules", get(get_harper_rules))
         .route("/v1/harper/structured-rules", get(get_structured_rules))
         .route("/v1/harper/apply-preset", post(post_harper_apply_preset))
         .route("/v1/harper/weirpack/build", post(post_weirpack_build))
         .route("/v1/harper/weirpack/validate", post(post_weirpack_validate))
         .route("/v1/tier0/check", post(post_tier0_check))
+        .route("/v1/tier0/redact-preview", post(post_redact_preview))
         .route("/v1/tier0/fix-safe", post(post_tier0_fix_safe))
         .route("/v1/tier0/fix-all-safe", post(post_tier0_fix_all_safe))
         .route("/v1/tier0/title-case", post(post_tier0_title_case))
@@ -137,8 +203,12 @@ pub fn build_router_with_notifier(
             "/v1/voice-examples",
             get(get_voice_examples).post(post_voice_example),
         )
+        .route("/v1/voice-examples/import", post(post_import_voice))
+        .route("/v1/voice-examples/style-stats", get(get_voice_style_stats))
+        .route("/v1/voice-examples/export-simpo", get(get_export_simpo))
         .route("/v1/voice-examples/{id}", delete(delete_voice_example))
         .route("/v1/analytics/stats", get(get_writing_stats))
+        .route("/v1/analytics/insights", get(get_weekly_insights))
         .route("/v1/drafts", get(get_drafts).post(post_draft))
         .route("/v1/drafts/{id}", delete(delete_draft))
         .route("/v1/export", get(get_export))
@@ -238,6 +308,7 @@ impl IntoResponse for DaemonError {
             DaemonError::Db(lexel_db::DbError::ProfileNotFound(_)) => StatusCode::NOT_FOUND,
             DaemonError::Db(lexel_db::DbError::CannotDeleteLastProfile) => StatusCode::BAD_REQUEST,
             DaemonError::Db(lexel_db::DbError::InvalidBackup(_)) => StatusCode::BAD_REQUEST,
+            DaemonError::Db(lexel_db::DbError::Import(_)) => StatusCode::BAD_REQUEST,
             DaemonError::Core(_) | DaemonError::Db(_) => StatusCode::INTERNAL_SERVER_ERROR,
             DaemonError::Runtime(_) => StatusCode::SERVICE_UNAVAILABLE,
         };
@@ -345,6 +416,13 @@ async fn get_status(State(state): State<AppState>) -> Result<impl IntoResponse, 
     Ok(Json(state.service.status().await?))
 }
 
+async fn get_doctor(
+    State(state): State<AppState>,
+    Query(query): Query<DoctorQuery>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.doctor(query.bench).await?))
+}
+
 async fn get_profiles(State(state): State<AppState>) -> Result<impl IntoResponse, DaemonError> {
     let (profiles, active_profile) = state.service.list_profiles()?;
     Ok(Json(serde_json::json!({
@@ -425,6 +503,30 @@ async fn patch_settings(
     })))
 }
 
+async fn get_crutch_words(State(state): State<AppState>) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(serde_json::json!({
+        "words": state.service.list_crutch_words()?
+    })))
+}
+
+async fn put_crutch_words(
+    State(state): State<AppState>,
+    Json(body): Json<CrutchWordsRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    let words = state.service.set_crutch_words(&body.words)?;
+    state.notify("settings");
+    Ok(Json(serde_json::json!({ "words": words })))
+}
+
+async fn post_toggle_crutch_word(
+    State(state): State<AppState>,
+    Json(body): Json<ToggleCrutchWordRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    let words = state.service.toggle_crutch_word(&body.word, body.banned)?;
+    state.notify("settings");
+    Ok(Json(serde_json::json!({ "words": words })))
+}
+
 async fn post_ai_toggle(
     State(state): State<AppState>,
     Json(body): Json<ToggleAiBody>,
@@ -454,6 +556,84 @@ async fn post_rewrite(
     Json(body): Json<RewriteRequest>,
 ) -> Result<impl IntoResponse, DaemonError> {
     Ok(Json(state.service.rewrite(body).await?))
+}
+
+async fn post_rewrite_stream(
+    State(state): State<AppState>,
+    Json(body): Json<RewriteRequest>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(64);
+    let svc = Arc::clone(&state.service);
+
+    tokio::spawn(async move {
+        let chunk_tx = tx.clone();
+        let outcome = svc
+            .rewrite_stream(body, move |chunk| {
+                if let Ok(json) = serde_json::to_string(&chunk) {
+                    let _ = chunk_tx.try_send(Ok(Event::default().event("chunk").data(json)));
+                }
+            })
+            .await;
+
+        match outcome {
+            Ok(resp) => {
+                if let Ok(json) = serde_json::to_string(&resp) {
+                    let _ = tx
+                        .send(Ok(Event::default().event("complete").data(json)))
+                        .await;
+                }
+            }
+            Err(err) => {
+                let err_json = serde_json::json!({ "error": err.to_string() }).to_string();
+                let _ = tx
+                    .send(Ok(Event::default().event("error").data(err_json)))
+                    .await;
+            }
+        }
+    });
+
+    Sse::new(ChannelSseStream { rx }).keep_alive(KeepAlive::default())
+}
+
+async fn post_complete(
+    State(state): State<AppState>,
+    Json(body): Json<CompletionRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.complete(body).await?))
+}
+
+async fn post_scope_context(
+    State(state): State<AppState>,
+    Json(body): Json<ScopeContextRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.scope_context(body)))
+}
+
+async fn post_redact_preview(
+    State(state): State<AppState>,
+    Json(body): Json<RedactPreviewRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.redact_preview(&body.text)))
+}
+
+async fn get_snippets(State(state): State<AppState>) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(serde_json::json!({
+        "snippets": state.service.list_snippets()?
+    })))
+}
+
+async fn post_expand_snippet(
+    State(state): State<AppState>,
+    Json(body): Json<ExpandSnippetRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.expand_snippet(body).await?))
+}
+
+async fn post_transcribe(
+    State(state): State<AppState>,
+    Json(body): Json<TranscribeRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.transcribe(body).await?))
 }
 
 async fn get_harper_rules(State(state): State<AppState>) -> Result<impl IntoResponse, DaemonError> {
@@ -577,6 +757,38 @@ async fn post_voice_example(
     Ok(Json(serde_json::json!({ "example": example })))
 }
 
+async fn post_import_voice(
+    State(state): State<AppState>,
+    Json(body): Json<ImportVoiceRequest>,
+) -> Result<impl IntoResponse, DaemonError> {
+    let report = state.service.import_voice_examples(body)?;
+    state.notify("voice");
+    Ok(Json(report))
+}
+
+async fn get_voice_style_stats(
+    State(state): State<AppState>,
+    Query(query): Query<VoiceQuery>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(
+        state
+            .service
+            .voice_style_stats(query.surface_id.as_deref())?,
+    ))
+}
+
+async fn get_export_simpo(
+    State(state): State<AppState>,
+    Query(query): Query<ExportSimpoQuery>,
+) -> Result<impl IntoResponse, DaemonError> {
+    let pairs = state.service.export_simpo(
+        query.surface_id.as_deref(),
+        query.include_accepted,
+        query.limit,
+    )?;
+    Ok(Json(serde_json::json!({ "pairs": pairs })))
+}
+
 async fn delete_voice_example(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -590,6 +802,13 @@ async fn get_writing_stats(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, DaemonError> {
     Ok(Json(state.service.writing_stats()?))
+}
+
+async fn get_weekly_insights(
+    State(state): State<AppState>,
+    Query(query): Query<InsightsQuery>,
+) -> Result<impl IntoResponse, DaemonError> {
+    Ok(Json(state.service.weekly_insights(query.days)?))
 }
 
 async fn get_drafts(State(state): State<AppState>) -> Result<impl IntoResponse, DaemonError> {

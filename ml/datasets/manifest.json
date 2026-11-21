@@ -1,132 +1,221 @@
 {
-  "schema_version": 1,
-  "generated_at": "2026-11-20T08:31:36+00:00",
+  "schema_version": 2,
+  "generated_at": "2026-11-21T09:03:58+00:00",
+  "dataset_card": {
+    "chat_template": "qwen-2.5 (ChatML) / qwen-3 (enable_thinking=False for bake-off)",
+    "max_seq_length": 1536,
+    "dedup_method": "Exact SHA-256 + 5-gram Jaccard (<0.85) + 8-gram held-out containment (<0.30)",
+    "packing_config": "packing=False during train_on_responses_only init (verified completion-only batch audit); FFD/BFD collator available in ml/crucible/collator.py",
+    "real_human_target_ratio": 1.0,
+    "synthetic_usage": "Reverse-slop degradation of <source> inputs and surgical counterfactual <rejected> mutations only; 100% of SFT targets and SimPO chosen responses come from genuine human-written permissive/PD/first-party corpora.",
+    "excluded_sources": [
+      "/home/lawand/Prose/deliverables/datasets/wlab_gold_300 (deprecated per Prose DEC-003)",
+      "/home/lawand/Prose/03-research/corpora/ (9 removed copyrighted bibliographic stubs)",
+      "vendor/harper/harper-core/tests/text/tagged/ (POS-annotated files)"
+    ]
+  },
   "source_corpora": [
+    "vendor/harper/**/*.weir (Apache-2.0 real grammar-fix pairs)",
+    "vendor/harper/harper-core/src/linting/**/*.rs (Apache-2.0 assert_suggestion_result pairs, lint descriptions, docstrings)",
+    "vendor/harper/**/*.rs & **/*.ts (Apache-2.0 Rust doc comments and TypeScript JSDoc)",
+    "vendor/harper/packages/web/src/routes/docs/**/*.md & crate READMEs (Apache-2.0)",
+    "vendor/harper/harper-core/tests/text/*.md (public-domain & technical prose, excluding tagged/)",
+    "git log --no-merges (Lexel, vendor/harper, Prose) + CHANGELOG.md",
     "/home/lawand/Prose/deliverables/datasets/wlab_session2_clean/train.jsonl",
-    "/home/lawand/Prose/deliverables/datasets/wlab_session2_clean/heldout.jsonl",
-    "/home/lawand/Prose/deliverables/datasets/wlab_pref_v1/train.jsonl",
-    "/home/lawand/Prose/deliverables/datasets/wlab_pref_v1/heldout.jsonl",
-    "/home/lawand/Prose/data/training/wlab_pref_session3.jsonl",
     "/home/lawand/Prose/deliverables/datasets/categories/*.jsonl",
-    "/home/lawand/Prose/03-research/corpora/writing-craft/strunk-white-elements-of-style.md",
+    "/home/lawand/Prose/data/training/wlab_pref_session3.jsonl",
+    "/home/lawand/Prose/03-research/corpora/writing-craft/strunk-white-elements-of-style.md (1918 PD)",
+    "/home/lawand/Prose/{01-specifications,02-architecture,03-research,04-audits}/**/*.md & src/wlab docstrings",
     "lexel_curated_multisurface_13x7"
   ],
   "files": {
     "lexel_sft_train.jsonl": {
-      "rows": 340,
-      "sha256": "c7dd0c5c5bea68ace06f2fd77dad4cdc02c32542b2afbbc2f3ede3bcc202f659",
-      "bytes": 852824
+      "rows": 5407,
+      "sha256": "283d8cd801c8cf8cd48cb6cec93a8f1c5e891ddcb5119f54eef4edef3d998315",
+      "bytes": 7567168
     },
     "lexel_sft_val.jsonl": {
-      "rows": 75,
-      "sha256": "145b275acacae06128f9ff01cee053107dc81f898b628f67f6a76c0612ebb1df",
-      "bytes": 171726
+      "rows": 603,
+      "sha256": "5031fc845d27d06264401a69dfcb059f1d661a3be8b5a5396e94796c9271cc86",
+      "bytes": 840255
     },
     "lexel_dpo_train.jsonl": {
-      "rows": 520,
-      "sha256": "9fbd0bb9effc26f0d15223700b241652c2c806098196293352da39165c3aaf27",
-      "bytes": 2810486
+      "rows": 2660,
+      "sha256": "6173128a1ae0a4a8ea8021f58676b835cabb2eb32e53e2077dce6da4634218e3",
+      "bytes": 8450413
     },
     "lexel_heldout_eval.jsonl": {
-      "rows": 26,
-      "sha256": "75dc1751517b322afa92075a8efe487f777e95e39d5f892bf3d8f009bc1e1084",
-      "bytes": 37097
+      "rows": 273,
+      "sha256": "05210a30430ea17791ec77970772493e8507b2aea6683a252b98dacdd98818a7",
+      "bytes": 617066
     }
   },
   "surface_distribution": {
     "train": {
-      "docs_markdown": 20,
-      "general": 25,
-      "ide_code_comment": 16,
-      "ide_git_commit": 13,
-      "web_discord_slack": 10,
-      "web_discourse": 30,
-      "web_email": 49,
-      "web_github_pr": 20,
-      "web_linkedin": 69,
-      "web_reddit": 15,
-      "web_substack": 33,
-      "web_wordpress": 27,
-      "web_x": 13
+      "docs_markdown": 468,
+      "general": 468,
+      "ide_code_comment": 468,
+      "ide_git_commit": 82,
+      "web_discord_slack": 468,
+      "web_discourse": 468,
+      "web_email": 468,
+      "web_github_pr": 468,
+      "web_linkedin": 468,
+      "web_reddit": 467,
+      "web_substack": 292,
+      "web_wordpress": 354,
+      "web_x": 468
     },
     "val": {
-      "docs_markdown": 4,
-      "general": 6,
-      "ide_code_comment": 4,
-      "ide_git_commit": 3,
-      "web_discord_slack": 2,
-      "web_discourse": 7,
-      "web_email": 10,
-      "web_github_pr": 5,
-      "web_linkedin": 14,
-      "web_reddit": 4,
-      "web_substack": 7,
-      "web_wordpress": 6,
-      "web_x": 3
+      "docs_markdown": 52,
+      "general": 52,
+      "ide_code_comment": 52,
+      "ide_git_commit": 10,
+      "web_discord_slack": 52,
+      "web_discourse": 52,
+      "web_email": 52,
+      "web_github_pr": 52,
+      "web_linkedin": 52,
+      "web_reddit": 52,
+      "web_substack": 33,
+      "web_wordpress": 40,
+      "web_x": 52
     },
     "heldout": {
-      "docs_markdown": 2,
-      "general": 2,
-      "ide_code_comment": 2,
-      "ide_git_commit": 2,
-      "web_discord_slack": 2,
-      "web_discourse": 2,
-      "web_email": 2,
-      "web_github_pr": 2,
-      "web_linkedin": 2,
-      "web_reddit": 2,
-      "web_substack": 2,
-      "web_wordpress": 2,
-      "web_x": 2
+      "docs_markdown": 21,
+      "general": 21,
+      "ide_code_comment": 21,
+      "ide_git_commit": 21,
+      "web_discord_slack": 21,
+      "web_discourse": 21,
+      "web_email": 21,
+      "web_github_pr": 21,
+      "web_linkedin": 21,
+      "web_reddit": 21,
+      "web_substack": 21,
+      "web_wordpress": 21,
+      "web_x": 21
+    },
+    "dpo": {
+      "docs_markdown": 261,
+      "general": 235,
+      "ide_code_comment": 243,
+      "ide_git_commit": 35,
+      "web_discord_slack": 214,
+      "web_discourse": 231,
+      "web_email": 249,
+      "web_github_pr": 232,
+      "web_linkedin": 202,
+      "web_reddit": 217,
+      "web_substack": 151,
+      "web_wordpress": 174,
+      "web_x": 216
     }
   },
   "task_distribution": {
-    "deslop": 74,
-    "fix_grammar_flow": 64,
-    "polish_comment": 13,
-    "polish_commit": 10,
-    "reply_draft": 11,
-    "rewrite_surface": 70,
-    "shorten": 98
+    "train": {
+      "deslop": 845,
+      "fix_grammar_flow": 1718,
+      "polish_comment": 99,
+      "polish_commit": 46,
+      "reply_draft": 748,
+      "rewrite_surface": 889,
+      "shorten": 1062
+    },
+    "val": {
+      "deslop": 87,
+      "fix_grammar_flow": 168,
+      "polish_comment": 5,
+      "polish_commit": 9,
+      "reply_draft": 95,
+      "rewrite_surface": 130,
+      "shorten": 109
+    },
+    "heldout": {
+      "deslop": 53,
+      "fix_grammar_flow": 55,
+      "polish_comment": 5,
+      "polish_commit": 5,
+      "reply_draft": 45,
+      "rewrite_surface": 55,
+      "shorten": 55
+    }
+  },
+  "origin_distribution_train": {
+    "changelog_lexel": 6,
+    "changelog_prose": 9,
+    "git_log_lexel": 13,
+    "git_log_prose": 30,
+    "git_log_vendor_harper": 11,
+    "lexel_curated_multisurface_13x7": 32,
+    "lexel_docs": 53,
+    "lexel_multisurface_curated": 45,
+    "lexel_rust_docstrings": 178,
+    "prose_01-specifications": 87,
+    "prose_02-architecture": 178,
+    "prose_03-research_briefs": 218,
+    "prose_03-research_ml-training-and-eval": 271,
+    "prose_03-research_phase-3-advancements": 106,
+    "prose_04-audits": 32,
+    "prose_category_instruction_following": 3,
+    "prose_category_writing_reasoning": 1,
+    "prose_python_docstrings": 98,
+    "prose_wlab_pref_session3": 11,
+    "prose_wlab_session2_clean": 228,
+    "strunk_white_1918_pd": 117,
+    "vendor_harper_docs": 291,
+    "vendor_harper_lint_descriptions": 94,
+    "vendor_harper_pd_texts": 664,
+    "vendor_harper_rust_docstrings": 426,
+    "vendor_harper_rust_lint_tests": 1264,
+    "vendor_harper_ts_jsdoc": 128,
+    "vendor_harper_weir": 813
   },
   "dpo_perturbation_distribution": {
-    "code_token_drop": 11,
-    "corporate_slop": 276,
-    "em_dash_injection": 49,
-    "entity_swap": 10,
-    "negation_inversion": 29,
-    "numerical_hallucination": 97,
-    "surface_violation": 48
+    "code_token_drop": 380,
+    "corporate_slop": 380,
+    "em_dash_injection": 380,
+    "entity_swap": 380,
+    "negation_inversion": 380,
+    "numerical_hallucination": 380,
+    "surface_violation": 380
+  },
+  "leakage_audit": {
+    "heldout_8gram_filtered_during_build": 1,
+    "sft_train_vs_heldout_8gram_leaks": 0,
+    "sft_val_vs_heldout_8gram_leaks": 0,
+    "dpo_vs_heldout_8gram_leaks": 0
   },
   "crucible_gate_stats": {
-    "total_candidates_screened": 442,
-    "total_passed_all_6_gates": 415,
-    "candidate_pass_rate": 0.9389,
+    "total_candidates_screened": 10810,
+    "total_passed_all_6_gates": 8603,
+    "total_retained_after_balancing_and_leakage": 6010,
+    "candidate_pass_rate": 0.7958,
     "final_split_crucible_pass_rate": 1.0,
     "gate_breakdown": {
       "gate1_zero_slop": {
-        "passes": 441,
-        "rate": 0.9977
+        "passes": 10788,
+        "rate": 0.998
       },
       "gate2_numeric_and_token_grounding": {
-        "passes": 441,
-        "rate": 0.9977
+        "passes": 10804,
+        "rate": 0.9994
       },
       "gate3_surface_compliance": {
-        "passes": 435,
-        "rate": 0.9842
+        "passes": 10796,
+        "rate": 0.9987
       },
       "gate4_active_verb_and_directness": {
-        "passes": 433,
-        "rate": 0.9796
+        "passes": 9632,
+        "rate": 0.891
       },
       "gate5_lexical_density_and_burstiness": {
-        "passes": 440,
-        "rate": 0.9955
+        "passes": 10706,
+        "rate": 0.9904
       },
       "gate6_integrity_and_leakage": {
-        "passes": 433,
-        "rate": 0.9796
+        "passes": 9782,
+        "rate": 0.9049
       }
     }
   }

@@ -1,3 +1,6 @@
+mod bench;
+mod doctor;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read};
@@ -7,19 +10,21 @@ use std::process::ExitCode;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use lexel_core::{
-    HarperDiagnostic, HarperEngine, ReadabilityReport, RulePreset, SlopScanner, StyleGuideRule,
-    SurfaceCatalog, analyze_readability, apply_safe_deterministic_fixes, apply_style_guide_fixes,
-    build_antislop_weirpack_bytes, detect_language_from_path, normalize_typography,
-    preset_rule_overrides, scan_invisible_chars, scan_secrets, scan_structure_issues,
-    scan_style_guide, synonyms_for, to_sentence_case, to_title_case, validate_weirpack_bytes,
+    HarperDiagnostic, HarperEngine, ReadabilityReport, RepoConfig, RulePreset, SlopScanner,
+    StyleGuideRule, SurfaceCatalog, UnifiedSettings, analyze_readability,
+    apply_safe_deterministic_fixes, apply_style_guide_fixes, build_antislop_weirpack_bytes,
+    detect_language_from_path, normalize_typography, preset_rule_overrides, scan_invisible_chars,
+    scan_secrets, scan_structure_issues, scan_style_guide, synonyms_for, to_sentence_case,
+    to_title_case, validate_weirpack_bytes,
 };
+use lexel_db::{LexelDb, default_db_path};
 use serde::Serialize;
 
 #[derive(Parser)]
 #[command(
     name = "lexel",
     version,
-    about = "Lexel local zero-AI writing linter and toolkit"
+    about = "Lexel local zero-AI writing linter, CI gate, doctor, bench, and voice toolkit"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -28,7 +33,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Lint files or stdin with deterministic Harper, anti-slop, surface, and secret rules
+    /// Lint files or stdin with deterministic Harper, anti-slop, surface, .lexel.toml, and secret rules
     Check(CheckArgs),
     /// Print offline readability, slop, and secret counts without altering text
     Stats(StatsArgs),
@@ -51,6 +56,20 @@ enum Commands {
     },
     /// Install fast zero-AI Git commit-msg and/or pre-commit hooks for this repository
     InstallGitHook(InstallGitHookArgs),
+    /// Check local Lexel runtime, acceleration, Native Messaging manifests, GGUF SHA-256, and speeds
+    Doctor(doctor::DoctorArgs),
+    /// Benchmark a running local daemon/model against held-out JSONL evaluation prompts
+    Bench(bench::BenchArgs),
+    /// Local SQLite database tools (SimPO preference export, weekly insights, crutch-word bans)
+    Db {
+        #[command(subcommand)]
+        action: DbAction,
+    },
+    /// Clone My Voice cold-start import and local style fingerprint tools
+    Voice {
+        #[command(subcommand)]
+        action: VoiceAction,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -60,7 +79,7 @@ enum OutputFormat {
     Sarif,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
 enum FailOn {
     None,
     Secrets,
@@ -85,6 +104,15 @@ struct CheckArgs {
     /// Optional JSON file containing team style guide rules (`[{ term, preferred, caseSensitive?, note? }]`)
     #[arg(long = "style-guide")]
     style_guide: Option<PathBuf>,
+    /// Optional explicit path to a .lexel.toml repo config file
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Disable automatic upward .lexel.toml discovery
+    #[arg(long)]
+    no_repo_config: bool,
+    /// CI mode: enforce non-zero exit code on secrets, AI slop, or .lexel.toml violations (defaults --fail-on to slop)
+    #[arg(long)]
+    ci: bool,
     /// Apply deterministic anti-slop, em-dash, and surface cleanup
     #[arg(long)]
     fix_safe: bool,
@@ -156,6 +184,105 @@ enum WeirpackAction {
     BuildAntislop { out: PathBuf },
 }
 
+#[derive(Subcommand)]
+enum DbAction {
+    /// Export edited/rejected voice examples as PII-scrubbed SimPO/DPO JSONL preference pairs
+    ExportSimpo {
+        /// Optional path to SQLite DB (defaults to platform lexel.db)
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Output JSONL file path (writes to stdout if omitted)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Filter by surface_id
+        #[arg(long)]
+        surface: Option<String>,
+        /// Also include accepted/imported examples where original != rewritten
+        #[arg(long)]
+        include_accepted: bool,
+        /// Maximum rows to inspect
+        #[arg(long, default_value_t = 500)]
+        limit: usize,
+    },
+    /// Print Private Weekly Writing Insights computed strictly from local SQLite
+    Insights {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long, default_value_t = 7)]
+        days: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage personal crutch-word bans stored in local SQLite
+    CrutchWords {
+        #[command(subcommand)]
+        op: CrutchWordOp,
+    },
+}
+
+#[derive(Subcommand)]
+enum CrutchWordOp {
+    List {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Ban {
+        word: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+    Unban {
+        word: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum VoiceAction {
+    /// Seed local voice memory and style fingerprint from Git commits or prose files
+    Import(VoiceImportArgs),
+    /// Show stylistic fingerprint statistics from stored voice examples
+    Stats {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        surface: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Args)]
+struct VoiceImportArgs {
+    /// Import non-merge commit messages from a local Git repository
+    #[arg(long)]
+    git_log: bool,
+    /// Optional author filter passed to `git log --author=...`
+    #[arg(long)]
+    author: Option<String>,
+    /// Target Git repository path (defaults to current directory)
+    #[arg(long, default_value = ".")]
+    repo: PathBuf,
+    /// Maximum Git commits to scan
+    #[arg(long, default_value_t = 100)]
+    limit: usize,
+    /// Import prose paragraphs from one or more local markdown/text files
+    #[arg(long, num_args = 1..)]
+    files: Vec<PathBuf>,
+    /// Target surface_id for file imports (`auto` infers docs_markdown vs general)
+    #[arg(long, default_value = "auto")]
+    surface: String,
+    /// Optional path to SQLite DB (defaults to platform lexel.db)
+    #[arg(long)]
+    db: Option<PathBuf>,
+    /// Emit JSON report
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Finding {
@@ -174,6 +301,7 @@ struct FileCheckReport {
     path: String,
     language: String,
     surface: String,
+    repo_config: Option<String>,
     fixed_applied: usize,
     findings: Vec<Finding>,
     readability: ReadabilityReport,
@@ -248,11 +376,14 @@ fn char_offset_to_line_col(text: &str, char_offset: usize) -> (usize, usize) {
     (line, col)
 }
 
-struct CheckContext {
-    engine: HarperEngine,
+struct CheckBase {
+    dialect_code: u8,
+    base_overrides: BTreeMap<String, Option<bool>>,
+    weirpack_bytes: Vec<Vec<u8>>,
     scanner: SlopScanner,
     catalog: SurfaceCatalog,
-    style_guide: Vec<StyleGuideRule>,
+    cli_style_guide: Vec<StyleGuideRule>,
+    explicit_repo_config: Option<(PathBuf, RepoConfig)>,
 }
 
 struct CheckInput<'a> {
@@ -263,8 +394,27 @@ struct CheckInput<'a> {
     real_path: Option<&'a Path>,
 }
 
+fn resolve_repo_config(
+    base: &CheckBase,
+    real_path: Option<&Path>,
+    no_repo_config: bool,
+) -> Option<(PathBuf, RepoConfig)> {
+    if no_repo_config {
+        return None;
+    }
+    if let Some(ref explicit) = base.explicit_repo_config {
+        return Some(explicit.clone());
+    }
+    if let Some(p) = real_path {
+        return RepoConfig::discover(p);
+    }
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| RepoConfig::discover(&cwd))
+}
+
 fn run_check_on_text(
-    ctx: &mut CheckContext,
+    base: &CheckBase,
     input: CheckInput<'_>,
     args: &CheckArgs,
 ) -> Result<FileCheckReport> {
@@ -273,16 +423,43 @@ fn run_check_on_text(
     let surface_id = input.surface_id;
     let mut total_fixed = 0usize;
 
+    let discovered_cfg = resolve_repo_config(base, input.real_path, args.no_repo_config);
+    let mut effective_settings = UnifiedSettings {
+        dialect: base.dialect_code,
+        lint_config: base.base_overrides.clone(),
+        style_guide: base.cli_style_guide.clone(),
+        ..UnifiedSettings::default()
+    };
+    if let Some((_, ref cfg)) = discovered_cfg {
+        cfg.apply_to_settings(&mut effective_settings);
+    }
+
+    let mut engine = HarperEngine::new(
+        effective_settings.dialect,
+        &effective_settings.lint_config,
+        &effective_settings.user_dictionary,
+        "",
+    )?;
+    for bytes in &base.weirpack_bytes {
+        engine.add_weirpack_bytes(bytes)?;
+    }
+
     if args.fix_safe || args.fix_all {
-        let safe = apply_safe_deterministic_fixes(&text, surface_id, &[], &[], &[])?;
+        let safe = apply_safe_deterministic_fixes(
+            &text,
+            surface_id,
+            &effective_settings.custom_slop_terms,
+            &effective_settings.disabled_slop_terms,
+            &[],
+        )?;
         total_fixed += safe.fixes_applied;
         text = safe.text;
-        let styled = apply_style_guide_fixes(&text, &ctx.style_guide);
+        let styled = apply_style_guide_fixes(&text, &effective_settings.style_guide);
         total_fixed += styled.fixes_applied;
         text = styled.text;
     }
     if args.fix_all {
-        let harper_safe = ctx.engine.apply_safe_harper_fixes(&text, language);
+        let harper_safe = engine.apply_safe_harper_fixes(&text, language);
         total_fixed += harper_safe.fixes_applied;
         text = harper_safe.text;
 
@@ -302,14 +479,24 @@ fn run_check_on_text(
         }
     }
 
-    let profile = ctx.catalog.get(surface_id)?;
+    let profile = base.catalog.get(surface_id)?;
+    let allow_em_dashes = discovered_cfg
+        .as_ref()
+        .map(|(_, cfg)| cfg.effective_allow_em_dashes(surface_id, profile.allow_em_dashes))
+        .unwrap_or(profile.allow_em_dashes);
+
     let mut findings = Vec::new();
 
-    for diag in ctx.engine.check_text_with_language(&text, language) {
+    for diag in engine.check_text_with_language(&text, language) {
         findings.push(harper_diag_to_finding(&text, diag));
     }
 
-    for hit in ctx.scanner.scan(&text, profile.allow_em_dashes) {
+    for hit in base.scanner.scan_with_overrides(
+        &text,
+        allow_em_dashes,
+        &effective_settings.custom_slop_terms,
+        &effective_settings.disabled_slop_terms,
+    ) {
         let (line, column) = byte_offset_to_line_col(&text, hit.start);
         findings.push(Finding {
             source: "LexelAntiSlop".to_owned(),
@@ -336,7 +523,7 @@ fn run_check_on_text(
         });
     }
 
-    for v in ctx.catalog.validate(&text, surface_id)? {
+    for v in base.catalog.validate(&text, surface_id)? {
         let (line, column) = byte_offset_to_line_col(&text, v.start);
         findings.push(Finding {
             source: "LexelSurface".to_owned(),
@@ -347,6 +534,21 @@ fn run_check_on_text(
             column,
             suggestion: None,
         });
+    }
+
+    if let Some((_, ref cfg)) = discovered_cfg {
+        for v in cfg.validate_text(&text, surface_id) {
+            let (line, column) = byte_offset_to_line_col(&text, v.start);
+            findings.push(Finding {
+                source: "LexelRepoConfig".to_owned(),
+                rule: v.kind,
+                severity: "warning".to_owned(),
+                message: v.message,
+                line,
+                column,
+                suggestion: None,
+            });
+        }
     }
 
     for secret in scan_secrets(&text) {
@@ -394,7 +596,7 @@ fn run_check_on_text(
         });
     }
 
-    for hit in scan_style_guide(&text, &ctx.style_guide) {
+    for hit in scan_style_guide(&text, &effective_settings.style_guide) {
         let (line, column) = byte_offset_to_line_col(&text, hit.start);
         let note = hit
             .note
@@ -421,6 +623,7 @@ fn run_check_on_text(
         path: input.path_label.to_owned(),
         language: language.to_owned(),
         surface: surface_id.to_owned(),
+        repo_config: discovered_cfg.map(|(p, _)| p.display().to_string()),
         fixed_applied: total_fixed,
         readability: analyze_readability(&text),
         findings,
@@ -445,10 +648,20 @@ fn harper_diag_to_finding(text: &str, diag: HarperDiagnostic) -> Finding {
 
 fn build_sarif(reports: &[FileCheckReport]) -> serde_json::Value {
     let mut results = Vec::new();
+    let mut rule_map: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+
     for report in reports {
         for f in &report.findings {
+            let rule_id = format!("{}/{}", f.source, f.rule);
+            rule_map.entry(rule_id.clone()).or_insert_with(|| {
+                serde_json::json!({
+                    "id": rule_id,
+                    "shortDescription": { "text": format!("{} rule {}", f.source, f.rule) },
+                    "defaultConfiguration": { "level": f.severity }
+                })
+            });
             results.push(serde_json::json!({
-                "ruleId": format!("{}/{}", f.source, f.rule),
+                "ruleId": rule_id,
                 "level": f.severity,
                 "message": { "text": f.message },
                 "locations": [{
@@ -463,6 +676,7 @@ fn build_sarif(reports: &[FileCheckReport]) -> serde_json::Value {
             }));
         }
     }
+    let rules: Vec<serde_json::Value> = rule_map.into_values().collect();
     serde_json::json!({
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json",
         "version": "2.1.0",
@@ -470,7 +684,9 @@ fn build_sarif(reports: &[FileCheckReport]) -> serde_json::Value {
             "tool": {
                 "driver": {
                     "name": "Lexel",
-                    "version": env!("CARGO_PKG_VERSION")
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "informationUri": "https://github.com/Lexel-Ai/Lexel",
+                    "rules": rules
                 }
             },
             "results": results
@@ -486,15 +702,15 @@ fn cmd_check(args: CheckArgs) -> Result<ExitCode> {
             args.preset
         )
     })?;
-    let overrides: BTreeMap<String, Option<bool>> = preset_rule_overrides(preset);
-    let mut engine = HarperEngine::new(dialect_code, &overrides, &[], "")?;
+    let base_overrides: BTreeMap<String, Option<bool>> = preset_rule_overrides(preset);
+    let mut weirpack_bytes = Vec::new();
     for wp in &args.weirpacks {
         let bytes =
             fs::read(wp).with_context(|| format!("Failed to read weirpack {}", wp.display()))?;
-        engine.add_weirpack_bytes(&bytes)?;
+        weirpack_bytes.push(bytes);
     }
 
-    let style_guide: Vec<StyleGuideRule> = match &args.style_guide {
+    let cli_style_guide: Vec<StyleGuideRule> = match &args.style_guide {
         Some(path) => {
             let raw = fs::read_to_string(path)
                 .with_context(|| format!("Failed to read style guide {}", path.display()))?;
@@ -504,13 +720,24 @@ fn cmd_check(args: CheckArgs) -> Result<ExitCode> {
         None => Vec::new(),
     };
 
+    let explicit_repo_config = match &args.config {
+        Some(path) => {
+            let cfg = RepoConfig::load_from_path(path).map_err(anyhow::Error::msg)?;
+            Some((path.clone(), cfg))
+        }
+        None => None,
+    };
+
     let scanner = SlopScanner::load_embedded()?;
     let catalog = SurfaceCatalog::load_embedded()?;
-    let mut ctx = CheckContext {
-        engine,
+    let base = CheckBase {
+        dialect_code,
+        base_overrides,
+        weirpack_bytes,
         scanner,
         catalog,
-        style_guide,
+        cli_style_guide,
+        explicit_repo_config,
     };
 
     let mut reports = Vec::new();
@@ -528,7 +755,7 @@ fn cmd_check(args: CheckArgs) -> Result<ExitCode> {
             }
         });
         reports.push(run_check_on_text(
-            &mut ctx,
+            &base,
             CheckInput {
                 path_label: &label,
                 text: content,
@@ -560,7 +787,7 @@ fn cmd_check(args: CheckArgs) -> Result<ExitCode> {
                 Some(path.as_path())
             };
             reports.push(run_check_on_text(
-                &mut ctx,
+                &base,
                 CheckInput {
                     path_label: &label,
                     text: content,
@@ -610,17 +837,35 @@ fn cmd_check(args: CheckArgs) -> Result<ExitCode> {
     let has_secrets = reports
         .iter()
         .any(|r| r.findings.iter().any(|f| f.source == "LexelSecrets"));
-    let has_slop = reports
-        .iter()
-        .any(|r| r.findings.iter().any(|f| f.source == "LexelAntiSlop"));
+    let has_slop_or_repo = reports.iter().any(|r| {
+        r.findings
+            .iter()
+            .any(|f| f.source == "LexelAntiSlop" || f.source == "LexelRepoConfig")
+    });
     let has_any = reports.iter().any(|r| !r.findings.is_empty());
 
-    let should_fail = match args.fail_on {
+    let effective_fail_on = if args.ci && args.fail_on == FailOn::None {
+        FailOn::Slop
+    } else {
+        args.fail_on
+    };
+
+    let should_fail = match effective_fail_on {
         FailOn::None => false,
         FailOn::Secrets => has_secrets,
-        FailOn::Slop => has_slop || has_secrets,
+        FailOn::Slop => has_slop_or_repo || has_secrets,
         FailOn::Any => has_any,
     };
+
+    if args.ci {
+        let total_findings: usize = reports.iter().map(|r| r.findings.len()).sum();
+        eprintln!(
+            "lexel ci: scanned {} file(s), {} finding(s), status={}",
+            reports.len(),
+            total_findings,
+            if should_fail { "FAILED" } else { "PASS" }
+        );
+    }
 
     Ok(if should_fail {
         ExitCode::from(1)
@@ -713,7 +958,198 @@ fn cmd_transform(args: TransformArgs, op: &str) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<ExitCode> {
+fn open_db(db_override: Option<&Path>) -> Result<LexelDb> {
+    let path = db_override
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_db_path);
+    LexelDb::open(&path).with_context(|| format!("Failed to open Lexel DB at {}", path.display()))
+}
+
+fn cmd_db(action: DbAction) -> Result<()> {
+    match action {
+        DbAction::ExportSimpo {
+            db,
+            out,
+            surface,
+            include_accepted,
+            limit,
+        } => {
+            let store = open_db(db.as_deref())?;
+            let pairs = store.export_simpo_pairs(surface.as_deref(), include_accepted, limit)?;
+            let mut jsonl = String::new();
+            for pair in &pairs {
+                jsonl.push_str(&serde_json::to_string(pair)?);
+                jsonl.push('\n');
+            }
+            if let Some(ref out_path) = out {
+                if let Some(parent) = out_path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(out_path, &jsonl)
+                    .with_context(|| format!("Failed to write {}", out_path.display()))?;
+                eprintln!(
+                    "Exported {} PII-scrubbed SimPO preference pair(s) to {}",
+                    pairs.len(),
+                    out_path.display()
+                );
+            } else {
+                print!("{jsonl}");
+            }
+        }
+        DbAction::Insights { db, days, json } => {
+            let store = open_db(db.as_deref())?;
+            let report = store.weekly_insights(days)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!(
+                    "Private Weekly Insights (last {} days, 100% local SQLite)",
+                    report.period_days
+                );
+                println!(
+                    "  Checks: {} | Words: {} | Slop caught: {} | Grammar hits: {} | Secrets blocked: {} | Fixes: {}",
+                    report.checks_in_period,
+                    report.words_in_period,
+                    report.slop_caught_in_period,
+                    report.grammar_hits_in_period,
+                    report.secrets_blocked_in_period,
+                    report.fixes_applied_in_period
+                );
+                println!(
+                    "  Clarity: {}/100 ({:+}) | Conciseness: {}/100 ({:+}) | Voice examples: {}",
+                    report.clarity_score,
+                    report.clarity_delta,
+                    report.conciseness_score,
+                    report.conciseness_delta,
+                    report.voice_examples_count
+                );
+                if !report.top_crutch_words.is_empty() {
+                    let list: Vec<String> = report
+                        .top_crutch_words
+                        .iter()
+                        .map(|c| {
+                            if c.banned {
+                                format!("{} ({}, banned)", c.word, c.count)
+                            } else {
+                                format!("{} ({})", c.word, c.count)
+                            }
+                        })
+                        .collect();
+                    println!("  Top crutch words: {}", list.join(", "));
+                }
+                if !report.top_slop_patterns.is_empty() {
+                    let list: Vec<String> = report
+                        .top_slop_patterns
+                        .iter()
+                        .map(|(t, n)| format!("{t} ({n})"))
+                        .collect();
+                    println!("  Slop patterns:    {}", list.join(", "));
+                }
+            }
+        }
+        DbAction::CrutchWords { op } => match op {
+            CrutchWordOp::List { db, json } => {
+                let store = open_db(db.as_deref())?;
+                let words = store.list_crutch_word_bans()?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&words)?);
+                } else if words.is_empty() {
+                    println!("No personal crutch words banned.");
+                } else {
+                    println!("{}", words.join(", "));
+                }
+            }
+            CrutchWordOp::Ban { word, db } => {
+                let store = open_db(db.as_deref())?;
+                let updated = store.toggle_crutch_word_ban(&word, true)?;
+                println!(
+                    "Banned crutch word '{word}'. Active bans: {}",
+                    updated.join(", ")
+                );
+            }
+            CrutchWordOp::Unban { word, db } => {
+                let store = open_db(db.as_deref())?;
+                let updated = store.toggle_crutch_word_ban(&word, false)?;
+                println!(
+                    "Unbanned crutch word '{word}'. Active bans: {}",
+                    if updated.is_empty() {
+                        "(none)".to_owned()
+                    } else {
+                        updated.join(", ")
+                    }
+                );
+            }
+        },
+    }
+    Ok(())
+}
+
+fn cmd_voice(action: VoiceAction) -> Result<()> {
+    match action {
+        VoiceAction::Import(args) => {
+            if !args.git_log && args.files.is_empty() {
+                bail!("Pass either --git-log or --files <paths>... to import voice samples.");
+            }
+            let store = open_db(args.db.as_deref())?;
+            let mut reports = Vec::new();
+            if args.git_log {
+                let rep = store.import_voice_from_git_log(
+                    &args.repo,
+                    args.author.as_deref(),
+                    args.limit,
+                )?;
+                reports.push(rep);
+            }
+            if !args.files.is_empty() {
+                let rep = store.import_voice_from_files(&args.files, &args.surface)?;
+                reports.push(rep);
+            }
+
+            if args.json {
+                if reports.len() == 1 {
+                    println!("{}", serde_json::to_string_pretty(&reports[0])?);
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&reports)?);
+                }
+            } else {
+                for rep in reports {
+                    println!(
+                        "Imported {} voice example(s) from {} (skipped {}). Total stored: {} | Avg sentence: {:.1} words | Directness: {}/100 | Em-dash free: {:.0}%",
+                        rep.imported_count,
+                        rep.source_kind,
+                        rep.skipped_count,
+                        rep.style_stats.total_examples,
+                        rep.style_stats.avg_sentence_words,
+                        rep.style_stats.directness_score,
+                        rep.style_stats.em_dash_free_rate * 100.0
+                    );
+                }
+            }
+        }
+        VoiceAction::Stats { db, surface, json } => {
+            let store = open_db(db.as_deref())?;
+            let stats = store.voice_style_stats(surface.as_deref())?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&stats)?);
+            } else {
+                println!(
+                    "Voice examples: {} | Avg sentence: {:.1} words | Avg word length: {:.1} | Directness: {}/100 | Em-dash free: {:.0}%",
+                    stats.total_examples,
+                    stats.avg_sentence_words,
+                    stats.avg_word_length,
+                    stats.directness_score,
+                    stats.em_dash_free_rate * 100.0
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Check(args) => return cmd_check(args),
@@ -802,6 +1238,10 @@ fn main() -> Result<ExitCode> {
             }
         },
         Commands::InstallGitHook(args) => cmd_install_git_hook(args)?,
+        Commands::Doctor(args) => doctor::run_doctor(args).await?,
+        Commands::Bench(args) => bench::run_bench(args).await?,
+        Commands::Db { action } => cmd_db(action)?,
+        Commands::Voice { action } => cmd_voice(action)?,
     }
     Ok(ExitCode::SUCCESS)
 }

@@ -15,6 +15,7 @@
     "@webcomponents/custom-elements": "^1.6.0",
     "harper.js": "file:../../vendor/harper/packages/harper.js",
     "lexel-ui": "workspace:*",
+    "lexel-wasm": "workspace:*",
     "lint-framework": "file:../../vendor/harper/packages/lint-framework",
     "lru-cache": "^11.1.0",
     "react": "^19.1.0",

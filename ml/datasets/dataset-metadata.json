@@ -6,5 +6,5 @@
       "name": "MIT"
     }
   ],
-  "description": "6-Gate Data Crucible SFT, Surgical Counterfactual Masked-SimPO/DPO, and 13-surface held-out benchmark datasets for Lexel local writing models."
+  "description": "Lexel v2 6-Gate Data Crucible SFT, balanced Surgical Counterfactual Masked-SimPO, and 13-surface held-out benchmark datasets for lexel-0.5b and lexel-1.5b."
 }

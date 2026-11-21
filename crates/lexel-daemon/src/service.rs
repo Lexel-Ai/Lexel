@@ -1,29 +1,42 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use base64::Engine as _;
 use lexel_core::{
-    AiTaskId, GateCheckSummary, HarperDiagnostic, HarperEngine, HarperRuleInfo, InvisibleCharHit,
-    LexelProfile, ReadabilityReport, RulePreset, SafeFixResult, SecretMatch, SlopHit, SlopScanner,
-    StoredWeirpack, StructureIssue, StyleGuideHit, SurfaceCatalog, SurfaceViolation,
-    UnifiedSettings, VoiceExample, WeirpackValidationSummary, analyze_readability,
-    apply_safe_deterministic_fixes, apply_style_guide_fixes, build_custom_weirpack_bytes,
-    build_rewrite_messages_with_surfaces, decode_weirpack_base64, encode_weirpack_base64,
-    normalize_typography, preset_rule_overrides, sanitize_model_output, scan_invisible_chars,
-    scan_secrets, scan_structure_issues, scan_style_guide, structured_lint_config, synonyms_for,
-    to_sentence_case, to_title_case, validate_weirpack_bytes, verify_rewrite_with_overrides,
+    AiTaskId, ConsistencyIssue, DEFAULT_THREAD_CONTEXT_MAX_TOKENS, GateCheckSummary,
+    HarperDiagnostic, HarperEngine, HarperRuleInfo, InvisibleCharHit, LexelProfile,
+    ParagraphCacheStats, ReadabilityReport, RedactionPreview, RulePreset, SafeFixResult,
+    ScopedContext, SecretMatch, SlopHit, SlopMeterReport, SnippetEntry, StoredWeirpack,
+    StructureIssue, StyleGuideHit, Tier0CheckOptions, Tier0Engine, UnifiedSettings, VoiceExample,
+    WeirpackValidationSummary, WritingGuardHit, WritingGuardKind, analyze_readability,
+    apply_safe_deterministic_fixes, apply_style_guide_fixes, build_completion_messages,
+    build_custom_weirpack_bytes, build_repair_messages, build_rewrite_messages_with_surfaces,
+    build_snippet_adapt_messages, build_ultra_short_take_messages, decode_weirpack_base64,
+    encode_weirpack_base64, expand_snippet_deterministic, gate_score, hard_gate_failures,
+    merged_snippets, normalize_typography, preset_rule_overrides, redact_secrets_and_pii,
+    sanitize_model_output, scan_secrets, scope_thread_context, structured_lint_config,
+    synonyms_for, to_sentence_case, to_title_case, validate_weirpack_bytes, verify_completion,
+    verify_rewrite_with_overrides,
 };
-use lexel_db::{DatabaseBackup, DbError, DraftSnapshot, LexelDb, WritingStatsSummary};
+use lexel_db::{
+    DatabaseBackup, DbError, DraftSnapshot, LexelDb, SimpoExportPair, VoiceImportReport,
+    VoiceImportSample, VoiceStyleStats, WeeklyInsightsReport, WritingStatsSummary,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::info;
 
 use crate::auth::ensure_token;
+use crate::doctor::{DoctorReport, build_doctor_report};
 use crate::models_fs::{
     DownloadModelReport, DownloadProgress, InstalledModelStatus, delete_manifest_model,
     download_manifest_model_with_progress, inspect_installed_models,
 };
-use crate::runtime::{RuntimeManager, RuntimeSnapshot};
+use crate::runtime::{GenerateOptions, RuntimeManager, RuntimeSnapshot, StreamChunk};
+use crate::whisper::transcribe_audio;
+
+const REPAIR_RETRY_TIMEOUT_SECS: u64 = 15;
 
 #[derive(Debug, Error)]
 pub enum DaemonError {
@@ -62,9 +75,22 @@ pub struct RewriteRequest {
     pub subcontext: Option<String>,
     pub thread_context: Option<String>,
     pub domain: Option<String>,
+    #[serde(default)]
+    pub candidates: Option<u8>,
+    #[serde(default)]
+    pub redact_secrets: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RewriteCandidate {
+    pub label: String,
+    pub suggestion: String,
+    pub gates: GateCheckSummary,
+    pub retried: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RewriteResponse {
     pub original: String,
@@ -74,6 +100,139 @@ pub struct RewriteResponse {
     pub gates: GateCheckSummary,
     pub surface_id: String,
     pub subcontext: Option<String>,
+    pub fast_path: bool,
+    pub retried: bool,
+    pub failed_constraints: Vec<String>,
+    pub candidates: Vec<RewriteCandidate>,
+    pub redacted_count: usize,
+    pub restored_cleanly: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionRequest {
+    pub prefix: String,
+    #[serde(default)]
+    pub suffix: Option<String>,
+    #[serde(default = "default_general_surface")]
+    pub surface_id: String,
+    #[serde(default)]
+    pub subcontext: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionResponse {
+    pub completion: String,
+    pub model: String,
+    pub latency_ms: u64,
+    pub gates: GateCheckSummary,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeContextRequest {
+    pub source: String,
+    pub thread_context: String,
+    #[serde(default)]
+    pub max_tokens: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RedactPreviewRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpandSnippetRequest {
+    pub trigger: String,
+    #[serde(default = "default_general_surface")]
+    pub surface_id: String,
+    #[serde(default)]
+    pub subcontext: Option<String>,
+    #[serde(default)]
+    pub thread_context: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub adapt_with_ai: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpandSnippetResponse {
+    pub trigger: String,
+    pub raw_expansion: String,
+    pub expanded_text: String,
+    pub surface_id: String,
+    pub adapted_with_ai: bool,
+    pub latency_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscribeRequest {
+    pub audio_base64: String,
+    #[serde(default)]
+    pub audio_format: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub surface_id: Option<String>,
+    #[serde(default)]
+    pub subcontext: Option<String>,
+    #[serde(default)]
+    pub rewrite_task: Option<AiTaskId>,
+    #[serde(default)]
+    pub domain: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscribeResponse {
+    pub raw_transcript: String,
+    pub cleaned_text: String,
+    pub rewritten: Option<RewriteResponse>,
+    pub latency_ms: u64,
+    pub whisper_model: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportVoiceRequest {
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub samples: Option<Vec<VoiceImportSample>>,
+    #[serde(default)]
+    pub repo_path: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub files: Option<Vec<String>>,
+    #[serde(default)]
+    pub surface_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrutchWordsRequest {
+    pub words: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToggleCrutchWordRequest {
+    pub word: String,
+    pub banned: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,6 +242,8 @@ pub struct Tier0CheckRequest {
     pub surface_id: Option<String>,
     pub domain: Option<String>,
     pub language: Option<String>,
+    #[serde(default)]
+    pub has_attachment_signal: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,11 +251,15 @@ pub struct Tier0CheckRequest {
 pub struct Tier0CheckResponse {
     pub harper: Vec<HarperDiagnostic>,
     pub slop: Vec<SlopHit>,
-    pub surface: Vec<SurfaceViolation>,
+    pub surface: Vec<lexel_core::SurfaceViolation>,
     pub secrets: Vec<SecretMatch>,
     pub invisible_chars: Vec<InvisibleCharHit>,
     pub structure: Vec<StructureIssue>,
     pub style_guide: Vec<StyleGuideHit>,
+    pub slop_meter: SlopMeterReport,
+    pub consistency: Vec<ConsistencyIssue>,
+    pub guards: Vec<WritingGuardHit>,
+    pub cache_stats: ParagraphCacheStats,
     pub safe_fixed_text: String,
     pub safe_fixes_count: usize,
     pub blocked: bool,
@@ -203,12 +368,17 @@ pub struct ToggleAiResponse {
     pub runtime: RuntimeSnapshot,
 }
 
+fn default_general_surface() -> String {
+    "general".to_owned()
+}
+
 /// Shared service backing HTTP routes, Native Messaging IPC, and CLI commands.
 pub struct DaemonService {
     pub data_dir: PathBuf,
     pub token_path: PathBuf,
     pub http_port: u16,
     db: Mutex<LexelDb>,
+    tier0: Mutex<Tier0Engine>,
     runtime: RuntimeManager,
 }
 
@@ -226,6 +396,7 @@ impl DaemonService {
             token_path,
             http_port,
             db: Mutex::new(db),
+            tier0: Mutex::new(Tier0Engine::new()),
             runtime: RuntimeManager::new(data_dir, models_dir),
         })
     }
@@ -242,6 +413,7 @@ impl DaemonService {
             token_path,
             http_port,
             db: Mutex::new(db),
+            tier0: Mutex::new(Tier0Engine::new()),
             runtime: RuntimeManager::new(data_dir, models_dir),
         })
     }
@@ -268,6 +440,35 @@ impl DaemonService {
             runtime,
             models,
         })
+    }
+
+    /// Run comprehensive local diagnostics (runtime, accel, Native Messaging, GGUF SHA-256, Tier 0 ms, tok/s).
+    pub async fn doctor(&self, run_bench: bool) -> Result<DoctorReport, DaemonError> {
+        let (profile, stats) = {
+            let db = self.db.lock().expect("db mutex poisoned");
+            (db.active_profile()?, db.writing_stats_summary()?)
+        };
+        let mut measured_tps = self.runtime.last_tok_per_sec().await;
+        if run_bench
+            && let Some(bench_tps) = self
+                .runtime
+                .quick_bench_tok_per_sec(&profile.settings)
+                .await
+        {
+            measured_tps = Some(bench_tps);
+        }
+        let runtime = self.runtime.snapshot(&profile.settings).await;
+        let runtime_details = self.runtime.runtime_details().await;
+        Ok(build_doctor_report(
+            self.http_port,
+            &self.data_dir,
+            self.runtime.models_dir(),
+            &profile.settings,
+            runtime,
+            runtime_details,
+            measured_tps,
+            stats.total_secret_blocks,
+        ))
     }
 
     pub fn list_profiles(&self) -> Result<(Vec<LexelProfile>, LexelProfile), DaemonError> {
@@ -403,7 +604,33 @@ impl DaemonService {
         }
     }
 
+    /// Execute a local rewrite with Tier 0 fast path, optional secret redact-and-restore,
+    /// smart thread context scoping, Tier 2 guided 1-retry (15s cap), and optional 2-takes mode.
     pub async fn rewrite(&self, req: RewriteRequest) -> Result<RewriteResponse, DaemonError> {
+        self.rewrite_internal(req, None::<fn(StreamChunk)>).await
+    }
+
+    /// Execute a streaming rewrite, invoking `on_chunk` on live token deltas and running full Tier 2
+    /// verification, secret restoration, and optional guided 1-retry on completion.
+    pub async fn rewrite_stream<F>(
+        &self,
+        req: RewriteRequest,
+        on_chunk: F,
+    ) -> Result<RewriteResponse, DaemonError>
+    where
+        F: FnMut(StreamChunk) + Send,
+    {
+        self.rewrite_internal(req, Some(on_chunk)).await
+    }
+
+    async fn rewrite_internal<F>(
+        &self,
+        req: RewriteRequest,
+        mut on_chunk: Option<F>,
+    ) -> Result<RewriteResponse, DaemonError>
+    where
+        F: FnMut(StreamChunk) + Send,
+    {
         if req.text.trim().is_empty() {
             return Err(DaemonError::BadRequest("Text cannot be empty.".to_owned()));
         }
@@ -423,26 +650,66 @@ impl DaemonService {
             (profile, examples)
         };
 
-        if !profile.settings.ai_enabled {
-            return Err(DaemonError::Runtime(
-                "Local AI is turned off in Lexel Settings.".to_owned(),
-            ));
-        }
+        let use_redaction = req
+            .redact_secrets
+            .unwrap_or(profile.settings.redact_secrets);
 
         let secret_hits = scan_secrets(&req.text);
-        if !secret_hits.is_empty() {
+        if !secret_hits.is_empty() && !use_redaction {
+            if let Ok(db) = self.db.lock() {
+                let _ = db.record_writing_event(&req.surface_id, 0, 0, 0, secret_hits.len(), 0);
+            }
             let kinds = secret_hits
                 .iter()
                 .map(|s| s.label.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(DaemonError::PrivacyBlocked(format!(
-                "Draft contains detected secrets or PII ({kinds}). Remove them before sending to AI."
+                "Draft contains detected secrets or PII ({kinds}). Remove them or enable Redact & Restore in Settings."
             )));
         }
 
-        let messages = build_rewrite_messages_with_surfaces(
-            &req.text,
+        let want_two_takes = req.candidates.unwrap_or(1) >= 2;
+
+        // Tier 0 Fast Path: if Fix Grammar / Deslop resolves 100% of detected issues deterministically,
+        // return in <5 ms without waking the local LLM.
+        if !want_two_takes
+            && matches!(req.task, AiTaskId::FixGrammarFlow | AiTaskId::Deslop)
+            && req
+                .thread_context
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+            && let Some(fast_resp) = self.try_tier0_fast_path(&req, &profile.settings, started)?
+        {
+            info!(
+                surface = %req.surface_id,
+                latency_ms = fast_resp.latency_ms,
+                "completed Tier 0 deterministic fast-path rewrite"
+            );
+            return Ok(fast_resp);
+        }
+
+        if !profile.settings.ai_enabled {
+            return Err(DaemonError::Runtime(
+                "Local AI is turned off in Lexel Settings.".to_owned(),
+            ));
+        }
+
+        let redaction = if use_redaction {
+            Some(redact_secrets_and_pii(&req.text))
+        } else {
+            None
+        };
+        let redacted_count = redaction.as_ref().map(|r| r.redacted_count()).unwrap_or(0);
+        let ai_source: &str = redaction
+            .as_ref()
+            .map(|r| r.redacted_text.as_str())
+            .unwrap_or(req.text.as_str());
+
+        let base_messages = build_rewrite_messages_with_surfaces(
+            ai_source,
             req.task,
             &req.surface_id,
             req.subcontext.as_deref(),
@@ -451,43 +718,654 @@ impl DaemonService {
             &profile.settings.custom_surfaces,
         )?;
 
-        let (raw, model_used) = self
-            .runtime
-            .generate_chat(&profile.settings, &messages)
-            .await
-            .map_err(DaemonError::Runtime)?;
+        let (raw_pass1, model_used) = if let Some(chunk_cb) = on_chunk.as_mut() {
+            self.runtime
+                .generate_chat_stream(
+                    &profile.settings,
+                    &base_messages,
+                    GenerateOptions::default(),
+                    chunk_cb,
+                )
+                .await
+                .map_err(DaemonError::Runtime)?
+        } else {
+            self.runtime
+                .generate_chat(&profile.settings, &base_messages)
+                .await
+                .map_err(DaemonError::Runtime)?
+        };
 
-        let suggestion = sanitize_model_output(&raw);
-        let gates = verify_rewrite_with_overrides(
-            &req.text,
-            &suggestion,
-            &req.surface_id,
-            profile.settings.dialect,
-            &profile.settings.user_dictionary,
-            &profile.settings.custom_surfaces,
-            &profile.settings.custom_slop_terms,
-            &profile.settings.disabled_slop_terms,
-        )?;
+        let (primary_suggestion, primary_gates, retried, failed_constraints, restored_cleanly) =
+            self.verify_and_maybe_repair(
+                ai_source,
+                &raw_pass1,
+                &base_messages,
+                &req.surface_id,
+                &profile.settings,
+                redaction.as_ref(),
+            )
+            .await?;
+
+        let mut candidates = vec![RewriteCandidate {
+            label: "Direct".to_owned(),
+            suggestion: primary_suggestion.clone(),
+            gates: primary_gates.clone(),
+            retried,
+        }];
+
+        if want_two_takes {
+            let short_messages = build_ultra_short_take_messages(
+                ai_source,
+                &req.surface_id,
+                req.subcontext.as_deref(),
+                req.thread_context.as_deref(),
+                &voice_examples,
+                &profile.settings.custom_surfaces,
+            )?;
+            let short_opts = GenerateOptions {
+                temperature: Some((profile.settings.temperature + 0.1).min(0.6)),
+                ..GenerateOptions::default()
+            };
+            if let Ok((raw_short, _)) = self
+                .runtime
+                .generate_chat_with_options(&profile.settings, &short_messages, short_opts)
+                .await
+                && let Ok((short_sugg, short_gates, short_retried, _, _)) = self
+                    .verify_and_maybe_repair(
+                        ai_source,
+                        &raw_short,
+                        &short_messages,
+                        &req.surface_id,
+                        &profile.settings,
+                        redaction.as_ref(),
+                    )
+                    .await
+            {
+                candidates.push(RewriteCandidate {
+                    label: "Ultra-Short".to_owned(),
+                    suggestion: short_sugg,
+                    gates: short_gates,
+                    retried: short_retried,
+                });
+            }
+        }
+
         let latency_ms = started.elapsed().as_millis() as u64;
 
         info!(
             surface = %req.surface_id,
             model = %model_used,
             latency_ms,
-            zero_slop = gates.zero_slop,
-            numbers_preserved = gates.numbers_preserved,
+            retried,
+            candidates = candidates.len(),
+            redacted_count,
+            restored_cleanly,
+            zero_slop = primary_gates.zero_slop,
+            numbers_preserved = primary_gates.numbers_preserved,
             "completed local AI rewrite"
         );
 
         Ok(RewriteResponse {
             original: req.text,
-            suggestion,
+            suggestion: primary_suggestion,
             model: model_used,
             latency_ms,
-            gates,
+            gates: primary_gates,
             surface_id: req.surface_id,
             subcontext: req.subcontext,
+            fast_path: false,
+            retried,
+            failed_constraints,
+            candidates,
+            redacted_count,
+            restored_cleanly,
         })
+    }
+
+    /// Run Tier 2 verification on pass 1 and perform at most ONE guided repair turn (15s cap)
+    /// when any hard gate fails or a redacted placeholder was dropped.
+    async fn verify_and_maybe_repair(
+        &self,
+        ai_source: &str,
+        raw_pass1: &str,
+        base_messages: &[lexel_core::ChatMessage],
+        surface_id: &str,
+        settings: &UnifiedSettings,
+        redaction: Option<&lexel_core::RedactionSession>,
+    ) -> Result<(String, GateCheckSummary, bool, Vec<String>, bool), DaemonError> {
+        let sanitized1 = sanitize_model_output(raw_pass1);
+        let mut gates1 = verify_rewrite_with_overrides(
+            ai_source,
+            &sanitized1,
+            surface_id,
+            settings.dialect,
+            &settings.user_dictionary,
+            &settings.custom_surfaces,
+            &settings.custom_slop_terms,
+            &settings.disabled_slop_terms,
+        )?;
+        let (final_text1, restored_cleanly1, mut failed1) =
+            evaluate_redaction_and_failures(&sanitized1, &mut gates1, redaction);
+
+        if failed1.is_empty() {
+            return Ok((final_text1, gates1, false, Vec::new(), restored_cleanly1));
+        }
+
+        let repair_messages = build_repair_messages(base_messages, &sanitized1, &failed1);
+        let repair_opts = GenerateOptions {
+            timeout: Some(Duration::from_secs(REPAIR_RETRY_TIMEOUT_SECS)),
+            temperature: Some(0.15),
+            ..GenerateOptions::default()
+        };
+
+        let Ok((raw_pass2, _)) = self
+            .runtime
+            .generate_chat_with_options(settings, &repair_messages, repair_opts)
+            .await
+        else {
+            return Ok((final_text1, gates1, true, failed1, restored_cleanly1));
+        };
+
+        let sanitized2 = sanitize_model_output(&raw_pass2);
+        let mut gates2 = verify_rewrite_with_overrides(
+            ai_source,
+            &sanitized2,
+            surface_id,
+            settings.dialect,
+            &settings.user_dictionary,
+            &settings.custom_surfaces,
+            &settings.custom_slop_terms,
+            &settings.disabled_slop_terms,
+        )?;
+        let (final_text2, restored_cleanly2, _failed2) =
+            evaluate_redaction_and_failures(&sanitized2, &mut gates2, redaction);
+
+        let score1 = gate_score(&gates1) + if restored_cleanly1 { 25 } else { 0 };
+        let score2 = gate_score(&gates2) + if restored_cleanly2 { 25 } else { 0 };
+
+        // Deduplicate failed_constraints list returned as metadata.
+        failed1.dedup();
+        if score2 >= score1 {
+            Ok((final_text2, gates2, true, failed1, restored_cleanly2))
+        } else {
+            Ok((final_text1, gates1, true, failed1, restored_cleanly1))
+        }
+    }
+
+    fn try_tier0_fast_path(
+        &self,
+        req: &RewriteRequest,
+        settings: &UnifiedSettings,
+        started: Instant,
+    ) -> Result<Option<RewriteResponse>, DaemonError> {
+        let deterministic = apply_safe_deterministic_fixes(
+            &req.text,
+            &req.surface_id,
+            &settings.custom_slop_terms,
+            &settings.disabled_slop_terms,
+            &settings.custom_surfaces,
+        )?;
+        let styled = apply_style_guide_fixes(&deterministic.text, &settings.style_guide);
+
+        let mut engine = HarperEngine::new(
+            settings.dialect,
+            &settings.lint_config,
+            &settings.user_dictionary,
+            &settings.ignored_lints,
+        )?;
+        engine.load_stored_weirpacks(&settings.weirpacks);
+        let grammar = engine.apply_safe_harper_fixes(&styled.text, &settings.language_mode);
+
+        let total_fixes =
+            deterministic.fixes_applied + styled.fixes_applied + grammar.fixes_applied;
+        let candidate = grammar.text;
+
+        if total_fixes == 0 || candidate.trim() == req.text.trim() {
+            return Ok(None);
+        }
+
+        let gates = verify_rewrite_with_overrides(
+            &req.text,
+            &candidate,
+            &req.surface_id,
+            settings.dialect,
+            &settings.user_dictionary,
+            &settings.custom_surfaces,
+            &settings.custom_slop_terms,
+            &settings.disabled_slop_terms,
+        )?;
+
+        let hard_ok = gates.zero_slop
+            && gates.numbers_preserved
+            && gates.tokens_preserved
+            && gates.surface_compliant
+            && gates.secrets_free;
+        let task_resolved = match req.task {
+            AiTaskId::Deslop => hard_ok,
+            AiTaskId::FixGrammarFlow => hard_ok && gates.grammar_clean,
+            _ => false,
+        };
+
+        if !task_resolved {
+            return Ok(None);
+        }
+
+        let latency_ms = started.elapsed().as_millis() as u64;
+        let cand = RewriteCandidate {
+            label: "Direct".to_owned(),
+            suggestion: candidate.clone(),
+            gates: gates.clone(),
+            retried: false,
+        };
+        Ok(Some(RewriteResponse {
+            original: req.text.clone(),
+            suggestion: candidate,
+            model: "tier0-deterministic".to_owned(),
+            latency_ms,
+            gates,
+            surface_id: req.surface_id.clone(),
+            subcontext: req.subcontext.clone(),
+            fast_path: true,
+            retried: false,
+            failed_constraints: Vec::new(),
+            candidates: vec![cand],
+            redacted_count: 0,
+            restored_cleanly: true,
+        }))
+    }
+
+    /// Generate a short inline ghost-text continuation (max ~24 tokens), Tier 2 slop/em-dash checked.
+    pub async fn complete(
+        &self,
+        req: CompletionRequest,
+    ) -> Result<CompletionResponse, DaemonError> {
+        if req.prefix.trim().is_empty() {
+            return Err(DaemonError::BadRequest(
+                "Prefix cannot be empty.".to_owned(),
+            ));
+        }
+
+        let started = Instant::now();
+        let (profile, voice_examples) = {
+            let db = self.db.lock().expect("db mutex poisoned");
+            let profile = db.active_profile()?;
+            if let Some(domain) = req.domain.as_deref()
+                && is_domain_blocked(domain, &profile.settings.privacy_blocklist)
+            {
+                return Err(DaemonError::PrivacyBlocked(format!(
+                    "AI completion is blocked on {domain} by your privacy blocklist."
+                )));
+            }
+            let examples = db.search_voice_examples(&req.surface_id, &req.prefix, 2)?;
+            (profile, examples)
+        };
+
+        if !profile.settings.ai_enabled {
+            return Err(DaemonError::Runtime(
+                "Local AI is turned off in Lexel Settings.".to_owned(),
+            ));
+        }
+
+        let secret_hits = scan_secrets(&req.prefix);
+        if !secret_hits.is_empty() && !profile.settings.redact_secrets {
+            return Err(DaemonError::PrivacyBlocked(
+                "Prefix contains detected secrets or PII. Ghost-text completion skipped."
+                    .to_owned(),
+            ));
+        }
+
+        let redaction = if profile.settings.redact_secrets && !secret_hits.is_empty() {
+            Some(redact_secrets_and_pii(&req.prefix))
+        } else {
+            None
+        };
+        let safe_prefix = redaction
+            .as_ref()
+            .map(|r| r.redacted_text.as_str())
+            .unwrap_or(req.prefix.as_str());
+
+        let messages = build_completion_messages(
+            safe_prefix,
+            req.suffix.as_deref(),
+            &req.surface_id,
+            req.subcontext.as_deref(),
+            &voice_examples,
+            &profile.settings.custom_surfaces,
+        )?;
+
+        let max_tokens = req.max_tokens.unwrap_or(24).clamp(4, 32);
+        let opts = GenerateOptions {
+            max_tokens: Some(max_tokens),
+            temperature: Some(0.2),
+            stop: vec!["\n\n".to_owned(), "\r\n\r\n".to_owned()],
+            timeout: Some(Duration::from_secs(8)),
+            prefer_fast_model: true,
+            apply_slop_logit_bias: true,
+        };
+
+        let (raw, model) = self
+            .runtime
+            .generate_chat_with_options(&profile.settings, &messages, opts)
+            .await
+            .map_err(DaemonError::Runtime)?;
+
+        let mut completion = clean_completion_output(safe_prefix, &raw);
+        let mut gates = verify_completion(
+            safe_prefix,
+            &completion,
+            &req.surface_id,
+            &profile.settings.custom_surfaces,
+            &profile.settings.custom_slop_terms,
+            &profile.settings.disabled_slop_terms,
+        )?;
+
+        if !gates.zero_slop
+            && !completion.is_empty()
+            && let Ok(fixed) = apply_safe_deterministic_fixes(
+                &completion,
+                &req.surface_id,
+                &profile.settings.custom_slop_terms,
+                &profile.settings.disabled_slop_terms,
+                &profile.settings.custom_surfaces,
+            )
+        {
+            completion = fixed.text;
+            gates = verify_completion(
+                safe_prefix,
+                &completion,
+                &req.surface_id,
+                &profile.settings.custom_surfaces,
+                &profile.settings.custom_slop_terms,
+                &profile.settings.disabled_slop_terms,
+            )?;
+        }
+
+        if let Some(session) = redaction.as_ref() {
+            let restored = session.restore(&completion);
+            if restored.stray_placeholders {
+                completion.clear();
+            } else {
+                completion = restored.text;
+            }
+        }
+
+        // Fail safe on ghost-text: never suggest slop, secrets, or hallucinated metrics inline.
+        if !gates.zero_slop || !gates.secrets_free || !gates.numbers_preserved {
+            completion.clear();
+        }
+
+        let latency_ms = started.elapsed().as_millis() as u64;
+        Ok(CompletionResponse {
+            completion,
+            model,
+            latency_ms,
+            gates,
+        })
+    }
+
+    /// Deterministically trim thread context to the ~300 tokens most relevant to `source`.
+    pub fn scope_context(&self, req: ScopeContextRequest) -> ScopedContext {
+        let budget = req
+            .max_tokens
+            .unwrap_or(DEFAULT_THREAD_CONTEXT_MAX_TOKENS)
+            .clamp(32, 1024);
+        scope_thread_context(&req.source, &req.thread_context, budget)
+    }
+
+    /// Deterministically preview secret/PII redaction without invoking AI or logging raw text.
+    pub fn redact_preview(&self, text: &str) -> RedactionPreview {
+        redact_secrets_and_pii(text).preview()
+    }
+
+    /// List built-in (`/standup`, `/lgtm`, `/decline`, `/followup`, `/bug`) and user snippets.
+    pub fn list_snippets(&self) -> Result<Vec<SnippetEntry>, DaemonError> {
+        let profile = self.active_profile()?;
+        Ok(merged_snippets(&profile.settings.snippets))
+    }
+
+    /// Expand a snippet trigger with deterministic surface adaptation and optional local AI polish.
+    pub async fn expand_snippet(
+        &self,
+        req: ExpandSnippetRequest,
+    ) -> Result<ExpandSnippetResponse, DaemonError> {
+        let started = Instant::now();
+        let (profile, voice_examples) = {
+            let db = self.db.lock().expect("db mutex poisoned");
+            let profile = db.active_profile()?;
+            let query = req.notes.as_deref().unwrap_or(&req.trigger);
+            let examples = db.search_voice_examples(&req.surface_id, query, 2)?;
+            (profile, examples)
+        };
+
+        let expanded = expand_snippet_deterministic(
+            &req.trigger,
+            &req.surface_id,
+            req.subcontext.as_deref(),
+            req.notes.as_deref(),
+            &profile.settings.snippets,
+        )
+        .ok_or_else(|| {
+            DaemonError::BadRequest(format!("Unknown snippet trigger: {}", req.trigger))
+        })?;
+
+        let want_ai = req.adapt_with_ai.unwrap_or(false) && expanded.adapt_to_surface;
+        if want_ai && profile.settings.ai_enabled {
+            let messages = build_snippet_adapt_messages(
+                &expanded.expanded_text,
+                &expanded.surface_id,
+                req.subcontext.as_deref(),
+                req.thread_context.as_deref(),
+                &voice_examples,
+                &profile.settings.custom_surfaces,
+            )?;
+            if let Ok((raw, _)) = self
+                .runtime
+                .generate_chat(&profile.settings, &messages)
+                .await
+            {
+                let candidate = sanitize_model_output(&raw);
+                if let Ok(gates) = verify_rewrite_with_overrides(
+                    &expanded.expanded_text,
+                    &candidate,
+                    &expanded.surface_id,
+                    profile.settings.dialect,
+                    &profile.settings.user_dictionary,
+                    &profile.settings.custom_surfaces,
+                    &profile.settings.custom_slop_terms,
+                    &profile.settings.disabled_slop_terms,
+                ) && gates.zero_slop
+                    && gates.secrets_free
+                    && gates.surface_compliant
+                {
+                    return Ok(ExpandSnippetResponse {
+                        trigger: expanded.trigger,
+                        raw_expansion: expanded.raw_expansion,
+                        expanded_text: candidate,
+                        surface_id: expanded.surface_id,
+                        adapted_with_ai: true,
+                        latency_ms: started.elapsed().as_millis() as u64,
+                    });
+                }
+            }
+        }
+
+        Ok(ExpandSnippetResponse {
+            trigger: expanded.trigger,
+            raw_expansion: expanded.raw_expansion,
+            expanded_text: expanded.expanded_text,
+            surface_id: expanded.surface_id,
+            adapted_with_ai: false,
+            latency_ms: started.elapsed().as_millis() as u64,
+        })
+    }
+
+    /// Transcribe audio completely offline via `whisper-cli` and optionally rewrite for a surface.
+    pub async fn transcribe(
+        &self,
+        req: TranscribeRequest,
+    ) -> Result<TranscribeResponse, DaemonError> {
+        let started = Instant::now();
+        let profile = self.active_profile()?;
+        if let Some(domain) = req.domain.as_deref()
+            && is_domain_blocked(domain, &profile.settings.privacy_blocklist)
+        {
+            return Err(DaemonError::PrivacyBlocked(format!(
+                "Transcription is blocked on {domain} by your privacy blocklist."
+            )));
+        }
+
+        let audio_bytes = base64::engine::general_purpose::STANDARD
+            .decode(req.audio_base64.trim())
+            .map_err(|e| DaemonError::BadRequest(format!("Invalid base64 audio payload: {e}")))?;
+
+        let format = req.audio_format.as_deref().unwrap_or("wav");
+        let language = req.language.as_deref().unwrap_or("en");
+
+        let (raw_transcript, whisper_model) = transcribe_audio(
+            &self.data_dir,
+            self.runtime.models_dir(),
+            &profile.settings,
+            &audio_bytes,
+            format,
+            language,
+        )
+        .await
+        .map_err(DaemonError::Runtime)?;
+
+        let surface_id = req
+            .surface_id
+            .clone()
+            .unwrap_or_else(|| "general".to_owned());
+        let cleaned_text = if raw_transcript.is_empty() {
+            String::new()
+        } else {
+            apply_safe_deterministic_fixes(
+                &raw_transcript,
+                &surface_id,
+                &profile.settings.custom_slop_terms,
+                &profile.settings.disabled_slop_terms,
+                &profile.settings.custom_surfaces,
+            )
+            .map(|r| r.text)
+            .unwrap_or_else(|_| raw_transcript.clone())
+        };
+
+        let rewritten = if let Some(task) = req.rewrite_task
+            && !cleaned_text.trim().is_empty()
+            && profile.settings.ai_enabled
+        {
+            Some(
+                self.rewrite(RewriteRequest {
+                    text: cleaned_text.clone(),
+                    task,
+                    surface_id,
+                    subcontext: req.subcontext,
+                    thread_context: None,
+                    domain: req.domain,
+                    candidates: Some(1),
+                    redact_secrets: None,
+                })
+                .await?,
+            )
+        } else {
+            None
+        };
+
+        let latency_ms = started.elapsed().as_millis() as u64;
+        Ok(TranscribeResponse {
+            raw_transcript,
+            cleaned_text,
+            rewritten,
+            latency_ms,
+            whisper_model,
+        })
+    }
+
+    pub fn weekly_insights(&self, days: usize) -> Result<WeeklyInsightsReport, DaemonError> {
+        let db = self.db.lock().expect("db mutex poisoned");
+        Ok(db.weekly_insights(days)?)
+    }
+
+    pub fn list_crutch_words(&self) -> Result<Vec<String>, DaemonError> {
+        let db = self.db.lock().expect("db mutex poisoned");
+        let mut words = db.list_crutch_word_bans()?;
+        let profile = db.active_profile()?;
+        for w in profile.settings.crutch_words {
+            let clean = w.trim().to_ascii_lowercase();
+            if !clean.is_empty() && !words.contains(&clean) {
+                words.push(clean);
+            }
+        }
+        words.sort();
+        Ok(words)
+    }
+
+    pub fn set_crutch_words(&self, words: &[String]) -> Result<Vec<String>, DaemonError> {
+        let db = self.db.lock().expect("db mutex poisoned");
+        let saved = db.set_crutch_word_bans(words)?;
+        let mut profile = db.active_profile()?;
+        profile.settings.crutch_words = saved.clone();
+        db.update_active_settings(&profile.settings)?;
+        Ok(saved)
+    }
+
+    pub fn toggle_crutch_word(&self, word: &str, banned: bool) -> Result<Vec<String>, DaemonError> {
+        let db = self.db.lock().expect("db mutex poisoned");
+        let saved = db.toggle_crutch_word_ban(word, banned)?;
+        let mut profile = db.active_profile()?;
+        profile.settings.crutch_words = saved.clone();
+        db.update_active_settings(&profile.settings)?;
+        Ok(saved)
+    }
+
+    pub fn import_voice_examples(
+        &self,
+        req: ImportVoiceRequest,
+    ) -> Result<VoiceImportReport, DaemonError> {
+        let db = self.db.lock().expect("db mutex poisoned");
+        let source = req.source.as_deref().unwrap_or("paste");
+        if source == "git_log"
+            && let Some(repo) = req.repo_path.as_deref()
+        {
+            return Ok(db.import_voice_from_git_log(
+                std::path::Path::new(repo),
+                req.author.as_deref(),
+                req.limit.unwrap_or(100),
+            )?);
+        }
+        if source == "files"
+            && let Some(files) = req.files.as_ref()
+        {
+            let paths: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+            let surface = req.surface_id.as_deref().unwrap_or("auto");
+            return Ok(db.import_voice_from_files(&paths, surface)?);
+        }
+        let samples = req.samples.unwrap_or_default();
+        if samples.is_empty() {
+            return Err(DaemonError::BadRequest(
+                "Provide `samples`, `repoPath` (with source='git_log'), or `files` (with source='files')."
+                    .to_owned(),
+            ));
+        }
+        Ok(db.import_voice_samples(source, &samples)?)
+    }
+
+    pub fn voice_style_stats(
+        &self,
+        surface_id: Option<&str>,
+    ) -> Result<VoiceStyleStats, DaemonError> {
+        let db = self.db.lock().expect("db mutex poisoned");
+        Ok(db.voice_style_stats(surface_id)?)
+    }
+
+    pub fn export_simpo(
+        &self,
+        surface_id: Option<&str>,
+        include_accepted: bool,
+        limit: usize,
+    ) -> Result<Vec<SimpoExportPair>, DaemonError> {
+        let db = self.db.lock().expect("db mutex poisoned");
+        Ok(db.export_simpo_pairs(surface_id, include_accepted, limit)?)
     }
 
     pub fn harper_rules(&self) -> Result<HarperRulesPayload, DaemonError> {
@@ -692,7 +1570,12 @@ impl DaemonService {
     }
 
     pub fn tier0_check(&self, req: Tier0CheckRequest) -> Result<Tier0CheckResponse, DaemonError> {
-        let profile = self.active_profile()?;
+        let (profile, db_crutch_words) = {
+            let db = self.db.lock().expect("db mutex poisoned");
+            let profile = db.active_profile()?;
+            let bans = db.list_crutch_word_bans().unwrap_or_default();
+            (profile, bans)
+        };
         if let Some(domain) = req.domain.as_deref()
             && is_domain_blocked(domain, &profile.settings.privacy_blocklist)
         {
@@ -704,6 +1587,10 @@ impl DaemonService {
                 invisible_chars: Vec::new(),
                 structure: Vec::new(),
                 style_guide: Vec::new(),
+                slop_meter: lexel_core::score_slop_meter("", &Default::default()),
+                consistency: Vec::new(),
+                guards: Vec::new(),
+                cache_stats: ParagraphCacheStats::default(),
                 safe_fixed_text: req.text,
                 safe_fixes_count: 0,
                 blocked: true,
@@ -711,41 +1598,39 @@ impl DaemonService {
         }
 
         let surface_id = req.surface_id.as_deref().unwrap_or("general");
-        let catalog = SurfaceCatalog::load_with_custom(&profile.settings.custom_surfaces)?;
-        let surface_profile = catalog.get(surface_id)?;
-        let slop_scanner = SlopScanner::load_embedded()?;
-        let mut engine = HarperEngine::new(
-            profile.settings.dialect,
-            &profile.settings.lint_config,
-            &profile.settings.user_dictionary,
-            &profile.settings.ignored_lints,
-        )?;
-        engine.load_stored_weirpacks(&profile.settings.weirpacks);
         let language = req
             .language
             .as_deref()
             .unwrap_or(&profile.settings.language_mode);
-        let safe_fix = apply_safe_deterministic_fixes(
-            &req.text,
-            surface_id,
-            &profile.settings.custom_slop_terms,
-            &profile.settings.disabled_slop_terms,
-            &profile.settings.custom_surfaces,
-        )?;
-        let style_fix = apply_style_guide_fixes(&safe_fix.text, &profile.settings.style_guide);
 
-        let harper = engine.check_text_with_language(&req.text, language);
-        let slop = slop_scanner.scan_with_overrides(
-            &req.text,
-            surface_profile.allow_em_dashes,
-            &profile.settings.custom_slop_terms,
-            &profile.settings.disabled_slop_terms,
-        );
-        let surface = catalog.validate(&req.text, surface_id)?;
-        let secrets = scan_secrets(&req.text);
-        let invisible_chars = scan_invisible_chars(&req.text);
-        let structure = scan_structure_issues(&req.text);
-        let style_guide = scan_style_guide(&req.text, &profile.settings.style_guide);
+        let mut crutch_words = db_crutch_words;
+        for w in &profile.settings.crutch_words {
+            let clean = w.trim().to_ascii_lowercase();
+            if !clean.is_empty() && !crutch_words.contains(&clean) {
+                crutch_words.push(clean);
+            }
+        }
+
+        let opts = Tier0CheckOptions {
+            surface_id: surface_id.to_owned(),
+            language: language.to_owned(),
+            dialect: profile.settings.dialect,
+            lint_config: profile.settings.lint_config.clone(),
+            user_dictionary: profile.settings.user_dictionary.clone(),
+            ignored_lints: profile.settings.ignored_lints.clone(),
+            custom_slop_terms: profile.settings.custom_slop_terms.clone(),
+            disabled_slop_terms: profile.settings.disabled_slop_terms.clone(),
+            custom_surfaces: profile.settings.custom_surfaces.clone(),
+            style_guide: profile.settings.style_guide.clone(),
+            crutch_words,
+            weirpacks: profile.settings.weirpacks.clone(),
+            has_attachment_signal: req.has_attachment_signal,
+        };
+
+        let report = {
+            let mut engine = self.tier0.lock().expect("tier0 mutex poisoned");
+            engine.check(&req.text, &opts)?
+        };
 
         let words = req.text.split_whitespace().count();
         if words > 0
@@ -754,23 +1639,50 @@ impl DaemonService {
             let _ = db.record_writing_event(
                 surface_id,
                 words,
-                harper.len(),
-                slop.len(),
-                secrets.len(),
+                report.harper.len(),
+                report.slop.len(),
+                report.secrets.len(),
                 0,
             );
+            if !report.slop.is_empty() {
+                let terms: Vec<String> = report
+                    .slop
+                    .iter()
+                    .map(|h| {
+                        if h.is_em_dash {
+                            "em_dash".to_owned()
+                        } else {
+                            h.term.to_ascii_lowercase()
+                        }
+                    })
+                    .collect();
+                let _ = db.record_pattern_hits("slop", &terms);
+            }
+            let crutch_hits: Vec<String> = report
+                .guards
+                .iter()
+                .filter(|g| g.kind == WritingGuardKind::CrutchWord)
+                .map(|g| g.matched_text.to_ascii_lowercase())
+                .collect();
+            if !crutch_hits.is_empty() {
+                let _ = db.record_pattern_hits("crutch", &crutch_hits);
+            }
         }
 
         Ok(Tier0CheckResponse {
-            harper,
-            slop,
-            surface,
-            secrets,
-            invisible_chars,
-            structure,
-            style_guide,
-            safe_fixed_text: style_fix.text,
-            safe_fixes_count: safe_fix.fixes_applied + style_fix.fixes_applied,
+            harper: report.harper,
+            slop: report.slop,
+            surface: report.surface,
+            secrets: report.secrets,
+            invisible_chars: report.invisible_chars,
+            structure: report.structure,
+            style_guide: report.style_guide,
+            slop_meter: report.slop_meter,
+            consistency: report.consistency,
+            guards: report.guards,
+            cache_stats: report.cache_stats,
+            safe_fixed_text: report.safe_fixed_text,
+            safe_fixes_count: report.safe_fixes_count,
             blocked: false,
         })
     }
@@ -860,6 +1772,13 @@ impl DaemonService {
                 "httpPort": self.http_port,
             })),
             "status" => Ok(serde_json::to_value(self.status().await?).map_err(DbError::from)?),
+            "doctor" => {
+                let bench = payload
+                    .get("bench")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                Ok(serde_json::to_value(self.doctor(bench).await?).map_err(DbError::from)?)
+            }
             "getDaemonConnection" => Ok(serde_json::json!({
                 "endpoint": format!("http://127.0.0.1:{}", self.http_port),
                 "token": self.token()?,
@@ -961,6 +1880,72 @@ impl DaemonService {
             "rewrite" | "aiRewrite" => {
                 let req: RewriteRequest = serde_json::from_value(payload).map_err(DbError::from)?;
                 Ok(serde_json::to_value(self.rewrite(req).await?).map_err(DbError::from)?)
+            }
+            "complete" | "ghostComplete" => {
+                let req: CompletionRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::to_value(self.complete(req).await?).map_err(DbError::from)?)
+            }
+            "scopeThreadContext" => {
+                let req: ScopeContextRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::to_value(self.scope_context(req)).map_err(DbError::from)?)
+            }
+            "redactPreview" => {
+                let req: RedactPreviewRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::to_value(self.redact_preview(&req.text)).map_err(DbError::from)?)
+            }
+            "listSnippets" => Ok(serde_json::json!({ "snippets": self.list_snippets()? })),
+            "expandSnippet" => {
+                let req: ExpandSnippetRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::to_value(self.expand_snippet(req).await?).map_err(DbError::from)?)
+            }
+            "transcribe" => {
+                let req: TranscribeRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::to_value(self.transcribe(req).await?).map_err(DbError::from)?)
+            }
+            "weeklyInsights" => {
+                let days = payload.get("days").and_then(|v| v.as_u64()).unwrap_or(7) as usize;
+                Ok(serde_json::to_value(self.weekly_insights(days)?).map_err(DbError::from)?)
+            }
+            "getCrutchWords" => Ok(serde_json::json!({ "words": self.list_crutch_words()? })),
+            "setCrutchWords" => {
+                let req: CrutchWordsRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::json!({ "words": self.set_crutch_words(&req.words)? }))
+            }
+            "toggleCrutchWord" => {
+                let req: ToggleCrutchWordRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(serde_json::json!({ "words": self.toggle_crutch_word(&req.word, req.banned)? }))
+            }
+            "importVoiceExamples" => {
+                let req: ImportVoiceRequest =
+                    serde_json::from_value(payload).map_err(DbError::from)?;
+                Ok(
+                    serde_json::to_value(self.import_voice_examples(req)?)
+                        .map_err(DbError::from)?,
+                )
+            }
+            "voiceStyleStats" => {
+                let surface = payload.get("surfaceId").and_then(|v| v.as_str());
+                Ok(
+                    serde_json::to_value(self.voice_style_stats(surface)?)
+                        .map_err(DbError::from)?,
+                )
+            }
+            "exportSimpo" => {
+                let surface = payload.get("surfaceId").and_then(|v| v.as_str());
+                let include_accepted = payload
+                    .get("includeAccepted")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let limit = payload.get("limit").and_then(|v| v.as_u64()).unwrap_or(500) as usize;
+                let pairs = self.export_simpo(surface, include_accepted, limit)?;
+                Ok(serde_json::json!({ "pairs": pairs }))
             }
             "harperRules" => Ok(serde_json::to_value(self.harper_rules()?).map_err(DbError::from)?),
             "structuredHarperRules" => self.structured_harper_rules(),
@@ -1072,6 +2057,46 @@ impl DaemonService {
             ))),
         }
     }
+}
+
+fn evaluate_redaction_and_failures(
+    sanitized: &str,
+    gates: &mut GateCheckSummary,
+    redaction: Option<&lexel_core::RedactionSession>,
+) -> (String, bool, Vec<String>) {
+    let mut failed = hard_gate_failures(gates);
+    let Some(session) = redaction else {
+        return (sanitized.to_owned(), true, failed);
+    };
+    let restored = session.restore(sanitized);
+    if !restored.restored_cleanly {
+        let msg = if !restored.missing_placeholders.is_empty() {
+            format!(
+                "Preserve redacted placeholder(s) unchanged: {}",
+                restored.missing_placeholders.join(", ")
+            )
+        } else {
+            "Do not invent or corrupt [LEXEL_REDACTED_n] placeholders.".to_owned()
+        };
+        gates.warnings.push(msg.clone());
+        failed.push(msg);
+    }
+    (restored.text, restored.restored_cleanly, failed)
+}
+
+fn clean_completion_output(prefix: &str, raw: &str) -> String {
+    let mut cleaned = sanitize_model_output(raw);
+    if let Some(first_line) = cleaned.lines().next() {
+        cleaned = first_line.trim_end().to_owned();
+    }
+    // Strip accidental repetition of the end of `prefix`.
+    let trimmed_prefix = prefix.trim_end();
+    if !trimmed_prefix.is_empty()
+        && let Some(rest) = cleaned.strip_prefix(trimmed_prefix)
+    {
+        cleaned = rest.to_owned();
+    }
+    cleaned
 }
 
 fn is_domain_blocked(hostname: &str, patterns: &[String]) -> bool {

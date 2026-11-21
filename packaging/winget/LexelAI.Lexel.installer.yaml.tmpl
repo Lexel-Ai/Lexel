@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+PackageIdentifier: LexelAI.Lexel
+PackageVersion: {{VERSION}}
+InstallerLocale: en-US
+Platform:
+  - Windows.Desktop
+MinimumOSVersion: 10.0.19041.0
+InstallerType: wix
+Scope: user
+UpgradeBehavior: install
+Installers:
+  - Architecture: x64
+    InstallerUrl: {{URL_WINDOWS_X86_64_MSI}}
+    InstallerSha256: {{SHA256_WINDOWS_X86_64_MSI}}
+ManifestType: installer
+ManifestVersion: 1.6.0

@@ -1,15 +1,24 @@
+import {
+  BUILTIN_SURFACES,
+  DoctorHealthCard,
+  type DoctorReportData,
+  PrivacyProofBadge,
+} from 'lexel-ui';
 import type React from 'react';
 import { useEffect, useState } from 'react';
 import {
   daemonRpc,
   deleteModel,
+  detectActiveWindowSurface,
   downloadModel,
   installNativeMessaging,
   isTauriRuntime,
   MODEL_SPECS,
+  setClipboardOverrideSurface,
   subscribeToModelProgress,
 } from '../lib/desktopClient';
 import type {
+  ActiveWindowSurface,
   DaemonStatusPayload,
   DesktopEnvInfo,
   DownloadProgress,
@@ -19,7 +28,6 @@ import type {
   RuntimeKind,
   ToggleAiResponse,
   UnifiedDaemonSettings,
-  VoiceExample,
   WritingStatsSummary,
 } from '../lib/types';
 
@@ -29,7 +37,10 @@ interface SystemSyncPaneProps {
   nativeStatus: NativeHostStatusReport | null;
   osOverlay: OsOverlayCapabilities | null;
   writingStats: WritingStatsSummary | null;
-  voiceExamples: VoiceExample[];
+  doctorReport: DoctorReportData | null;
+  doctorLoading: boolean;
+  doctorError: string | null;
+  onRunDoctor: (bench?: boolean) => Promise<void>;
   onPatchSettings: (patch: Partial<UnifiedDaemonSettings>) => Promise<void>;
   onRefreshAll: () => Promise<void>;
 }
@@ -40,7 +51,10 @@ export function SystemSyncPane({
   nativeStatus,
   osOverlay,
   writingStats,
-  voiceExamples,
+  doctorReport,
+  doctorLoading,
+  doctorError,
+  onRunDoctor,
   onPatchSettings,
   onRefreshAll,
 }: SystemSyncPaneProps) {
@@ -53,6 +67,8 @@ export function SystemSyncPane({
   const [confirmPurge, setConfirmPurge] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [clipboardSurfaceOverride, setClipboardSurfaceOverride] = useState<string>('auto');
+  const [activeWindowCheck, setActiveWindowCheck] = useState<ActiveWindowSurface | null>(null);
 
   useEffect(() => {
     setRenameDraft(status.activeProfile.name);
@@ -245,13 +261,30 @@ export function SystemSyncPane({
 
   return (
     <div className="space-y-4">
-      <header>
-        <h1 className="text-[18px] font-semibold">Local AI, Extension Sync &amp; Profiles</h1>
-        <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-          Connect your browser extension to lexel.db, download verified GGUF weights, and tune local
-          inference.
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-[20px] font-semibold tracking-[-0.02em]">
+            System Health, Local AI &amp; Hotkeys
+          </h1>
+          <p className="mt-0.5 text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
+            Inspect local diagnostics, manage GGUF weights, connect browser extensions, and
+            configure OS-wide hotkeys.
+          </p>
+        </div>
+        <PrivacyProofBadge
+          localOnly={isTauriRuntime() || Boolean(doctorReport?.privacyProof.localOnlyVerified)}
+          blockedSecretsCount={writingStats?.totalSecretBlocks}
+          redactEnabled={Boolean(settings.redactSecrets)}
+        />
       </header>
+
+      <DoctorHealthCard
+        report={doctorReport}
+        loading={doctorLoading}
+        error={doctorError}
+        onRunCheck={(bench) => void onRunDoctor(bench)}
+        onInstallNative={isTauriRuntime() ? () => void handleInstallNativeMessaging() : undefined}
+      />
 
       {actionMessage && (
         <div
@@ -800,6 +833,42 @@ export function SystemSyncPane({
             />
             Save accepted rewrites to local Voice Memory
           </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={Boolean(settings.ghostTextEnabled)}
+              onChange={(e) => void onPatchSettings({ ghostTextEnabled: e.target.checked })}
+            />
+            Enable opt-in Ghost-Text autocomplete (Tab, best on 8+ GB RAM)
+          </label>
+        </div>
+
+        <div>
+          <label
+            htmlFor="ai-whisper-model-path"
+            className="mb-1 block text-[11px] font-medium"
+            style={{ color: 'var(--lx-fg-muted)' }}
+          >
+            Offline Whisper GGML Model Path (optional; auto-scans models/whisper/ when empty)
+          </label>
+          <input
+            id="ai-whisper-model-path"
+            type="text"
+            defaultValue={settings.whisperModelPath ?? ''}
+            placeholder="e.g. ~/.local/share/lexel/models/whisper/ggml-base.en.bin"
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v !== (settings.whisperModelPath ?? '')) {
+                void onPatchSettings({ whisperModelPath: v });
+              }
+            }}
+            className="w-full rounded-[6px] border px-2.5 py-1 text-[12px] lexel-mono"
+            style={{
+              backgroundColor: 'var(--lx-surface)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg)',
+            }}
+          />
         </div>
       </section>
 
@@ -946,145 +1015,106 @@ export function SystemSyncPane({
         </section>
 
         <section
-          className="space-y-2 rounded-[8px] border p-3"
-          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
-        >
-          <h2 className="text-[13px] font-semibold">Voice Memory ({voiceExamples.length})</h2>
-          <div className="max-h-56 space-y-1.5 overflow-y-auto">
-            {voiceExamples.length === 0 ? (
-              <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                No saved style pairs yet. Accept a rewrite in Quick Rewrite or the browser extension
-                to build local style memory.
-              </p>
-            ) : (
-              voiceExamples.map((ex) => (
-                <div
-                  key={ex.id}
-                  className="flex items-start justify-between gap-2 rounded-[6px] border p-2 text-[11px]"
-                  style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
-                >
-                  <div className="min-w-0">
-                    <div className="lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
-                      {ex.surfaceId}
-                      {ex.subcontext ? ` (${ex.subcontext})` : ''}
-                    </div>
-                    <div className="truncate">{ex.rewritten}</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await daemonRpc('deleteVoiceExample', { id: ex.id });
-                      await onRefreshAll();
-                    }}
-                    className="shrink-0 rounded px-1.5 py-0.5 text-[11px]"
-                    style={{ color: 'var(--lx-danger)' }}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <section
-          className="space-y-2.5 rounded-[8px] border p-3"
+          className="space-y-2.5 rounded-[8px] border p-3.5"
           style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
         >
           <div>
-            <h2 className="text-[13px] font-semibold">Local Writing Insights</h2>
+            <h2 className="text-[13px] font-semibold">
+              System Hotkeys &amp; Per-App Surface Auto-Detection
+            </h2>
             <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-              100% local SQLite counters for the active profile. Never stores raw text and never
-              leaves your machine.
-            </p>
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-center lexel-mono">
-            <div
-              className="rounded-[6px] border p-2"
-              style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
-            >
-              <div className="text-[15px] font-semibold">
-                {writingStats?.totalWordsChecked ?? 0}
-              </div>
-              <div className="text-[10px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                Words Checked
-              </div>
-            </div>
-            <div
-              className="rounded-[6px] border p-2"
-              style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
-            >
-              <div className="text-[15px] font-semibold">
-                {(writingStats?.totalGrammarHits ?? 0) + (writingStats?.totalSlopHits ?? 0)}
-              </div>
-              <div className="text-[10px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                Grammar &amp; Slop
-              </div>
-            </div>
-            <div
-              className="rounded-[6px] border p-2"
-              style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
-            >
-              <div className="text-[15px] font-semibold" style={{ color: 'var(--lx-signal)' }}>
-                {writingStats?.totalFixesApplied ?? 0}
-              </div>
-              <div className="text-[10px]" style={{ color: 'var(--lx-fg-muted)' }}>
-                Safe Fixes
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] lexel-mono">
-            <span style={{ color: 'var(--lx-fg-muted)' }}>
-              Checks run: {writingStats?.totalChecks ?? 0}
-            </span>
-            <span style={{ color: 'var(--lx-warn)' }}>
-              Secrets caught: {writingStats?.totalSecretBlocks ?? 0}
-            </span>
-          </div>
-          {(writingStats?.topSurfaces ?? []).length > 0 && (
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {(writingStats?.topSurfaces ?? []).map(([surface, count]) => (
-                <span
-                  key={surface}
-                  className="rounded-[4px] border px-2 py-0.5 text-[11px] lexel-mono"
-                  style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
-                >
-                  {surface}: {count}
-                </span>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section
-          className="space-y-2 rounded-[8px] border p-3"
-          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
-        >
-          <div>
-            <h2 className="text-[13px] font-semibold">System-Wide Hotkey &amp; OS Overlay</h2>
-            <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-              Check text copied from Slack, Outlook, Notes, or terminals using the global desktop
-              shortcut.
+              Polish text from any desktop app (Slack, Mail, Linear, Terminal) using global
+              shortcuts with per-app surface detection and manual override.
             </p>
           </div>
           <div
-            className="space-y-1 rounded-[6px] border p-2.5 text-[11px] lexel-mono"
+            className="space-y-1.5 rounded-[6px] border p-2.5 text-[11px] lexel-mono"
             style={{ backgroundColor: 'var(--lx-surface)', borderColor: 'var(--lx-border)' }}
           >
             <div>
-              Shortcut:{' '}
+              Quick Rewrite:{' '}
               <strong style={{ color: 'var(--lx-signal)' }}>
                 {osOverlay?.globalShortcut ?? 'CmdOrCtrl+Shift+L'}
               </strong>
             </div>
-            <div>Platform: {osOverlay?.platform ?? envInfo?.platform ?? 'desktop'}</div>
-            <div>Mode: {osOverlay?.nativeOverlayMode ?? 'global_hotkey_clipboard'}</div>
+            <div>
+              Rewrite Before Paste:{' '}
+              <strong style={{ color: 'var(--lx-ok)' }}>
+                {osOverlay?.rewriteBeforePasteShortcut ?? 'CmdOrCtrl+Alt+V'}
+              </strong>
+            </div>
+            <div>
+              Platform: {osOverlay?.platform ?? envInfo?.platform ?? 'desktop'} · Mode:{' '}
+              {osOverlay?.nativeOverlayMode ?? 'global_hotkey_clipboard'}
+            </div>
           </div>
+
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[180px] flex-1">
+              <label
+                htmlFor="clipboard-surface-override"
+                className="mb-1 block text-[11px] font-medium"
+                style={{ color: 'var(--lx-fg-muted)' }}
+              >
+                Rewrite Before Paste Surface
+              </label>
+              <select
+                id="clipboard-surface-override"
+                value={clipboardSurfaceOverride}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setClipboardSurfaceOverride(val);
+                  void setClipboardOverrideSurface(val === 'auto' ? null : val);
+                }}
+                className="w-full rounded-[6px] border px-2 py-1 text-[12px]"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              >
+                <option value="auto">Auto-detect from active app</option>
+                {BUILTIN_SURFACES.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    Manual: {s.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              onClick={async () => {
+                const res = await detectActiveWindowSurface();
+                setActiveWindowCheck(res);
+              }}
+              className="lx-pressable lx-btn-secondary px-2.5 py-1 text-[12px] font-medium"
+            >
+              Test Active Window
+            </button>
+          </div>
+
+          {activeWindowCheck ? (
+            <div
+              className="rounded-[6px] border px-2.5 py-1.5 text-[11px] lexel-mono"
+              style={{
+                backgroundColor: 'var(--lx-surface)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg-muted)',
+              }}
+            >
+              <div>
+                App: {activeWindowCheck.appName ?? 'unknown'} -&gt;{' '}
+                <strong style={{ color: 'var(--lx-fg)' }}>
+                  {activeWindowCheck.detectedSurfaceId}
+                </strong>
+              </div>
+              <div>{activeWindowCheck.note}</div>
+            </div>
+          ) : null}
+
           <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
             {osOverlay?.notes ??
-              'Copy any draft, press Cmd/Ctrl+Shift+L, and Lexel Desktop opens with the text ready to polish.'}
+              'Copy any draft, press Cmd/Ctrl+Alt+V to rewrite and paste cleanly, or Cmd/Ctrl+Shift+L to open in Studio.'}
           </p>
         </section>
       </div>

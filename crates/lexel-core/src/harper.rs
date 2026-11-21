@@ -1,22 +1,32 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+#[cfg(feature = "tree-sitter-parsers")]
 use harper_asciidoc::AsciidocParser;
+#[cfg(feature = "tree-sitter-parsers")]
 use harper_comments::CommentParser;
 use harper_core::linting::{
     FlatConfig, HumanReadableStructuredConfig, LintGroup, LintKind, StructuredConfig,
 };
-use harper_core::parsers::{CollapseIdentifiers, MarkdownOptions, OrgMode, PlainEnglish};
+#[cfg(feature = "tree-sitter-parsers")]
+use harper_core::parsers::{CollapseIdentifiers, MarkdownOptions};
+use harper_core::parsers::{OrgMode, PlainEnglish};
 use harper_core::spell::{FstDictionary, MergedDictionary, MutableDictionary};
 use harper_core::weirpack::{Weirpack, WeirpackManifest};
 use harper_core::{Dialect, DictWordMetadata, Document, IgnoredLints, make_title_case_str};
+#[cfg(feature = "tree-sitter-parsers")]
 use harper_git_commit::GitCommitParser;
+#[cfg(feature = "tree-sitter-parsers")]
 use harper_html::HtmlParser;
+#[cfg(feature = "tree-sitter-parsers")]
 use harper_python::PythonParser;
+#[cfg(feature = "extra-parsers")]
 use harper_tex::TeX;
+#[cfg(feature = "extra-parsers")]
 use harper_typst::Typst;
 use serde::{Deserialize, Serialize};
 
@@ -455,27 +465,34 @@ impl HarperEngine {
                 Document::new(text, &OrgMode, self.dictionary.as_ref()),
                 None,
             ),
+            #[cfg(feature = "tree-sitter-parsers")]
             "html" => (
                 Document::new(text, &HtmlParser::default(), self.dictionary.as_ref()),
                 None,
             ),
+            #[cfg(feature = "extra-parsers")]
             "tex" => (
                 Document::new(text, &TeX::default(), self.dictionary.as_ref()),
                 None,
             ),
+            #[cfg(feature = "extra-parsers")]
             "typst" => (Document::new(text, &Typst, self.dictionary.as_ref()), None),
+            #[cfg(feature = "tree-sitter-parsers")]
             "asciidoc" => (
                 Document::new(text, &AsciidocParser::default(), self.dictionary.as_ref()),
                 None,
             ),
+            #[cfg(feature = "tree-sitter-parsers")]
             "python" => (
                 Document::new(text, &PythonParser::default(), self.dictionary.as_ref()),
                 None,
             ),
+            #[cfg(feature = "tree-sitter-parsers")]
             "git-commit" => (
                 Document::new(text, &GitCommitParser::default(), self.dictionary.as_ref()),
                 None,
             ),
+            #[cfg(feature = "tree-sitter-parsers")]
             other => {
                 if let Some(comment_parser) =
                     CommentParser::new_from_language_id(other, MarkdownOptions::default())
@@ -505,6 +522,11 @@ impl HarperEngine {
                     None,
                 )
             }
+            #[cfg(not(feature = "tree-sitter-parsers"))]
+            _ => (
+                Document::new_plain_english(text, self.dictionary.as_ref()),
+                None,
+            ),
         }
     }
 }
@@ -877,16 +899,26 @@ pub fn analyze_readability(text: &str) -> ReadabilityReport {
         (0.0, 0.0)
     };
 
-    let passive_voice_count =
-        regex::Regex::new(r"(?i)\b(?:am|is|are|was|were|be|been|being)\s+[a-z]{3,}(?:ed|en)\b")
-            .map(|re| re.find_iter(text).count())
-            .unwrap_or(0);
+    static PASSIVE_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static HEDGING_RE: OnceLock<regex::Regex> = OnceLock::new();
 
-    let hedging_count = regex::Regex::new(
-        r"(?i)\b(?:just|actually|basically|honestly|somewhat|arguably|perhaps|maybe|seemingly|kind of|sort of|i think|i feel)\b",
-    )
-    .map(|re| re.find_iter(text).count())
-    .unwrap_or(0);
+    let passive_voice_count = PASSIVE_RE
+        .get_or_init(|| {
+            regex::Regex::new(r"(?i)\b(?:am|is|are|was|were|be|been|being)\s+[a-z]{3,}(?:ed|en)\b")
+                .expect("valid passive regex")
+        })
+        .find_iter(text)
+        .count();
+
+    let hedging_count = HEDGING_RE
+        .get_or_init(|| {
+            regex::Regex::new(
+                r"(?i)\b(?:just|actually|basically|honestly|somewhat|arguably|perhaps|maybe|seemingly|kind of|sort of|i think|i feel)\b",
+            )
+            .expect("valid hedging regex")
+        })
+        .find_iter(text)
+        .count();
 
     let hedging_percent = if words > 0 {
         (((hedging_count as f64 / words as f64) * 100.0) * 10.0).round() / 10.0
@@ -955,17 +987,25 @@ fn count_syllables(word: &str) -> usize {
 
 /// Return frequency-sorted English synonyms from `harper-thesaurus`.
 pub fn synonyms_for(word: &str) -> Vec<String> {
-    let trimmed = word.trim();
-    if trimmed.is_empty() {
-        return Vec::new();
+    #[cfg(feature = "thesaurus")]
+    {
+        let trimmed = word.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+        harper_thesaurus::thesaurus()
+            .get_synonyms_freq_sorted(trimmed)
+            .unwrap_or_default()
+            .into_iter()
+            .take(16)
+            .map(str::to_owned)
+            .collect()
     }
-    harper_thesaurus::thesaurus()
-        .get_synonyms_freq_sorted(trimmed)
-        .unwrap_or_default()
-        .into_iter()
-        .take(16)
-        .map(str::to_owned)
-        .collect()
+    #[cfg(not(feature = "thesaurus"))]
+    {
+        let _ = word;
+        Vec::new()
+    }
 }
 
 /// Return Harper's curated grouped rule hierarchy for structured UI settings.

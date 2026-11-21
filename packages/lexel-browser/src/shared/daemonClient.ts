@@ -3,7 +3,11 @@ import type {
   DaemonProfile,
   DaemonRuntimeSnapshot,
   DaemonStatusPayload,
+  DoctorReport,
+  GhostCompletionRequest,
+  GhostCompletionResponse,
   RewriteResult,
+  ScopedThreadContext,
   SurfaceId,
   UnifiedDaemonSettings,
   VoiceExample,
@@ -14,6 +18,8 @@ export const NATIVE_HOST_NAME = 'com.lexel.daemon';
 interface NativeResponse<T = unknown> {
   id?: string | number;
   ok: boolean;
+  stream?: boolean;
+  done?: boolean;
   data?: T;
   error?: string;
 }
@@ -25,6 +31,11 @@ export interface NativeDaemonResult<T> {
   forbidden?: boolean;
   notFound?: boolean;
   installHint?: string;
+}
+
+export interface StreamChunkPayload {
+  delta: string;
+  accumulated: string;
 }
 
 function makeNativeInstallHint(): string {
@@ -124,8 +135,132 @@ export async function callNativeDaemon<T>(
   return first;
 }
 
+/**
+ * Stream incremental rewrite chunks from `lexel-daemon` via a persistent Native Messaging port
+ * (`kind: "rewriteStream"` per docs/api/daemon-v0.2.md). Falls back cleanly to single-shot
+ * `daemonRewrite` if `connectNative` is unavailable or the host responds without streaming.
+ */
+export async function daemonRewriteStream(
+  params: {
+    text: string;
+    task: AiTaskId;
+    surfaceId: SurfaceId;
+    subcontext: string | null;
+    threadContext?: string;
+    domain?: string;
+    candidates?: 1 | 2;
+    redactSecrets?: boolean | null;
+  },
+  onChunk?: (chunk: StreamChunkPayload) => void,
+): Promise<NativeDaemonResult<RewriteResult>> {
+  if (typeof chrome === 'undefined' || typeof chrome.runtime?.connectNative !== 'function') {
+    return daemonRewrite(params);
+  }
+
+  const runOnce = (): Promise<NativeDaemonResult<RewriteResult>> =>
+    new Promise((resolve) => {
+      let settled = false;
+      let receivedAnyFrame = false;
+      let port: chrome.runtime.Port | null = null;
+
+      const finish = (result: NativeDaemonResult<RewriteResult>) => {
+        if (settled) return;
+        settled = true;
+        try {
+          port?.disconnect();
+        } catch {
+          // Port may already be closed.
+        }
+        resolve(result);
+      };
+
+      try {
+        port = chrome.runtime.connectNative(NATIVE_HOST_NAME);
+      } catch (err) {
+        finish({
+          connected: false,
+          installHint: makeNativeInstallHint(),
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+
+      const reqId = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+      port.onMessage.addListener((raw: unknown) => {
+        receivedAnyFrame = true;
+        const msg = raw as NativeResponse<RewriteResult | StreamChunkPayload> | undefined;
+        if (!msg || typeof msg !== 'object') {
+          finish({ connected: true, error: 'Malformed native stream frame.' });
+          return;
+        }
+        if (!msg.ok) {
+          finish({
+            connected: true,
+            error: msg.error ?? 'lexel-daemon stream rewrite failed.',
+          });
+          return;
+        }
+        if (msg.stream && msg.done === false && msg.data) {
+          const chunk = msg.data as StreamChunkPayload;
+          if (typeof chunk.accumulated === 'string') {
+            onChunk?.(chunk);
+          }
+          return;
+        }
+        if (msg.data) {
+          finish({
+            connected: true,
+            data: msg.data as RewriteResult,
+          });
+          return;
+        }
+        finish({ connected: true, error: 'Daemon stream ended without a rewrite result.' });
+      });
+
+      port.onDisconnect.addListener(() => {
+        const lastErr = chrome.runtime.lastError?.message;
+        if (settled) return;
+        if (!receivedAnyFrame) {
+          const lower = (lastErr ?? '').toLowerCase();
+          finish({
+            connected: false,
+            forbidden: lower.includes('forbidden'),
+            notFound: lower.includes('not found') || lower.includes('specified native'),
+            installHint: makeNativeInstallHint(),
+            error: lastErr ?? 'Native messaging port disconnected before responding.',
+          });
+        } else {
+          finish({
+            connected: true,
+            error: lastErr ?? 'Native messaging stream disconnected unexpectedly.',
+          });
+        }
+      });
+
+      port.postMessage({
+        id: reqId,
+        kind: 'rewriteStream',
+        payload: params,
+      });
+    });
+
+  const first = await runOnce();
+  if (!first.connected && (first.forbidden || first.notFound)) {
+    const registered = await registerExtensionWithDesktop();
+    if (registered) {
+      return runOnce();
+    }
+  }
+  return first;
+}
+
 export function fetchDaemonStatus(): Promise<NativeDaemonResult<DaemonStatusPayload>> {
   return callNativeDaemon<DaemonStatusPayload>('status');
+}
+
+export function daemonDoctor(bench = false): Promise<NativeDaemonResult<DoctorReport>> {
+  return callNativeDaemon<DoctorReport>('doctor', bench ? { bench: true } : {});
 }
 
 export function daemonGetSettings(): Promise<
@@ -173,8 +308,59 @@ export function daemonRewrite(params: {
   subcontext: string | null;
   threadContext?: string;
   domain?: string;
+  candidates?: 1 | 2;
+  redactSecrets?: boolean | null;
 }): Promise<NativeDaemonResult<RewriteResult>> {
   return callNativeDaemon('rewrite', params);
+}
+
+export function daemonComplete(
+  params: GhostCompletionRequest,
+): Promise<NativeDaemonResult<GhostCompletionResponse>> {
+  return callNativeDaemon('complete', { ...params });
+}
+
+export function daemonScopeThreadContext(
+  source: string,
+  threadContext: string,
+  maxTokens = 300,
+): Promise<NativeDaemonResult<ScopedThreadContext>> {
+  return callNativeDaemon('scopeThreadContext', { source, threadContext, maxTokens });
+}
+
+export function daemonExpandSnippet(params: {
+  trigger: string;
+  surfaceId: SurfaceId;
+  subcontext?: string | null;
+  threadContext?: string;
+  notes?: string;
+  adaptWithAi?: boolean;
+}): Promise<
+  NativeDaemonResult<{
+    trigger: string;
+    rawExpansion: string;
+    expandedText: string;
+    surfaceId: SurfaceId;
+    adaptedWithAi: boolean;
+    latencyMs: number;
+  }>
+> {
+  return callNativeDaemon('expandSnippet', params);
+}
+
+export function daemonRedactPreview(text: string): Promise<
+  NativeDaemonResult<{
+    redactedText: string;
+    redactedCount: number;
+    placeholders: Array<{
+      placeholder: string;
+      kind: string;
+      label: string;
+      maskedPreview: string;
+    }>;
+  }>
+> {
+  return callNativeDaemon('redactPreview', { text });
 }
 
 export function daemonListProfiles(): Promise<

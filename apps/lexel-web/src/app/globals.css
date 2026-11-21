@@ -1,0 +1,513 @@
+@import "tailwindcss";
+@import "lexel-ui/tokens.css";
+@source "../../../../packages/lexel-ui/src";
+
+/*
+ * Theme & color-scheme cascade (modern-web-guidance: dark-mode + dark-mode-toggle).
+ * Respects OS preference by default without JS, and follows explicit meta/data-theme overrides.
+ */
+:root {
+  color-scheme: light dark;
+  --lx-control-border: #71717a;
+  --lx-bg: #ffffff;
+  --lx-surface: #f7f7f8;
+  --lx-surface-hover: #efefef;
+  --lx-card: #ffffff;
+  --lx-muted: #f1f1f2;
+  --lx-muted-hover: #e4e4e7;
+  --lx-fg: #0a0a0a;
+  --lx-fg-muted: #52525b;
+  --lx-border: #e4e4e7;
+  --lx-border-strong: #a1a1aa;
+  --lx-accent: #0a0a0a;
+  --lx-accent-hover: #27272a;
+  --lx-on-accent: #ffffff;
+  --lx-signal: #2563eb;
+  --lx-signal-bg: rgba(37, 99, 235, 0.08);
+  --lx-ok: #15803d;
+  --lx-ok-bg: rgba(21, 128, 61, 0.09);
+  --lx-warn: #b45309;
+  --lx-warn-bg: rgba(180, 83, 9, 0.08);
+  --lx-danger: #dc2626;
+  --lx-danger-bg: rgba(220, 38, 38, 0.08);
+  --lx-ring: #2563eb;
+  --lx-shadow-float: 0 10px 28px rgba(10, 10, 10, 0.1), 0 1px 2px rgba(10, 10, 10, 0.06);
+  --lx-scrollbar-track: #f1f1f2;
+  --lx-scrollbar-thumb: #71717a;
+  accent-color: var(--lx-signal);
+  scrollbar-color: var(--lx-scrollbar-thumb) var(--lx-scrollbar-track);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --lx-bg: #09090b;
+    --lx-surface: #111113;
+    --lx-surface-hover: #18181b;
+    --lx-card: #141416;
+    --lx-muted: #1f1f23;
+    --lx-muted-hover: #27272c;
+    --lx-fg: #fafafa;
+    --lx-fg-muted: #a1a1aa;
+    --lx-border: #27272a;
+    --lx-border-strong: #3f3f46;
+    --lx-accent: #fafafa;
+    --lx-accent-hover: #e4e4e7;
+    --lx-on-accent: #09090b;
+    --lx-signal: #60a5fa;
+    --lx-signal-bg: rgba(96, 165, 250, 0.12);
+    --lx-ok: #4ade80;
+    --lx-ok-bg: rgba(74, 222, 128, 0.12);
+    --lx-warn: #f59e0b;
+    --lx-warn-bg: rgba(245, 158, 11, 0.12);
+    --lx-danger: #f87171;
+    --lx-danger-bg: rgba(248, 113, 113, 0.12);
+    --lx-ring: #60a5fa;
+    --lx-shadow-float: 0 12px 32px rgba(0, 0, 0, 0.48), 0 1px 2px rgba(0, 0, 0, 0.36);
+    --lx-scrollbar-track: #141416;
+    --lx-scrollbar-thumb: #71717a;
+  }
+}
+
+:root:has(> head > meta[name="color-scheme"][content="dark"]),
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --lx-bg: #09090b;
+  --lx-surface: #111113;
+  --lx-surface-hover: #18181b;
+  --lx-card: #141416;
+  --lx-muted: #1f1f23;
+  --lx-muted-hover: #27272c;
+  --lx-fg: #fafafa;
+  --lx-fg-muted: #a1a1aa;
+  --lx-border: #27272a;
+  --lx-border-strong: #3f3f46;
+  --lx-accent: #fafafa;
+  --lx-accent-hover: #e4e4e7;
+  --lx-on-accent: #09090b;
+  --lx-signal: #60a5fa;
+  --lx-signal-bg: rgba(96, 165, 250, 0.12);
+  --lx-ok: #4ade80;
+  --lx-ok-bg: rgba(74, 222, 128, 0.12);
+  --lx-warn: #f59e0b;
+  --lx-warn-bg: rgba(245, 158, 11, 0.12);
+  --lx-danger: #f87171;
+  --lx-danger-bg: rgba(248, 113, 113, 0.12);
+  --lx-ring: #60a5fa;
+  --lx-shadow-float: 0 12px 32px rgba(0, 0, 0, 0.48), 0 1px 2px rgba(0, 0, 0, 0.36);
+  --lx-scrollbar-track: #141416;
+  --lx-scrollbar-thumb: #71717a;
+}
+
+:root:has(> head > meta[name="color-scheme"][content="light"]),
+:root[data-theme="light"] {
+  color-scheme: light;
+  --lx-bg: #ffffff;
+  --lx-surface: #f7f7f8;
+  --lx-surface-hover: #efefef;
+  --lx-card: #ffffff;
+  --lx-muted: #f1f1f2;
+  --lx-muted-hover: #e4e4e7;
+  --lx-fg: #0a0a0a;
+  --lx-fg-muted: #52525b;
+  --lx-border: #e4e4e7;
+  --lx-border-strong: #a1a1aa;
+  --lx-accent: #0a0a0a;
+  --lx-accent-hover: #27272a;
+  --lx-on-accent: #ffffff;
+  --lx-signal: #2563eb;
+  --lx-signal-bg: rgba(37, 99, 235, 0.08);
+  --lx-ok: #15803d;
+  --lx-ok-bg: rgba(21, 128, 61, 0.09);
+  --lx-warn: #b45309;
+  --lx-warn-bg: rgba(180, 83, 9, 0.08);
+  --lx-danger: #dc2626;
+  --lx-danger-bg: rgba(220, 38, 38, 0.08);
+  --lx-ring: #2563eb;
+  --lx-shadow-float: 0 10px 28px rgba(10, 10, 10, 0.1), 0 1px 2px rgba(10, 10, 10, 0.06);
+  --lx-scrollbar-track: #f1f1f2;
+  --lx-scrollbar-thumb: #71717a;
+}
+
+@supports not (scrollbar-color: auto) {
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--lx-scrollbar-track);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--lx-scrollbar-thumb);
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+  background-color: var(--lx-bg);
+  color: var(--lx-fg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  margin: 0;
+  min-block-size: 100dvh;
+  background-color: var(--lx-bg);
+  color: var(--lx-fg);
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+}
+
+/* Base-layer interaction affordances (R-39 & R-32) */
+@layer base {
+  a[href],
+  button:not(:disabled),
+  summary,
+  select:not(:disabled),
+  label[for],
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled),
+  [role="tab"]:not([aria-disabled="true"]),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  select:disabled,
+  input:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+  }
+
+  :is(a, button, summary, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--lx-ring);
+    outline-offset: 2px;
+  }
+}
+
+.skip-link {
+  position: absolute;
+  inset-block-start: -100%;
+  inset-inline-start: 1rem;
+  z-index: 60;
+  padding: 0.625rem 1rem;
+  border-radius: 6px;
+  background-color: var(--lx-accent);
+  color: var(--lx-on-accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.skip-link:focus-visible {
+  inset-block-start: 0.75rem;
+}
+
+/* Responsive site navigation with native Popover on narrow screens (modern-web-guidance: navbar) */
+.site-menu-trigger {
+  anchor-name: --site-menu-trigger;
+}
+
+.site-mobile-popover {
+  position: fixed;
+  inset: auto;
+  inset-block-start: 4.25rem;
+  /* biome-ignore lint/suspicious/noDuplicateProperties: Progressive CSS anchor() override over fixed fallback */
+  inset-block-start: anchor(--site-menu-trigger bottom);
+  inset-inline-end: 1rem;
+  inline-size: min(86dvw, 20rem);
+  max-inline-size: calc(100dvw - 2rem);
+  max-block-size: calc(100dvh - 5.5rem);
+  margin-block-start: 0.5rem;
+  padding: 0.75rem;
+  overflow: auto;
+  border: 1px solid var(--lx-control-border);
+  border-radius: 8px;
+  background-color: var(--lx-card);
+  color: var(--lx-fg);
+}
+
+.site-mobile-popover:not(:is(:popover-open, .\:popover-open)) {
+  display: none;
+}
+
+.site-mobile-popover:is(:popover-open, .\:popover-open) {
+  display: block;
+}
+
+.site-mobile-popover::backdrop {
+  background-color: rgba(9, 9, 11, 0.45);
+}
+
+.nav-link[aria-current="page"] {
+  color: var(--lx-fg);
+  border-block-end: 2px solid var(--lx-signal);
+}
+
+/* Single-row accessible tabs (modern-web-guidance: tabs) */
+.lx-tablist {
+  display: flex;
+  overflow-x: auto;
+  border-block-end: 1px solid var(--lx-border);
+  gap: 0.25rem;
+  scroll-snap-type: inline proximity;
+}
+
+.lx-tab {
+  position: relative;
+  flex: none;
+  min-block-size: 44px;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--lx-fg-muted);
+  background: transparent;
+  border: 0;
+  scroll-snap-align: start;
+  transition: color 120ms ease;
+}
+
+.lx-tab:hover {
+  color: var(--lx-fg);
+}
+
+.lx-tab[aria-selected="true"] {
+  color: var(--lx-fg);
+}
+
+.lx-tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0;
+  border-block-end: 2px solid var(--lx-signal);
+}
+
+/* Responsive data table with @container stacking (modern-web-guidance: responsive-table) */
+.lx-table-region {
+  overflow-x: auto;
+  max-inline-size: 100%;
+  container-type: inline-size;
+  border: 1px solid var(--lx-border);
+  border-radius: 8px;
+  background-color: var(--lx-card);
+}
+
+.lx-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.875rem;
+  text-align: left;
+}
+
+.lx-table thead th {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  background-color: var(--lx-surface);
+  color: var(--lx-fg-muted);
+  font-weight: 600;
+  padding: 0.625rem 0.75rem;
+  border-block-end: 1px solid var(--lx-border);
+  white-space: nowrap;
+}
+
+.lx-table tbody th,
+.lx-table tbody td {
+  padding: 0.625rem 0.75rem;
+  border-block-end: 1px solid var(--lx-border);
+  vertical-align: top;
+}
+
+.lx-table tbody th {
+  font-weight: 600;
+  color: var(--lx-fg);
+  background-color: var(--lx-card);
+}
+
+.lx-table tbody tr:last-child th,
+.lx-table tbody tr:last-child td {
+  border-block-end: 0;
+}
+
+@container (width < 640px) {
+  .lx-table,
+  .lx-table thead,
+  .lx-table tbody,
+  .lx-table tr,
+  .lx-table th,
+  .lx-table td {
+    display: block;
+  }
+
+  .lx-table thead {
+    display: none;
+  }
+
+  .lx-table tbody tr {
+    border-block-end: 1px solid var(--lx-border);
+    padding: 0.75rem 0;
+  }
+
+  .lx-table tbody tr:last-child {
+    border-block-end: 0;
+  }
+
+  .lx-table tbody th {
+    padding: 0.5rem 1rem 0.25rem;
+    border-block-end: 0;
+    font-size: 0.9375rem;
+  }
+
+  .lx-table tbody td {
+    padding: 0.25rem 1rem;
+    border-block-end: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+  }
+
+  .lx-table tbody td[data-label]::before {
+    content: attr(data-label) ": ";
+    font-weight: 600;
+    color: var(--lx-fg-muted);
+  }
+}
+
+/* Fluid editorial type scale (antislop-layoutmobile) */
+.lx-hero-title {
+  font-size: clamp(2rem, 1.4rem + 2.4vw, 3.35rem);
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+  font-weight: 650;
+}
+
+.lx-section-title {
+  font-size: clamp(1.375rem, 1.15rem + 0.9vw, 1.875rem);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+.lx-control {
+  border: 1px solid var(--lx-control-border);
+  border-radius: 6px;
+  background-color: var(--lx-card);
+  color: var(--lx-fg);
+  min-block-size: 44px;
+}
+
+.lx-control:hover:not(:disabled) {
+  background-color: var(--lx-muted);
+}
+
+.lx-web-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-block-size: 44px;
+  padding: 0.55rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--lx-accent);
+  background-color: var(--lx-accent);
+  color: var(--lx-on-accent);
+  font-weight: 600;
+  font-size: 0.875rem;
+  text-decoration: none;
+  transition:
+    background-color 120ms ease,
+    opacity 120ms ease;
+}
+
+.lx-web-btn-primary:hover:not(:disabled) {
+  background-color: var(--lx-accent-hover);
+}
+
+.lx-web-btn-primary:active:not(:disabled) {
+  opacity: 0.88;
+}
+
+.lx-web-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-block-size: 44px;
+  padding: 0.55rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--lx-control-border);
+  background-color: var(--lx-card);
+  color: var(--lx-fg);
+  font-weight: 500;
+  font-size: 0.875rem;
+  text-decoration: none;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.lx-web-btn-secondary:hover:not(:disabled) {
+  background-color: var(--lx-muted);
+}
+
+.lx-web-btn-secondary:active:not(:disabled) {
+  opacity: 0.88;
+}
+
+.lx-web-btn-compact {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  min-block-size: 44px;
+  padding: 0.375rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--lx-control-border);
+  background-color: var(--lx-card);
+  color: var(--lx-fg);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-decoration: none;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+@media (min-width: 768px) {
+  .lx-web-btn-compact {
+    min-block-size: 34px;
+  }
+}
+
+.lx-web-btn-compact:hover:not(:disabled) {
+  background-color: var(--lx-muted);
+}
+
+.lx-code-block {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  background-color: var(--lx-surface);
+  color: var(--lx-fg);
+  border: 1px solid var(--lx-border);
+  border-radius: 6px;
+  padding: 0.875rem 1rem;
+  overflow-x: auto;
+  max-inline-size: 100%;
+}
+
+.lx-inline-code {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  padding: 0.125rem 0.35rem;
+  border-radius: 4px;
+  background-color: var(--lx-muted);
+  color: var(--lx-fg);
+}

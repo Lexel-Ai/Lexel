@@ -8,8 +8,10 @@ description = "Local Lexel AI daemon, Native Messaging host, model lifecycle man
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+base64.workspace = true
 clap.workspace = true
 dirs.workspace = true
+futures-core = "0.3"
 lexel-core = { path = "../lexel-core" }
 lexel-db = { path = "../lexel-db" }
 reqwest.workspace = true

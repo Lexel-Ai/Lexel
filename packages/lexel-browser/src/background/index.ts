@@ -15,11 +15,14 @@ import {
 import { type UnpackedLintGroups, unpackLint } from 'lint-framework';
 import {
   daemonApplyRulePreset,
+  daemonComplete,
   daemonCreateProfile,
   daemonDeleteModel,
   daemonDeleteProfile,
   daemonDeleteVoiceExample,
+  daemonDoctor,
   daemonDownloadModel,
+  daemonExpandSnippet,
   daemonListProfiles,
   daemonListVoiceExamples,
   daemonLookupSynonyms,
@@ -27,7 +30,9 @@ import {
   daemonPurgeAll,
   daemonRenameProfile,
   daemonRewrite,
+  daemonRewriteStream,
   daemonSaveVoiceExample,
+  daemonScopeThreadContext,
   daemonSetMainModel,
   daemonSwitchProfile,
   daemonToggleAi,
@@ -48,26 +53,34 @@ import {
   getAiSettings,
   getAllDomainStatuses,
   getAllSurfaceOverrides,
+  getCrutchWords,
   getCustomSlopConfig,
   getCustomSurfaces,
+  getGhostTextEnabled,
   getLanguageMode,
+  getLocalSecretBlockCount,
   getPageSummary,
   getPrivacyBlocklist,
+  getRedactSecrets,
   getSnippets,
   getStoredWeirpacks,
   getStyleGuide,
   getSurfaceOverride,
   getTheme,
   getVoiceExamples,
+  incrementLocalSecretBlockCount,
   normalizeAiSettings,
   saveVoiceExample,
   setActiveDraft,
   setAiSettings,
+  setCrutchWords,
   setCustomSlopConfig,
   setCustomSurfaces,
+  setGhostTextEnabled,
   setLanguageMode,
   setPageSummary,
   setPrivacyBlocklist,
+  setRedactSecrets,
   setSnippets,
   setStoredWeirpacks,
   setStyleGuide,
@@ -75,10 +88,14 @@ import {
   setTheme,
 } from '../shared/storage';
 import { isDomainBlocked } from '../shared/surfaceDetector';
+import { scopeThreadContextLocally } from '../shared/threadContext';
+import { analyzeFullTier0 } from '../shared/tier0Engine';
 import type {
   ActivationKey,
   AiSettings,
+  AiTaskId,
   ExtensionRequest,
+  GhostCompletionResponse,
   Hotkey,
   LintResponse,
   RewriteResult,
@@ -91,6 +108,7 @@ import {
   scanTier0Diagnostics,
   verifyAiRewrite,
 } from '../shared/verifier';
+import { clearLexelWasmCache, runLexelWasmCheck } from '../shared/wasmEngine';
 import { detectBrowserDialect } from './detectDialect';
 
 let linter: LocalLinter | null = null;
@@ -304,20 +322,69 @@ async function handleLint(
     return { kind: 'lints', lints: {} };
   }
 
-  const [isolateRes, languageMode, slopCfg, customSurfaces, styleGuide] = await Promise.all([
+  const [
+    isolateRes,
+    languageMode,
+    slopCfg,
+    customSurfaces,
+    styleGuide,
+    crutchWords,
+    dict,
+    weirpacks,
+  ] = await Promise.all([
     chrome.storage.local.get({ isolateEnglish: false }),
     getLanguageMode(),
     getCustomSlopConfig(),
     getCustomSurfaces(),
     getStyleGuide(),
+    getCrutchWords(),
+    getUserDictionary(),
+    getStoredWeirpacks(),
   ]);
+  const surfaceId: SurfaceId = req.surfaceId ?? 'general';
+  const effectiveLanguage =
+    (req.options?.language as 'plaintext' | 'markdown' | 'typst' | undefined) ?? languageMode;
+
+  // Primary zero-daemon Tier 0 path: Rust `lexel-wasm` (Harper + slop meter + consistency + guards + paragraph cache).
+  const wasmResult = await runLexelWasmCheck(req.text, {
+    surfaceId,
+    language: effectiveLanguage,
+    dialect: Number(await getDialect()),
+    userDictionary: dict,
+    customSlopTerms: slopCfg.customTerms,
+    disabledSlopTerms: slopCfg.disabledTerms,
+    customSurfaces,
+    styleGuide,
+    crutchWords,
+    weirpacks,
+  }).catch(() => null);
+
+  if (wasmResult) {
+    if (sender?.tab?.id != null) {
+      await setPageSummary({
+        tabId: sender.tab.id,
+        domain: req.domain,
+        surfaceId,
+        subcontext: req.subcontext ?? null,
+        harperCount: wasmResult.harperCount,
+        slopCount: wasmResult.slopCount,
+        surfaceWarningCount: wasmResult.surfaceWarningCount,
+        slopScore: wasmResult.slopScore,
+        guardCount: wasmResult.guardCount,
+        consistencyCount: wasmResult.consistencyCount,
+        engineSource: 'lexel-wasm',
+        updatedAt: Date.now(),
+      });
+    }
+    return { kind: 'lints', lints: wasmResult.bySource };
+  }
+
   const isolateEnglish =
     (req.options?.isolateEnglish as boolean | undefined) ?? isolateRes.isolateEnglish === true;
 
   const grouped = await instance.organizedLints(req.text, {
     ...(req.options ?? {}),
-    language:
-      (req.options?.language as 'plaintext' | 'markdown' | 'typst' | undefined) ?? languageMode,
+    language: effectiveLanguage,
     isolateEnglish,
   });
 
@@ -332,7 +399,6 @@ async function handleLint(
   );
 
   const bySource = Object.fromEntries(unpackedEntries) as UnpackedLintGroups;
-  const surfaceId: SurfaceId = req.surfaceId ?? 'general';
   const { slopLints, surfaceLints, secretLints, invisibleLints, structureLints, styleGuideLints } =
     scanTier0Diagnostics(req.text, surfaceId, {
       customSlopTerms: slopCfg.customTerms,
@@ -340,6 +406,11 @@ async function handleLint(
       customSurfaces,
       styleGuide,
     });
+  const fullTier0 = analyzeFullTier0(req.text, surfaceId, {
+    customSlopTerms: slopCfg.customTerms,
+    disabledSlopTerms: slopCfg.disabledTerms,
+    crutchWords,
+  });
 
   if (secretLints.length > 0) {
     bySource.LexelSecrets = secretLints;
@@ -359,6 +430,30 @@ async function handleLint(
   if (surfaceLints.length > 0) {
     bySource.LexelSurface = surfaceLints;
   }
+  if (fullTier0.consistencyWarnings.length > 0) {
+    bySource.LexelConsistency = fullTier0.consistencyWarnings.map((w, idx) => ({
+      span: { start: w.start, end: w.end },
+      message_html: w.message,
+      problem_text: req.text.slice(w.start, w.end) || w.variants[0] || '',
+      lint_kind: 'Style',
+      lint_kind_pretty: 'Consistency',
+      suggestions: [],
+      context_hash: `lexel_cons_${idx}_${w.start}`,
+      source: req.text,
+    }));
+  }
+  if (fullTier0.guardWarnings.length > 0) {
+    bySource.LexelGuard = fullTier0.guardWarnings.map((w, idx) => ({
+      span: { start: w.start, end: w.end },
+      message_html: w.message,
+      problem_text: w.problemText,
+      lint_kind: 'Readability',
+      lint_kind_pretty: w.title,
+      suggestions: [],
+      context_hash: `lexel_guard_${idx}_${w.start}`,
+      source: req.text,
+    }));
+  }
 
   const lexelSyntheticSources = new Set([
     'LexelAntiSlop',
@@ -367,6 +462,8 @@ async function handleLint(
     'LexelInvisibleChars',
     'LexelStructure',
     'LexelStyleGuide',
+    'LexelConsistency',
+    'LexelGuard',
   ]);
   const harperCount = Object.entries(bySource)
     .filter(([k]) => !lexelSyntheticSources.has(k))
@@ -381,6 +478,10 @@ async function handleLint(
       harperCount,
       slopCount: slopLints.length,
       surfaceWarningCount: surfaceLints.length,
+      slopScore: fullTier0.slopMeter.score,
+      guardCount: fullTier0.guardWarnings.length,
+      consistencyCount: fullTier0.consistencyWarnings.length,
+      engineSource: fullTier0.engineSource,
       updatedAt: Date.now(),
     });
   }
@@ -467,10 +568,13 @@ async function handleAiHealth(): Promise<LocalAiHealth> {
 async function handleAiRewrite(
   req: Extract<ExtensionRequest, { kind: 'aiRewrite' }>,
 ): Promise<{ ok: true; result: RewriteResult } | { ok: false; error: string }> {
-  if (hasSecrets(req.text)) {
+  const redactSetting = req.redactSecrets ?? (await getRedactSecrets());
+  if (!redactSetting && hasSecrets(req.text)) {
+    await incrementLocalSecretBlockCount();
     return {
       ok: false,
-      error: 'Secrets Guard blocked this rewrite because sensitive tokens or PII were detected.',
+      error:
+        'Secrets Guard blocked this rewrite because sensitive tokens or PII were detected. Enable redact-and-restore in settings to mask secrets automatically.',
     };
   }
   if (req.domain) {
@@ -482,6 +586,9 @@ async function handleAiRewrite(
       };
     }
   }
+  const scopedThread = req.threadContext
+    ? scopeThreadContextLocally(req.text, req.threadContext, 300).scopedText
+    : undefined;
   const started = performance.now();
   try {
     const daemonRes = await daemonRewrite({
@@ -489,14 +596,24 @@ async function handleAiRewrite(
       task: req.task,
       surfaceId: req.surfaceId,
       subcontext: req.subcontext,
-      threadContext: req.threadContext,
+      threadContext: scopedThread,
       domain: req.domain,
+      candidates: req.candidates,
+      redactSecrets: req.redactSecrets,
     });
     if (daemonRes.connected) {
       if (daemonRes.data) {
         return { ok: true, result: daemonRes.data };
       }
       return { ok: false, error: daemonRes.error ?? 'lexel-daemon failed to rewrite.' };
+    }
+
+    if (hasSecrets(req.text)) {
+      await incrementLocalSecretBlockCount();
+      return {
+        ok: false,
+        error: 'Secrets Guard blocked direct fallback because lexel-daemon is offline.',
+      };
     }
 
     const [settings, slopCfg, customSurfaces] = await Promise.all([
@@ -510,7 +627,7 @@ async function handleAiRewrite(
       task: req.task,
       surfaceId: req.surfaceId,
       subcontext: req.subcontext,
-      threadContext: req.threadContext,
+      threadContext: scopedThread,
       voiceExamples,
       customSurfaces,
     });
@@ -533,11 +650,49 @@ async function handleAiRewrite(
         gates,
         surfaceId: req.surfaceId,
         subcontext: req.subcontext,
+        candidates: [{ label: 'Direct', suggestion, gates, retried: false }],
       },
     };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
+}
+
+async function handleGhostComplete(
+  req: Extract<ExtensionRequest, { kind: 'ghostComplete' }>,
+): Promise<{ ok: true; result: GhostCompletionResponse } | { ok: false; error: string }> {
+  const [ghostEnabled, redactEnabled] = await Promise.all([
+    getGhostTextEnabled(),
+    getRedactSecrets(),
+  ]);
+  if (!ghostEnabled) {
+    return { ok: false, error: 'Ghost-text autocomplete is off.' };
+  }
+  if (!redactEnabled && hasSecrets(req.prefix)) {
+    await incrementLocalSecretBlockCount();
+    return { ok: false, error: 'Secrets Guard blocked ghost-text completion.' };
+  }
+  if (req.domain) {
+    const blocklist = await getPrivacyBlocklist();
+    if (isDomainBlocked(req.domain, blocklist)) {
+      return { ok: false, error: 'Ghost-text is blocked on this domain.' };
+    }
+  }
+  const daemonRes = await daemonComplete({
+    prefix: req.prefix,
+    suffix: req.suffix,
+    surfaceId: req.surfaceId,
+    subcontext: req.subcontext ?? null,
+    domain: req.domain,
+    maxTokens: req.maxTokens ?? 24,
+  });
+  if (daemonRes.connected) {
+    if (daemonRes.data) {
+      return { ok: true, result: daemonRes.data };
+    }
+    return { ok: false, error: daemonRes.error ?? 'Completion unavailable.' };
+  }
+  return { ok: false, error: 'Connect Lexel Desktop to use local ghost-text completion.' };
 }
 
 async function handleSetAiSettings(nextRaw: AiSettings): Promise<void> {
@@ -776,6 +931,68 @@ async function handleRequest(
     }
     case 'aiRewrite':
       return handleAiRewrite(req);
+    case 'ghostComplete':
+      return handleGhostComplete(req);
+    case 'getGhostTextEnabled':
+      return { enabled: await getGhostTextEnabled() };
+    case 'setGhostTextEnabled':
+      await setGhostTextEnabled(req.enabled);
+      await pushPatchToDaemon({ ghostTextEnabled: req.enabled });
+      return { kind: 'unit' };
+    case 'getRedactSecrets':
+      return { enabled: await getRedactSecrets() };
+    case 'setRedactSecrets':
+      await setRedactSecrets(req.enabled);
+      await pushPatchToDaemon({ redactSecrets: req.enabled });
+      return { kind: 'unit' };
+    case 'getCrutchWords':
+      return { words: await getCrutchWords() };
+    case 'setCrutchWords':
+      await setCrutchWords(req.words);
+      clearLexelWasmCache();
+      await pushPatchToDaemon({ crutchWords: req.words });
+      return { kind: 'unit' };
+    case 'getPrivacyStats': {
+      const [localSecretBlocks, redactSecrets, blocklist] = await Promise.all([
+        getLocalSecretBlockCount(),
+        getRedactSecrets(),
+        getPrivacyBlocklist(),
+      ]);
+      return { localSecretBlocks, redactSecrets, blocklistCount: blocklist.length };
+    }
+    case 'getDoctorReport': {
+      const res = await daemonDoctor(req.bench === true);
+      if (res.connected && res.data) {
+        return { ok: true, report: res.data };
+      }
+      return {
+        ok: false,
+        error: res.error ?? 'Connect Lexel Desktop to run daemon diagnostics.',
+      };
+    }
+    case 'scopeThreadContext': {
+      const res = await daemonScopeThreadContext(req.source, req.threadContext, req.maxTokens);
+      if (res.connected && res.data) {
+        return { scoped: res.data };
+      }
+      return {
+        scoped: scopeThreadContextLocally(req.source, req.threadContext, req.maxTokens ?? 300),
+      };
+    }
+    case 'expandContextSnippet': {
+      const res = await daemonExpandSnippet({
+        trigger: req.trigger,
+        surfaceId: req.surfaceId,
+        subcontext: req.subcontext ?? null,
+        threadContext: req.threadContext,
+        notes: req.notes,
+        adaptWithAi: req.adaptWithAi,
+      });
+      if (res.connected && res.data) {
+        return { ok: true, result: res.data };
+      }
+      return { ok: false, error: res.error ?? 'Snippet expansion requires Lexel Desktop.' };
+    }
     case 'getDaemonStatus':
       return fetchDaemonStatus();
     case 'syncFromDaemon': {
@@ -1097,6 +1314,119 @@ chrome.runtime.onMessage.addListener((message: ExtensionRequest, sender, sendRes
     }
   })();
   return true;
+});
+
+chrome.runtime.onConnect?.addListener((port) => {
+  if (port.name !== 'lexel-rewrite-stream') return;
+  let disconnected = false;
+  port.onDisconnect.addListener(() => {
+    disconnected = true;
+  });
+
+  port.onMessage.addListener((raw: unknown) => {
+    const req = raw as {
+      kind?: string;
+      text?: string;
+      task?: AiTaskId;
+      surfaceId?: SurfaceId;
+      subcontext?: string | null;
+      threadContext?: string;
+      domain?: string;
+      candidates?: 1 | 2;
+      redactSecrets?: boolean | null;
+    };
+    if (
+      req?.kind !== 'aiRewriteStream' ||
+      typeof req.text !== 'string' ||
+      !req.task ||
+      !req.surfaceId
+    ) {
+      return;
+    }
+
+    const safePost = (payload: unknown) => {
+      if (disconnected) return;
+      try {
+        port.postMessage(payload);
+      } catch {
+        disconnected = true;
+      }
+    };
+
+    const safeText = req.text;
+    const safeTask = req.task;
+    const safeSurfaceId = req.surfaceId;
+
+    void (async () => {
+      const redactSetting = req.redactSecrets ?? (await getRedactSecrets());
+      if (!redactSetting && hasSecrets(safeText)) {
+        await incrementLocalSecretBlockCount();
+        safePost({
+          type: 'error',
+          error:
+            'Secrets Guard blocked this rewrite because sensitive tokens or PII were detected.',
+        });
+        return;
+      }
+      if (req.domain) {
+        const blocklist = await getPrivacyBlocklist();
+        if (isDomainBlocked(req.domain, blocklist)) {
+          safePost({
+            type: 'error',
+            error: `AI is blocked on ${req.domain} by your privacy blocklist.`,
+          });
+          return;
+        }
+      }
+
+      const scopedThread = req.threadContext
+        ? scopeThreadContextLocally(safeText, req.threadContext, 300).scopedText
+        : undefined;
+
+      const streamRes = await daemonRewriteStream(
+        {
+          text: safeText,
+          task: safeTask,
+          surfaceId: safeSurfaceId,
+          subcontext: req.subcontext ?? null,
+          threadContext: scopedThread,
+          domain: req.domain,
+          candidates: req.candidates,
+          redactSecrets: req.redactSecrets,
+        },
+        (chunk) => {
+          safePost({ type: 'chunk', delta: chunk.delta, accumulated: chunk.accumulated });
+        },
+      );
+
+      if (streamRes.connected) {
+        if (streamRes.data) {
+          safePost({ type: 'complete', result: streamRes.data });
+        } else {
+          safePost({ type: 'error', error: streamRes.error ?? 'lexel-daemon stream failed.' });
+        }
+        return;
+      }
+
+      // Daemon offline: fall back to direct local AI handler.
+      const fallback = await handleAiRewrite({
+        kind: 'aiRewrite',
+        text: safeText,
+        task: safeTask,
+        surfaceId: safeSurfaceId,
+        subcontext: req.subcontext ?? null,
+        threadContext: scopedThread,
+        domain: req.domain,
+        candidates: req.candidates,
+        redactSecrets: req.redactSecrets,
+      });
+      if (fallback.ok) {
+        safePost({ type: 'complete', result: fallback.result });
+      } else {
+        safePost({ type: 'error', error: fallback.error });
+      }
+    })();
+  });
 });
 
 void ensureLinter().catch((err) => {

@@ -1,3 +1,11 @@
 @import "tailwindcss";
 @import "lexel-ui/tokens.css";
 @source "../../lexel-ui/src";
+
+:root {
+  color-scheme: light dark;
+}
+
+.lexel-root {
+  scrollbar-color: var(--lx-border-strong) transparent;
+}

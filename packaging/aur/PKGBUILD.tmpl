@@ -1,0 +1,18 @@
+# Maintainer: Lexel Contributors <https://github.com/Lexel-Ai/Lexel>
+pkgname=lexel-bin
+pkgver={{VERSION}}
+pkgrel=1
+pkgdesc="Local-first, zero-telemetry writing assistant CLI, daemon, and LSP server"
+arch=('x86_64')
+url="https://github.com/Lexel-Ai/Lexel"
+license=('Apache-2.0')
+provides=('lexel' 'lexel-daemon' 'lexel-ls')
+conflicts=('lexel' 'lexel-git')
+source=("lexel-${pkgver}-linux-x86_64.tar.gz::{{URL_LINUX_X86_64}}")
+sha256sums=('{{SHA256_LINUX_X86_64}}')
+
+package() {
+  install -Dm755 "${srcdir}/lexel" "${pkgdir}/usr/bin/lexel"
+  install -Dm755 "${srcdir}/lexel-daemon" "${pkgdir}/usr/bin/lexel-daemon"
+  install -Dm755 "${srcdir}/lexel-ls" "${pkgdir}/usr/bin/lexel-ls"
+}

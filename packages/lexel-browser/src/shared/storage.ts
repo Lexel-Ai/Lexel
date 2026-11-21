@@ -26,6 +26,8 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
   idleUnloadSecs: 180,
   keepWarm: false,
   saveVoiceMemory: true,
+  redactSecrets: false,
+  ghostTextEnabled: false,
 };
 
 const KEYS = {
@@ -43,6 +45,10 @@ const KEYS = {
   weirpacks: 'lexel_weirpacks',
   styleGuide: 'lexel_style_guide',
   snippets: 'lexel_snippets',
+  ghostTextEnabled: 'lexel_ghost_text_enabled',
+  redactSecrets: 'lexel_redact_secrets',
+  crutchWords: 'lexel_crutch_words',
+  secretBlockCount: 'lexel_secret_block_count',
 } as const;
 
 const DOMAIN_KEY_PREFIX = 'domainStatus ';
@@ -74,6 +80,46 @@ export async function getTheme(): Promise<'dark' | 'light'> {
 
 export async function setTheme(theme: 'dark' | 'light'): Promise<void> {
   await chrome.storage.local.set({ [KEYS.theme]: theme });
+}
+
+export async function getGhostTextEnabled(): Promise<boolean> {
+  const res = await chrome.storage.local.get({ [KEYS.ghostTextEnabled]: false });
+  return res[KEYS.ghostTextEnabled] === true;
+}
+
+export async function setGhostTextEnabled(enabled: boolean): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.ghostTextEnabled]: enabled });
+}
+
+export async function getRedactSecrets(): Promise<boolean> {
+  const res = await chrome.storage.local.get({ [KEYS.redactSecrets]: false });
+  return res[KEYS.redactSecrets] === true;
+}
+
+export async function setRedactSecrets(enabled: boolean): Promise<void> {
+  await chrome.storage.local.set({ [KEYS.redactSecrets]: enabled });
+}
+
+export async function getCrutchWords(): Promise<string[]> {
+  const res = await chrome.storage.local.get({ [KEYS.crutchWords]: [] as string[] });
+  return Array.isArray(res[KEYS.crutchWords]) ? (res[KEYS.crutchWords] as string[]) : [];
+}
+
+export async function setCrutchWords(words: string[]): Promise<void> {
+  const cleaned = [...new Set(words.map((w) => w.trim().toLowerCase()).filter(Boolean))];
+  await chrome.storage.local.set({ [KEYS.crutchWords]: cleaned });
+}
+
+export async function getLocalSecretBlockCount(): Promise<number> {
+  const res = await chrome.storage.local.get({ [KEYS.secretBlockCount]: 0 });
+  const raw = res[KEYS.secretBlockCount];
+  return typeof raw === 'number' ? raw : 0;
+}
+
+export async function incrementLocalSecretBlockCount(): Promise<number> {
+  const next = (await getLocalSecretBlockCount()) + 1;
+  await chrome.storage.local.set({ [KEYS.secretBlockCount]: next });
+  return next;
 }
 
 export async function getVoiceExamples(surfaceId?: SurfaceId): Promise<VoiceExample[]> {
@@ -177,6 +223,8 @@ export async function applyUnifiedSettingsToStorage(
     idleUnloadSecs: settings.idleUnloadSecs,
     keepWarm: settings.keepWarm,
     saveVoiceMemory: settings.saveVoiceMemory,
+    redactSecrets: settings.redactSecrets === true,
+    ghostTextEnabled: settings.ghostTextEnabled === true,
   };
 
   const payload: Record<string, unknown> = {
@@ -200,6 +248,9 @@ export async function applyUnifiedSettingsToStorage(
     [KEYS.weirpacks]: settings.weirpacks ?? [],
     [KEYS.styleGuide]: settings.styleGuide ?? [],
     [KEYS.snippets]: settings.snippets ?? [],
+    [KEYS.ghostTextEnabled]: settings.ghostTextEnabled === true,
+    [KEYS.redactSecrets]: settings.redactSecrets === true,
+    [KEYS.crutchWords]: settings.crutchWords ?? [],
   };
 
   if (settings.hotkey) {

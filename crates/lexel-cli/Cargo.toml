@@ -3,7 +3,7 @@ name = "lexel-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Fast zero-AI CLI linter, readability analyzer, safe fixer, and Weirpack tool."
+description = "Fast zero-AI CLI linter, CI SARIF gate, doctor diagnostics, model benchmark runner, voice importer, and SimPO exporter."
 
 [[bin]]
 name = "lexel"
@@ -12,6 +12,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+dirs.workspace = true
 lexel-core = { path = "../lexel-core" }
+lexel-db = { path = "../lexel-db" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
+tokio.workspace = true

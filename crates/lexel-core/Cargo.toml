@@ -5,18 +5,30 @@ edition.workspace = true
 license.workspace = true
 description = "Deterministic Tier 0 Harper + anti-slop scanner, surface catalog, and Tier 2 rewrite gatekeeper for Lexel."
 
+[features]
+default = ["tree-sitter-parsers", "extra-parsers", "thesaurus"]
+tree-sitter-parsers = [
+  "dep:harper-asciidoc",
+  "dep:harper-comments",
+  "dep:harper-git-commit",
+  "dep:harper-html",
+  "dep:harper-python",
+]
+extra-parsers = ["dep:harper-tex", "dep:harper-typst"]
+thesaurus = ["dep:harper-thesaurus"]
+
 [dependencies]
 aho-corasick.workspace = true
 base64.workspace = true
-harper-asciidoc = { path = "../../vendor/harper/harper-asciidoc" }
-harper-comments = { path = "../../vendor/harper/harper-comments" }
+harper-asciidoc = { path = "../../vendor/harper/harper-asciidoc", optional = true }
+harper-comments = { path = "../../vendor/harper/harper-comments", optional = true }
 harper-core = { path = "../../vendor/harper/harper-core" }
-harper-git-commit = { path = "../../vendor/harper/harper-git-commit" }
-harper-html = { path = "../../vendor/harper/harper-html" }
-harper-python = { path = "../../vendor/harper/harper-python" }
-harper-tex = { path = "../../vendor/harper/harper-tex" }
-harper-thesaurus = { path = "../../vendor/harper/harper-thesaurus" }
-harper-typst = { path = "../../vendor/harper/harper-typst" }
+harper-git-commit = { path = "../../vendor/harper/harper-git-commit", optional = true }
+harper-html = { path = "../../vendor/harper/harper-html", optional = true }
+harper-python = { path = "../../vendor/harper/harper-python", optional = true }
+harper-tex = { path = "../../vendor/harper/harper-tex", optional = true }
+harper-thesaurus = { path = "../../vendor/harper/harper-thesaurus", optional = true }
+harper-typst = { path = "../../vendor/harper/harper-typst", optional = true }
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

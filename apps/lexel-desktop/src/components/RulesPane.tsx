@@ -1,10 +1,11 @@
 import { BUILTIN_SURFACES, HARPER_RULE_PRESETS, type RulePresetId, SLOP_TERMS } from 'lexel-ui';
 import type React from 'react';
 import { useMemo, useRef, useState } from 'react';
-import { daemonRpc } from '../lib/desktopClient';
+import { daemonRpc, getRedactPreview } from '../lib/desktopClient';
 import type {
   HarperRulesPayload,
   Hotkey,
+  RedactPreviewResponse,
   StoredWeirpack,
   StyleGuideRule,
   TextSnippet,
@@ -58,8 +59,14 @@ export function RulesPane({
   const [snippetTrigger, setSnippetTrigger] = useState('');
   const [snippetExpansion, setSnippetExpansion] = useState('');
   const [snippetLabel, setSnippetLabel] = useState('');
+  const [crutchInput, setCrutchInput] = useState('');
+  const [redactSample, setRedactSample] = useState(
+    'Staging key AKIAIOSFODNN7EXAMPLE is ready for deploy.',
+  );
+  const [redactPreview, setRedactPreview] = useState<RedactPreviewResponse | null>(null);
 
   const activeHotkey: Hotkey = settings.hotkey ?? { modifiers: ['Alt'], key: 'l' };
+  const crutchWords: string[] = settings.crutchWords ?? [];
   const weirpacks: StoredWeirpack[] = settings.weirpacks ?? [];
   const styleGuide: StyleGuideRule[] = settings.styleGuide ?? [];
   const snippets: TextSnippet[] = settings.snippets ?? [];
@@ -317,15 +324,167 @@ export function RulesPane({
     setSnippetLabel('');
   }
 
+  async function addCrutchWord(e: React.FormEvent) {
+    e.preventDefault();
+    const word = crutchInput.trim().toLowerCase();
+    if (!word) return;
+    const nextCrutch = crutchWords.some((w) => w.toLowerCase() === word)
+      ? crutchWords
+      : [...crutchWords, word];
+    const nextCustomSlop = settings.customSlopTerms.some((t) => t.toLowerCase() === word)
+      ? settings.customSlopTerms
+      : [...settings.customSlopTerms, word];
+    await onPatchSettings({ crutchWords: nextCrutch, customSlopTerms: nextCustomSlop });
+    setCrutchInput('');
+  }
+
+  async function removeCrutchWord(word: string) {
+    const lower = word.toLowerCase();
+    await onPatchSettings({
+      crutchWords: crutchWords.filter((w) => w.toLowerCase() !== lower),
+      customSlopTerms: settings.customSlopTerms.filter((t) => t.toLowerCase() !== lower),
+    });
+  }
+
+  async function handleRunRedactPreview() {
+    const preview = await getRedactPreview(redactSample);
+    setRedactPreview(preview);
+  }
+
   return (
     <div className="space-y-4">
       <header>
-        <h1 className="text-[18px] font-semibold">Grammar, Anti-Slop, Extension &amp; Privacy</h1>
-        <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
-          Every grammar rule, anti-slop list, and browser extension preference lives in lexel.db and
-          syncs automatically.
+        <h1 className="text-[20px] font-semibold tracking-[-0.02em]">
+          Rules, Crutch Words &amp; Privacy
+        </h1>
+        <p className="mt-0.5 text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
+          Every grammar rule, crutch-word ban, secret redaction policy, and browser extension
+          preference lives in lexel.db and syncs locally.
         </p>
       </header>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <section
+          aria-label="Personal Crutch-Word Bans"
+          className="space-y-2.5 rounded-[8px] border p-3.5"
+          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+        >
+          <div>
+            <h2 className="text-[13px] font-semibold">
+              Personal Crutch-Word Bans ({crutchWords.length})
+            </h2>
+            <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+              Flag your own overused filler words across Studio, Browser, and IDE.
+            </p>
+          </div>
+          <form onSubmit={addCrutchWord} className="flex gap-2">
+            <input
+              type="text"
+              value={crutchInput}
+              onChange={(e) => setCrutchInput(e.target.value)}
+              placeholder="e.g. just, actually, basically"
+              aria-label="Add personal crutch word"
+              className="min-w-0 flex-1 rounded-[6px] border px-2.5 py-1 text-[12px]"
+              style={{
+                backgroundColor: 'var(--lx-surface)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            />
+            <button
+              type="submit"
+              className="lx-pressable lx-btn-secondary px-2.5 py-1 text-[12px] font-medium"
+            >
+              Ban word
+            </button>
+          </form>
+          <div className="flex flex-wrap gap-1.5">
+            {crutchWords.length === 0 ? (
+              <p className="text-[12px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                No personal crutch words banned yet.
+              </p>
+            ) : (
+              crutchWords.map((word) => (
+                <button
+                  key={word}
+                  type="button"
+                  onClick={() => void removeCrutchWord(word)}
+                  title="Remove crutch word ban"
+                  className="lx-pressable rounded-[4px] border px-2 py-0.5 text-[11px] lexel-mono"
+                  style={{
+                    backgroundColor: 'var(--lx-warn-bg)',
+                    borderColor: 'var(--lx-warn)',
+                    color: 'var(--lx-warn)',
+                  }}
+                >
+                  {word} x
+                </button>
+              ))
+            )}
+          </div>
+        </section>
+
+        <section
+          aria-label="Secrets Guard and Redact-and-Restore"
+          className="space-y-2.5 rounded-[8px] border p-3.5"
+          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h2 className="text-[13px] font-semibold">Secrets Guard &amp; Redact-and-Restore</h2>
+              <p className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                Choose between blocking AI when secrets appear or swapping them for temporary
+                placeholders before local AI and restoring them after.
+              </p>
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-[12px]">
+            <input
+              type="checkbox"
+              checked={Boolean(settings.redactSecrets)}
+              onChange={(e) => void onPatchSettings({ redactSecrets: e.target.checked })}
+            />
+            <span>Enable opt-in Redact-and-Restore before local AI</span>
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={redactSample}
+              onChange={(e) => setRedactSample(e.target.value)}
+              aria-label="Sample text for secret redaction preview"
+              className="min-w-0 flex-1 rounded-[6px] border px-2.5 py-1 text-[11px] lexel-mono"
+              style={{
+                backgroundColor: 'var(--lx-surface)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => void handleRunRedactPreview()}
+              className="lx-pressable lx-btn-secondary shrink-0 px-2.5 py-1 text-[11px] font-medium"
+            >
+              Test Redact
+            </button>
+          </div>
+          {redactPreview ? (
+            <div
+              className="rounded-[6px] border px-2.5 py-1.5 text-[11px] lexel-mono"
+              style={{
+                backgroundColor: 'var(--lx-surface)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            >
+              <div>{redactPreview.redactedText}</div>
+              <div className="mt-1 text-[10px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                {redactPreview.redactedCount} secret span
+                {redactPreview.redactedCount === 1 ? '' : 's'} detected and masked locally
+              </div>
+            </div>
+          ) : null}
+        </section>
+      </div>
 
       <section
         className="space-y-3 rounded-[8px] border p-3"

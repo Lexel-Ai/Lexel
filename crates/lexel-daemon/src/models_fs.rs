@@ -384,7 +384,7 @@ fn hash_existing_file(path: &Path, hasher: &mut Sha256) -> std::io::Result<()> {
     Ok(())
 }
 
-fn compute_file_sha256(path: &Path) -> std::io::Result<String> {
+pub fn compute_file_sha256(path: &Path) -> std::io::Result<String> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];

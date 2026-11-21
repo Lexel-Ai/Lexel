@@ -5,6 +5,7 @@ members = [
   "crates/lexel-daemon",
   "crates/lexel-cli",
   "crates/lexel-ls",
+  "crates/lexel-wasm",
 ]
 exclude = ["vendor/harper", "apps/lexel-desktop/src-tauri"]
 resolver = "2"

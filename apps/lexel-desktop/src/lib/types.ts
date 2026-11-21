@@ -1,13 +1,16 @@
 import type {
   AiTaskId,
+  DoctorReportData,
   GateCheckSummary,
   InvisibleCharHit,
+  RewriteCandidate,
   RulePresetId,
   StructureIssue,
   StyleGuideHit,
   StyleGuideRule,
   SurfaceProfile,
   TextSnippet,
+  TonePillId,
 } from 'lexel-ui';
 
 export type MainModelTier = 'lexel-0.5b' | 'lexel-1.5b' | 'custom';
@@ -23,6 +26,13 @@ export interface StoredWeirpack {
   bytesBase64: string;
   ruleCount: number;
   enabled: boolean;
+}
+
+export interface ExtendedTextSnippet extends TextSnippet {
+  surfaceId?: string | null;
+  adaptToSurface?: boolean;
+  category?: string;
+  builtIn?: boolean;
 }
 
 export interface InstalledModelStatus {
@@ -83,7 +93,11 @@ export interface UnifiedDaemonSettings {
   customSurfaces: SurfaceProfile[];
   weirpacks?: StoredWeirpack[];
   styleGuide?: StyleGuideRule[];
-  snippets?: TextSnippet[];
+  snippets?: ExtendedTextSnippet[];
+  redactSecrets?: boolean;
+  ghostTextEnabled?: boolean;
+  crutchWords?: string[];
+  whisperModelPath?: string;
 }
 
 export interface DaemonProfile {
@@ -161,6 +175,28 @@ export interface RustSecretMatch {
   maskedPreview: string;
 }
 
+export interface ConsistencyIssue {
+  kind: string;
+  message: string;
+  variants: string[];
+  preferred?: string;
+}
+
+export interface GuardWarning {
+  kind: 'bluf' | 'wall_of_text' | 'regret' | 'missing_attachment' | 'crutch' | string;
+  message: string;
+  problemText?: string;
+  suggestedAction?: TonePillId;
+}
+
+export interface Tier0SlopMeterPayload {
+  score: number;
+  clicheCount: number;
+  emDashCount: number;
+  fillerOpenerCount: number;
+  flatRhythm: boolean;
+}
+
 export interface Tier0CheckResponse {
   harper: HarperDiagnosticItem[];
   slop: RustSlopHit[];
@@ -169,6 +205,9 @@ export interface Tier0CheckResponse {
   invisibleChars?: InvisibleCharHit[];
   structure?: StructureIssue[];
   styleGuide?: StyleGuideHit[];
+  consistency?: ConsistencyIssue[];
+  guards?: GuardWarning[];
+  slopMeter?: Tier0SlopMeterPayload;
   safeFixedText: string;
   safeFixesCount: number;
   blocked: boolean;
@@ -182,6 +221,12 @@ export interface RewriteResponse {
   gates: GateCheckSummary;
   surfaceId: string;
   subcontext: string | null;
+  fastPath?: boolean;
+  retried?: boolean;
+  failedConstraints?: string[];
+  candidates?: RewriteCandidate[];
+  redactedCount?: number;
+  restoredCleanly?: boolean;
 }
 
 export interface VoiceExample {
@@ -246,6 +291,45 @@ export interface WritingStatsSummary {
   topSurfaces: Array<[string, number]>;
 }
 
+export interface CrutchWordStat {
+  word: string;
+  count: number;
+  banned: boolean;
+}
+
+export interface SlopPatternStat {
+  term: string;
+  count: number;
+}
+
+export interface DailyInsightBucket {
+  day: string;
+  checks: number;
+  words: number;
+  slopHits: number;
+  grammarHits: number;
+  fixesApplied: number;
+}
+
+export interface WeeklyInsightsReport {
+  periodDays: number;
+  checksInPeriod: number;
+  wordsInPeriod: number;
+  slopCaughtInPeriod: number;
+  grammarHitsInPeriod: number;
+  secretsBlockedInPeriod: number;
+  fixesAppliedInPeriod: number;
+  clarityScore: number | null;
+  clarityDelta: number | null;
+  concisenessScore: number | null;
+  concisenessDelta: number | null;
+  topCrutchWords: CrutchWordStat[];
+  bannedCrutchWords: string[];
+  topSlopPatterns: SlopPatternStat[];
+  dailyBuckets: DailyInsightBucket[];
+  voiceExamplesCount: number;
+}
+
 export interface DraftSnapshot {
   id: string;
   profileId: string;
@@ -264,22 +348,82 @@ export interface ClipboardPolishReport {
   categories: string[];
 }
 
+export interface RewriteBeforePasteReport {
+  original: string;
+  rewritten: string;
+  surfaceId: string;
+  detectedApp: string | null;
+  usedAi: boolean;
+  pastedAutomatically: boolean;
+  secretsBlocked: number;
+  fixesApplied: number;
+  note: string;
+}
+
+export interface ActiveWindowSurface {
+  appName: string | null;
+  windowTitle: string | null;
+  detectedSurfaceId: string;
+  supported: boolean;
+  note: string;
+}
+
 export interface OsOverlayCapabilities {
   platform: string;
   globalShortcut: string;
+  rewriteBeforePasteShortcut?: string;
   clipboardPolishReady: boolean;
+  activeWindowDetectionSupported?: boolean;
   nativeOverlayMode: string;
   notes: string;
 }
 
-export type DesktopTabId = 'studio' | 'surfaces' | 'rules' | 'system';
+export interface RedactPreviewResponse {
+  redactedText: string;
+  redactedCount: number;
+  placeholders: Array<{
+    placeholder: string;
+    kind: string;
+    label: string;
+    maskedPreview: string;
+  }>;
+}
+
+export interface ExpandSnippetResponse {
+  trigger: string;
+  rawExpansion: string;
+  expandedText: string;
+  surfaceId: string;
+  adaptedWithAi: boolean;
+  latencyMs: number;
+}
+
+export interface TranscribeResponse {
+  rawTranscript: string;
+  cleanedText: string;
+  rewritten: RewriteResponse | null;
+  latencyMs: number;
+  whisperModel: string;
+}
+
+export interface GitVoiceImportReport {
+  importedCount: number;
+  skippedSecretsCount: number;
+  repoPath: string;
+  samples: Array<{ surfaceId: string; text: string }>;
+}
+
+export type DesktopTabId = 'studio' | 'insights' | 'surfaces' | 'rules' | 'system';
 
 export type {
   AiTaskId,
+  DoctorReportData,
   InvisibleCharHit,
+  RewriteCandidate,
   RulePresetId,
   StructureIssue,
   StyleGuideHit,
   StyleGuideRule,
   TextSnippet,
+  TonePillId,
 };

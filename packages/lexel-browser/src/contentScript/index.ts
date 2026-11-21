@@ -6,32 +6,53 @@ import React from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import appCss from '../app.css?inline';
 import { detectSurfaceFromLocation, isSensitiveElement } from '../shared/surfaceDetector';
+import { extractSmartThreadContext } from '../shared/threadContext';
+import { checkPastedAiSlop } from '../shared/tier0Engine';
 import type {
   AiTaskId,
   DetectedSurfaceContext,
   Hotkey,
+  PastedAiCheck,
   SurfaceId,
   SurfaceProfile,
   TextSnippet,
 } from '../shared/types';
 import { type ActiveFieldHandle, AiFloatingPill } from './AiFloatingPill';
+import { GhostTextOverlay } from './GhostTextOverlay';
 import { createGoogleDocsBridgeSync, isGoogleDocsPage } from './googleDocs';
 import { type ActiveLintPopup, LexelLintController } from './LexelLintController';
 import { LexelSuggestionPopover } from './LexelSuggestionPopover';
+import { PastedDeslopPill } from './PastedDeslopPill';
 import ProtocolClient from './ProtocolClient';
 
 let blocklistCache: string[] = [];
 let surfaceOverrideCache: SurfaceId | null = null;
 let customSurfacesCache: SurfaceProfile[] = [];
+let customSlopTermsCache: string[] = [];
+let disabledSlopTermsCache: string[] = [];
+let crutchWordsCache: string[] = [];
 let snippetsCache: TextSnippet[] = [];
 let themeCache: 'dark' | 'light' = 'dark';
 let aiEnabledCache = true;
+let ghostTextEnabledCache = false;
+let redactSecretsCache = false;
+let localSecretBlocksCache = 0;
 let hotkeyCache: Hotkey = { modifiers: ['Alt'], key: 'l' };
+
 let activeField: ActiveFieldHandle | null = null;
 let activeLintPopup: ActiveLintPopup | null = null;
+let pastedAiCheck: PastedAiCheck | null = null;
+let pastedBusy = false;
+let ghostCompletion: { text: string; model?: string; prefixAtRequest: string } | null = null;
+let ghostDebounceTimer: number | null = null;
+let ghostRequestSeq = 0;
+
 let openSignal = 0;
 let requestedTask: { id: AiTaskId; seq: number } | null = null;
 let taskSeq = 0;
+let externalUndo: { previousText: string; message: string; seq: number } | null = null;
+let undoSeq = 0;
+
 let shadowHost: HTMLElement | null = null;
 let overlayRoot: Root | null = null;
 
@@ -90,6 +111,124 @@ function ensureShadowMount(): Root {
   return overlayRoot;
 }
 
+function dismissGhostCompletion() {
+  if (ghostDebounceTimer != null) {
+    window.clearTimeout(ghostDebounceTimer);
+    ghostDebounceTimer = null;
+  }
+  if (ghostCompletion) {
+    ghostCompletion = null;
+    renderOverlays();
+  }
+}
+
+function acceptGhostCompletion(): boolean {
+  if (!activeField || !ghostCompletion) return false;
+  const completion = ghostCompletion.text;
+  const previous = activeField.readText();
+  const needsSpace =
+    previous.length > 0 && !/\s$/.test(previous) && !/^[\s.,;:!?)]/.test(completion);
+  const nextText = `${previous}${needsSpace ? ' ' : ''}${completion}`;
+  ghostCompletion = null;
+  activeField.writeText(nextText);
+  undoSeq += 1;
+  externalUndo = {
+    previousText: previous,
+    message: 'Inserted local ghost-text completion.',
+    seq: undoSeq,
+  };
+  renderOverlays();
+  return true;
+}
+
+function scheduleGhostCompletion() {
+  if (ghostDebounceTimer != null) {
+    window.clearTimeout(ghostDebounceTimer);
+    ghostDebounceTimer = null;
+  }
+  if (!ghostTextEnabledCache || !aiEnabledCache || !activeField) {
+    dismissGhostCompletion();
+    return;
+  }
+  const el = activeField.element;
+  if (isSensitiveElement(el)) return;
+  const ctx = currentSurfaceContext(el);
+  if (ctx.isBlocked) return;
+
+  const text = activeField.readText();
+  if (text.trim().length < 18) {
+    dismissGhostCompletion();
+    return;
+  }
+
+  // Only suggest when caret is at the end of a textarea/input.
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+    if (el.selectionStart !== el.value.length || el.selectionEnd !== el.value.length) {
+      dismissGhostCompletion();
+      return;
+    }
+  }
+
+  const seq = ++ghostRequestSeq;
+  const prefixAtRequest = text;
+  ghostDebounceTimer = window.setTimeout(() => {
+    ghostDebounceTimer = null;
+    void ProtocolClient.ghostComplete({
+      prefix: prefixAtRequest.slice(-400),
+      surfaceId: ctx.surfaceId,
+      subcontext: ctx.subcontext,
+      domain: ctx.domain,
+      maxTokens: 24,
+    }).then((res) => {
+      if (seq !== ghostRequestSeq || !activeField) return;
+      if (activeField.readText() !== prefixAtRequest) return;
+      if (res.ok && res.result.completion.trim()) {
+        ghostCompletion = {
+          text: res.result.completion.trim(),
+          model: res.result.model,
+          prefixAtRequest,
+        };
+        renderOverlays();
+      } else {
+        dismissGhostCompletion();
+      }
+    });
+  }, 450);
+}
+
+async function handleHumanizePasted() {
+  if (!activeField) return;
+  const ctx = currentSurfaceContext(activeField.element);
+  if (aiEnabledCache) {
+    pastedAiCheck = null;
+    taskSeq += 1;
+    requestedTask = { id: 'deslop', seq: taskSeq };
+    openSignal += 1;
+    renderOverlays();
+    return;
+  }
+
+  pastedBusy = true;
+  renderOverlays();
+  try {
+    const original = activeField.readText();
+    const res = await ProtocolClient.fixAllSafe(original, ctx.surfaceId);
+    if (res.fixesApplied > 0 && res.text !== original) {
+      activeField.writeText(res.text);
+      undoSeq += 1;
+      externalUndo = {
+        previousText: original,
+        message: `Humanized pasted text (${res.fixesApplied} deterministic fix${res.fixesApplied === 1 ? '' : 'es'}).`,
+        seq: undoSeq,
+      };
+    }
+  } finally {
+    pastedBusy = false;
+    pastedAiCheck = null;
+    renderOverlays();
+  }
+}
+
 function renderOverlays() {
   const root = ensureShadowMount();
   const ctx = currentSurfaceContext(activeField?.element ?? null);
@@ -97,6 +236,27 @@ function renderOverlays() {
     React.createElement(
       React.Fragment,
       null,
+      React.createElement(PastedDeslopPill, {
+        field: activeField,
+        check: ctx.isBlocked ? null : pastedAiCheck,
+        theme: themeCache,
+        busy: pastedBusy,
+        onHumanize: () => void handleHumanizePasted(),
+        onDismiss: () => {
+          pastedAiCheck = null;
+          renderOverlays();
+        },
+      }),
+      React.createElement(GhostTextOverlay, {
+        field: activeField,
+        completion: ctx.isBlocked ? null : (ghostCompletion?.text ?? null),
+        modelName: ghostCompletion?.model,
+        theme: themeCache,
+        onAccept: () => {
+          acceptGhostCompletion();
+        },
+        onDismiss: () => dismissGhostCompletion(),
+      }),
       React.createElement(AiFloatingPill, {
         field: activeField,
         context: ctx,
@@ -105,6 +265,12 @@ function renderOverlays() {
         openSignal,
         requestedTask,
         customSurfaces: customSurfacesCache,
+        customSlopTerms: customSlopTermsCache,
+        disabledSlopTerms: disabledSlopTermsCache,
+        crutchWords: crutchWordsCache,
+        redactSecrets: redactSecretsCache,
+        localSecretBlocks: localSecretBlocksCache,
+        externalUndo,
       }),
       React.createElement(LexelSuggestionPopover, {
         active: activeLintPopup,
@@ -134,26 +300,22 @@ function renderOverlays() {
             activeField = makeFieldHandle(rootEl);
           }
           taskSeq += 1;
-          requestedTask = {
-            id: box.rule === 'LexelAntiSlop' ? 'deslop' : 'fix_grammar_flow',
-            seq: taskSeq,
-          };
+          let mappedTask: AiTaskId = 'fix_grammar_flow';
+          if (box.rule === 'LexelAntiSlop') {
+            mappedTask = 'deslop';
+          } else if (box.rule === 'LexelGuard') {
+            const label = box.lint.lint_kind_pretty.toLowerCase();
+            if (label.includes('bluf') || label.includes('wall')) mappedTask = 'bluf';
+            else if (label.includes('regret')) mappedTask = 'softer';
+            else mappedTask = 'shorten';
+          }
+          requestedTask = { id: mappedTask, seq: taskSeq };
           openSignal += 1;
           renderOverlays();
         },
       }),
     ),
   );
-}
-
-function readThreadContextAround(el: HTMLElement): string {
-  const heading = document.querySelector('h1')?.textContent?.trim() ?? '';
-  const parentComment =
-    el.closest('[data-testid="comment"], .Comment, .comment, article')?.textContent?.trim() ?? '';
-  const combined = [heading ? `Post title: ${heading}` : '', parentComment]
-    .filter(Boolean)
-    .join('\n\n');
-  return combined.slice(0, 1200);
 }
 
 function setElementValueSafely(el: HTMLElement, nextText: string) {
@@ -201,7 +363,8 @@ function makeFieldHandle(el: HTMLElement): ActiveFieldHandle {
       setElementValueSafely(el, nextText);
       void lintController.update();
     },
-    readThreadContext: () => readThreadContextAround(el),
+    // Explicit-action-only extraction: called only when user triggers reply/context actions.
+    readThreadContext: () => extractSmartThreadContext(el, document, window.location.hostname),
   };
 }
 
@@ -283,30 +446,48 @@ async function hydrateConfig(initializeSummary = false) {
       blocklist,
       override,
       customSurfaces,
+      slopCfg,
+      crutchWords,
       snippets,
       theme,
       aiSettings,
       hoverEnabled,
       activationKey,
       hotkey,
+      ghostTextEnabled,
+      privacyStats,
     ] = await Promise.all([
       ProtocolClient.getPrivacyBlocklist().catch(() => []),
       ProtocolClient.getSurfaceOverride(window.location.hostname).catch(() => null),
       ProtocolClient.getCustomSurfaces().catch(() => []),
+      ProtocolClient.getCustomSlopConfig().catch(() => ({ customTerms: [], disabledTerms: [] })),
+      ProtocolClient.getCrutchWords().catch(() => []),
       ProtocolClient.getSnippets().catch(() => []),
       ProtocolClient.getTheme().catch(() => 'dark' as const),
       ProtocolClient.getAiSettings().catch(() => ({ enabled: true })),
       ProtocolClient.getOpenSuggestionsOnHover().catch(() => true),
       ProtocolClient.getActivationKey().catch(() => 'off' as const),
       ProtocolClient.getHotkey().catch(() => ({ modifiers: ['Alt'], key: 'l' }) as Hotkey),
+      ProtocolClient.getGhostTextEnabled().catch(() => false),
+      ProtocolClient.getPrivacyStats().catch(() => ({
+        localSecretBlocks: 0,
+        redactSecrets: false,
+        blocklistCount: 0,
+      })),
     ]);
     blocklistCache = blocklist;
     surfaceOverrideCache = override;
     customSurfacesCache = customSurfaces;
+    customSlopTermsCache = slopCfg.customTerms;
+    disabledSlopTermsCache = slopCfg.disabledTerms;
+    crutchWordsCache = crutchWords;
     snippetsCache = snippets;
     themeCache = theme;
     aiEnabledCache = aiSettings.enabled;
     hotkeyCache = hotkey;
+    ghostTextEnabledCache = ghostTextEnabled;
+    redactSecretsCache = privacyStats.redactSecrets;
+    localSecretBlocksCache = privacyStats.localSecretBlocks;
     lintController.setOpenSuggestionsOnHover(hoverEnabled);
     lintController.setActivationKey(activationKey);
 
@@ -329,6 +510,10 @@ async function hydrateConfig(initializeSummary = false) {
 function captureFocusedElement(target: EventTarget | null) {
   const rootEl = resolveEditableRoot(target);
   if (!rootEl) return;
+  if (activeField?.element !== rootEl) {
+    pastedAiCheck = null;
+    dismissGhostCompletion();
+  }
   activeField = makeFieldHandle(rootEl);
   if (rootEl instanceof HTMLTextAreaElement || rootEl instanceof HTMLInputElement) {
     lintController.addTarget(rootEl);
@@ -350,6 +535,42 @@ document.addEventListener(
   'focusin',
   (event) => {
     captureFocusedElement(event.target);
+  },
+  true,
+);
+
+document.addEventListener(
+  'paste',
+  (event) => {
+    const rootEl = resolveEditableRoot(event.target);
+    if (!rootEl) return;
+    const ctx = currentSurfaceContext(rootEl);
+    if (ctx.isBlocked) return;
+    const pasted = event.clipboardData?.getData('text/plain') ?? '';
+    if (!pasted) return;
+    const check = checkPastedAiSlop(pasted, {
+      customSlopTerms: customSlopTermsCache,
+      disabledSlopTerms: disabledSlopTermsCache,
+    });
+    if (check.shouldOffer) {
+      activeField = makeFieldHandle(rootEl);
+      pastedAiCheck = check;
+      renderOverlays();
+    }
+  },
+  true,
+);
+
+document.addEventListener(
+  'input',
+  (event) => {
+    if (!activeField) return;
+    const rootEl = resolveEditableRoot(event.target);
+    if (!rootEl || rootEl !== activeField.element) return;
+    if (ghostCompletion) {
+      dismissGhostCompletion();
+    }
+    scheduleGhostCompletion();
   },
   true,
 );
@@ -419,6 +640,24 @@ function tryExpandSnippetOnKey(event: KeyboardEvent): boolean {
 
 document.addEventListener('keydown', (event) => {
   if (!activeField) return;
+  if (ghostCompletion) {
+    if (
+      event.key === 'Tab' &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      acceptGhostCompletion();
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      dismissGhostCompletion();
+      return;
+    }
+  }
   if (tryExpandSnippetOnKey(event)) return;
   const needCtrl = hotkeyCache.modifiers.includes('Ctrl');
   const needShift = hotkeyCache.modifiers.includes('Shift');
@@ -447,6 +686,10 @@ const WATCHED_STORAGE_KEYS = new Set([
   'lexel_style_guide',
   'lexel_snippets',
   'lexel_language_mode',
+  'lexel_ghost_text_enabled',
+  'lexel_redact_secrets',
+  'lexel_crutch_words',
+  'lexel_secret_block_count',
   'openSuggestionsOnHover',
   'activationKey',
   'hotkey',
@@ -479,6 +722,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       surfaceId: ctx.surfaceId,
       subcontext: ctx.subcontext,
     });
+  } else if (msg?.kind === 'getSmartThreadContext') {
+    const extracted = activeField
+      ? activeField.readThreadContext()
+      : extractSmartThreadContext(null, document, window.location.hostname);
+    sendResponse(extracted);
   } else if (msg?.kind === 'applyDraftToFocused' && typeof msg.text === 'string' && activeField) {
     activeField.writeText(msg.text);
     sendResponse({ ok: true });

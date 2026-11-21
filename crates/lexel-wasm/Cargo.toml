@@ -1,0 +1,20 @@
+[package]
+name = "lexel-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WebAssembly bindings for Lexel Tier 0 deterministic checks (Harper, anti-slop meter, consistency, guards, safe fixes)."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+console_error_panic_hook = "0.1"
+lexel-core = { path = "../lexel-core", default-features = false }
+serde.workspace = true
+serde-wasm-bindgen = "0.6"
+serde_json.workspace = true
+wasm-bindgen = "=0.2.129"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", default-features = false, features = ["wasm_js"] }

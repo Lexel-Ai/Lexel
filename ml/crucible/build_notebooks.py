@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Generate clean, self-contained, error-free Kaggle & Unsloth Jupyter notebooks for Lexel."""
+"""Generate self-contained, Kaggle T4-safe Unsloth Jupyter notebooks for BOTH Lexel tiers (0.5B Lite & 1.5B Standard) plus Qwen3-1.7B non-thinking bake-off."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+
+from ml.crucible.tier_configs import TIER_CONFIGS, get_tier_config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 KAGGLE_DIR = REPO_ROOT / "ml" / "kaggle"
@@ -54,21 +56,28 @@ def _notebook_doc(cells: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
-def build_sft_notebook() -> dict[str, object]:
+def _serialized_tier_table() -> str:
+    table = {tid: cfg.to_dict() for tid, cfg in TIER_CONFIGS.items()}
+    return json.dumps(table, indent=4)
+
+
+def build_sft_notebook(default_tier: str = "lexel-1.5b") -> dict[str, object]:
+    cfg = get_tier_config(default_tier)
+    tier_table_json = _serialized_tier_table()
     cells = [
         _md_cell(
-            """# Lexel Stage 1: QLoRA SFT on Qwen2.5-1.5B-Instruct (Kaggle T4 / Unsloth Studio)
+            f"""# Lexel v2 Stage 1: QLoRA SFT for `{cfg.label}` (Kaggle T4 / Unsloth)
 
-This self-contained notebook trains the Stage 1 Supervised Fine-Tuning (SFT) adapter for **Lexel** using Unsloth 4-bit QLoRA (with automatic fallback to standard HuggingFace `transformers` + `peft` + `trl` if `unsloth` is not installed).
+Trains the Stage 1 Supervised Fine-Tuning (SFT) adapter for **{cfg.label}** (`{cfg.unsloth_model_id}`) using Unsloth 4-bit QLoRA with automatic HuggingFace PEFT/TRL fallback.
 
-## What This Notebook Fixes for Kaggle
-1. **Dynamic Package Installation**: Uses `subprocess.check_call` to install `unsloth` cleanly on Kaggle's current PyTorch/CUDA runtime without hardcoded `xformers` ABI clashes, and disables `wandb` prompts automatically.
-2. **Zero-Config Dataset Discovery**: Automatically locates `lexel_sft_train.jsonl` and `lexel_sft_val.jsonl` anywhere under `/kaggle/input` or local `ml/datasets/` (and auto-generates a Crucible-verified fallback split if no dataset is attached yet).
-3. **TRL Signature Compatibility (`processing_class` vs `tokenizer`, `max_length` vs `max_seq_length`)**: Inspects installed `trl.SFTConfig` and `trl.SFTTrainer` with `inspect.signature` so it runs across all 2025-2026 TRL releases without `TypeError`.
-4. **Safe Completion-Only Masking + Sequence Packing**: Applies `train_on_responses_only` before enabling packing (or pre-masks `-100` prompt tokens directly) and audits a real batch to verify supervised completion tokens before `.train()` starts."""
+## Research-Grounded Defaults (`ml/RESEARCH_NOTES.md`)
+- **Tier**: `{cfg.tier_id}` (`r={cfg.lora_r}`, `lora_alpha={cfg.lora_alpha}`, all 7 linear projections, `max_seq_length={cfg.max_seq_length}`)
+- **SFT Schedule**: `lr={cfg.sft_learning_rate}`, `{cfg.sft_epochs}` epochs (empirical Prose Session 2 ceiling), effective batch size `{cfg.sft_per_device_batch_size * cfg.sft_grad_accum_steps}`, cosine decay with `{int(cfg.sft_warmup_ratio * 100)}%` warmup.
+- **Completion-Only Loss Masking**: Applies `train_on_responses_only` and decodes a real collated batch before `.train()` to verify `supervised_count > 0` and zero prompt tokens in labels.
+- **Tier Override**: Set `LEXEL_MODEL_TIER` to `lexel-1.5b`, `lexel-0.5b`, or `qwen3-1.7b-bakeoff` to switch configs without editing cells."""
         ),
         _code_cell(
-            """# Cell 1: Environment Setup & Kaggle Package Installation
+            """# Cell 1: Environment Setup & Kaggle Package Installation (Unsloth imported BEFORE torch/trl)
 import importlib.util
 import os
 import subprocess
@@ -78,7 +87,7 @@ os.environ["WANDB_DISABLED"] = "true"
 os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Pin to GPU 0 by default on Kaggle 2x T4 so 4-bit bitsandbytes QLoRA never hits DataParallel device-mismatch errors
+# Pin GPU 0 on Kaggle 2x T4 so 4-bit bitsandbytes QLoRA avoids DataParallel device-mismatch errors
 if "KAGGLE_KERNEL_RUN_TYPE" in os.environ and "CUDA_VISIBLE_DEVICES" not in os.environ:
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
@@ -116,14 +125,14 @@ def ensure_training_packages() -> None:
                 ]
             )
         except Exception as pip_exc:
-            print(f"WARNING: pip install failed ({pip_exc}). Make sure 'Internet' is enabled in Kaggle Settings -> Turn on Internet.")
+            print(f"WARNING: pip install failed ({pip_exc}). Enable Internet in Kaggle Settings.")
     elif missing:
         print(f"Installing missing packages: {missing}")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", *missing])
 
 ensure_training_packages()
 
-# Import unsloth BEFORE torch/transformers/trl so Unsloth's kernel patches apply cleanly
+# Import unsloth BEFORE torch/transformers/trl so fused kernels patch cleanly
 try:
     import unsloth
     from unsloth import FastLanguageModel, is_bfloat16_supported
@@ -140,10 +149,10 @@ if not HAS_UNSLOTH:
 
 print(f"PyTorch: {torch.__version__} | CUDA available: {torch.cuda.is_available()} | Unsloth active: {HAS_UNSLOTH}")
 if torch.cuda.is_available():
-    print(f"Active GPU: {torch.cuda.get_device_name(0)}")"""
+    print(f"Active GPU: {torch.cuda.get_device_name(0)} | BF16: {is_bfloat16_supported()}")"""
         ),
         _code_cell(
-            """# Cell 2: Configuration & Automatic Dataset Discovery
+            f"""# Cell 2: Per-Tier Training Config & Automatic Dataset Discovery
 import hashlib
 import inspect
 import json
@@ -154,30 +163,20 @@ from pathlib import Path
 from datasets import load_dataset
 from trl import SFTConfig, SFTTrainer
 
-MODEL_TIER = os.environ.get("LEXEL_MODEL_TIER", "lexel-1.5b")
-UNSLOTH_MODEL_MAP = {
-    "lexel-1.5b": "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit",
-    "lexel-0.5b": "unsloth/Qwen2.5-0.5B-Instruct-bnb-4bit",
-}
-HF_FALLBACK_MODEL_MAP = {
-    "lexel-1.5b": "Qwen/Qwen2.5-1.5B-Instruct",
-    "lexel-0.5b": "Qwen/Qwen2.5-0.5B-Instruct",
-}
-BASE_MODEL_ID = UNSLOTH_MODEL_MAP[MODEL_TIER] if HAS_UNSLOTH else HF_FALLBACK_MODEL_MAP[MODEL_TIER]
+TIER_CONFIGS = json.loads(r'''{tier_table_json}''')
 
-MAX_SEQ_LENGTH = 1536
-LORA_R = 32
-LORA_ALPHA = 64
-LORA_DROPOUT = 0
-TARGET_MODULES = [
-    "q_proj",
-    "k_proj",
-    "v_proj",
-    "o_proj",
-    "gate_proj",
-    "up_proj",
-    "down_proj",
-]
+DEFAULT_TIER = {default_tier!r}
+MODEL_TIER = os.environ.get("LEXEL_MODEL_TIER", DEFAULT_TIER)
+if MODEL_TIER not in TIER_CONFIGS:
+    raise ValueError(f"Unsupported LEXEL_MODEL_TIER={{MODEL_TIER!r}}. Valid: {{sorted(TIER_CONFIGS)}}")
+
+CFG = TIER_CONFIGS[MODEL_TIER]
+BASE_MODEL_ID = CFG["unsloth_model_id"] if HAS_UNSLOTH else CFG["hf_model_id"]
+MAX_SEQ_LENGTH = int(CFG["max_seq_length"])
+LORA_R = int(CFG["lora_r"])
+LORA_ALPHA = int(CFG["lora_alpha"])
+LORA_DROPOUT = float(CFG["lora_dropout"])
+TARGET_MODULES = list(CFG["target_modules"])
 
 def resolve_data_dir() -> Path:
     candidates = [
@@ -198,7 +197,6 @@ def resolve_data_dir() -> Path:
         if matches:
             return matches[0].parent.resolve()
 
-    # Fallback: if running inside the Lexel repo, build datasets on the fly
     for root_cand in (Path.cwd(), *Path.cwd().parents):
         if (root_cand / "ml" / "crucible" / "dataset_builder.py").is_file():
             if str(root_cand) not in sys.path:
@@ -208,44 +206,25 @@ def resolve_data_dir() -> Path:
             build_all_datasets(out_dir)
             return out_dir.resolve()
 
-    # Self-contained Kaggle emergency fallback if the user forgot to attach the dataset
-    fallback_dir = Path("/kaggle/working/lexel-datasets") if Path("/kaggle/working").is_dir() else (Path.cwd() / "lexel-datasets")
-    fallback_dir.mkdir(parents=True, exist_ok=True)
-    train_p = fallback_dir / "lexel_sft_train.jsonl"
-    val_p = fallback_dir / "lexel_sft_val.jsonl"
-    if not train_p.is_file():
-        print("WARNING: No attached Kaggle dataset found; writing built-in Crucible seed split to", fallback_dir)
-        seed_rows = [
-            {
-                "id": f"seed_{i:03d}",
-                "surface_id": "web_github_pr",
-                "task": "deslop",
-                "messages": [
-                    {"role": "system", "content": "You are Lexel, a precise human writing editor.\\nRules:\\n- Output ONLY the rewritten text. No preamble, no quotes, no explanation.\\n- Preserve every number, metric, ID (#42), URL, and `code` token exactly.\\n- Never use em dashes (\\u2014) or AI buzzwords (delve, tapestry, seamless, leverage, game-changer, unlock, pivotal).\\n- Surface: GitHub (web_github_pr)\\n- Max characters: 4000\\n- Task: Remove AI buzzwords, corporate padding, filler openers, and em dashes. Make every sentence direct and human."},
-                    {"role": "user", "content": f"<source>\\nAwesome work! This PR seamlessly leverages `extract_unit_bound_metrics` in `verifier.rs` to fix #{40 + i} and keep latency at 0.4ms.\\n</source>"},
-                    {"role": "assistant", "content": f"Uses `extract_unit_bound_metrics` in `verifier.rs` to fix #{40 + i} and keep check latency at 0.4ms."},
-                ],
-            }
-            for i in range(24)
-        ]
-        train_p.write_text("\\n".join(json.dumps(r) for r in seed_rows[:20]) + "\\n", encoding="utf-8")
-        val_p.write_text("\\n".join(json.dumps(r) for r in seed_rows[20:]) + "\\n", encoding="utf-8")
-    return fallback_dir.resolve()
+    raise FileNotFoundError(
+        "Could not find lexel_sft_train.jsonl. Attach the `lexel-crucible-datasets` Kaggle Dataset "
+        "(or set LEXEL_DATA_DIR to your ml/datasets directory)."
+    )
 
 DATA_DIR = resolve_data_dir()
 TRAIN_FILE = DATA_DIR / "lexel_sft_train.jsonl"
 VAL_FILE = DATA_DIR / "lexel_sft_val.jsonl"
-OUTPUT_DIR = Path(os.environ.get("LEXEL_SFT_OUT", f"./outputs/{MODEL_TIER}-sft-adapter")).resolve()
+OUTPUT_DIR = Path(os.environ.get("LEXEL_SFT_OUT", f"./outputs/{{MODEL_TIER}}-sft-adapter")).resolve()
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-print(f"Selected Tier: {MODEL_TIER} -> {BASE_MODEL_ID}")
-print(f"Resolved DATA_DIR: {DATA_DIR}")
-print(f"Train file: {TRAIN_FILE} ({TRAIN_FILE.stat().st_size} bytes)")
-print(f"Val file:   {VAL_FILE} ({VAL_FILE.stat().st_size} bytes)")
-print(f"Output dir: {OUTPUT_DIR}")"""
+print(f"Selected Tier: {{MODEL_TIER}} ({{CFG['label']}}) -> {{BASE_MODEL_ID}}")
+print(f"LoRA: r={{LORA_R}}, alpha={{LORA_ALPHA}}, lr={{CFG['sft_learning_rate']}}, epochs={{CFG['sft_epochs']}}")
+print(f"Train file: {{TRAIN_FILE}} ({{TRAIN_FILE.stat().st_size:,}} bytes)")
+print(f"Val file:   {{VAL_FILE}} ({{VAL_FILE.stat().st_size:,}} bytes)")
+print(f"Output dir: {{OUTPUT_DIR}}")"""
         ),
         _code_cell(
-            """# Cell 3: Load 4-bit Base Model & Attach LoRA Adapters
+            """# Cell 3: Load 4-bit Base Model & Attach All-Linear LoRA Adapters
 if HAS_UNSLOTH:
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=BASE_MODEL_ID,
@@ -255,7 +234,7 @@ if HAS_UNSLOTH:
     )
     tokenizer = get_chat_template(
         tokenizer,
-        chat_template="qwen-2.5",
+        chat_template=CFG["chat_template"],
     )
     model = FastLanguageModel.get_peft_model(
         model,
@@ -265,7 +244,7 @@ if HAS_UNSLOTH:
         lora_dropout=LORA_DROPOUT,
         bias="none",
         use_gradient_checkpointing="unsloth",
-        random_state=42,
+        random_state=int(CFG["seed"]),
         use_rslora=False,
         loftq_config=None,
     )
@@ -303,7 +282,7 @@ tokenizer.padding_side = "right"
 model.print_trainable_parameters()"""
         ),
         _code_cell(
-            """# Cell 4: Load Crucible-Verified Datasets & Format Qwen-2.5 ChatML Prompts
+            """# Cell 4: Load Crucible-Verified Datasets & Render Chat Template
 dataset = load_dataset(
     "json",
     data_files={
@@ -312,53 +291,57 @@ dataset = load_dataset(
     },
 )
 
+apply_sig = inspect.signature(tokenizer.apply_chat_template).parameters
+
+def _render_messages(msgs):
+    kwargs = {"tokenize": False, "add_generation_prompt": False}
+    if "enable_thinking" in apply_sig:
+        kwargs["enable_thinking"] = bool(CFG["enable_thinking"])
+    return tokenizer.apply_chat_template(msgs, **kwargs)
+
 def format_chat_prompts(batch):
-    texts = [
-        tokenizer.apply_chat_template(
-            msgs,
-            tokenize=False,
-            add_generation_prompt=False,
-        )
-        for msgs in batch["messages"]
-    ]
-    return {"text": texts}
+    return {"text": [_render_messages(msgs) for msgs in batch["messages"]]}
 
 dataset = dataset.map(
     format_chat_prompts,
     batched=True,
     remove_columns=[c for c in dataset["train"].column_names if c != "text"],
 )
-print(f"Train rows: {len(dataset['train'])}, Validation rows: {len(dataset['validation'])}")
-print("\\nSample formatted ChatML prompt:\\n", dataset["train"][0]["text"][:600])"""
+print(f"Train rows: {len(dataset['train']):,}, Validation rows: {len(dataset['validation']):,}")
+print("\\nSample rendered ChatML prompt:\\n", dataset["train"][0]["text"][:600])"""
         ),
         _code_cell(
-            """# Cell 5: Configure SFTTrainer with Version-Safe kwargs & Verify Supervised Labels
+            """# Cell 5: Configure SFTTrainer (Version-Safe) & Audit Completion-Only Masking
 sft_cfg_params = inspect.signature(SFTConfig.__init__).parameters
 sft_trainer_params = inspect.signature(SFTTrainer.__init__).parameters
 
 cfg_kwargs = {
     "output_dir": str(OUTPUT_DIR),
-    "per_device_train_batch_size": 2,
-    "per_device_eval_batch_size": 2,
-    "gradient_accumulation_steps": 4,
-    "learning_rate": 2e-4,
+    "per_device_train_batch_size": int(CFG["sft_per_device_batch_size"]),
+    "per_device_eval_batch_size": int(CFG["sft_per_device_batch_size"]),
+    "gradient_accumulation_steps": int(CFG["sft_grad_accum_steps"]),
+    "learning_rate": float(CFG["sft_learning_rate"]),
     "lr_scheduler_type": "cosine",
-    "warmup_ratio": 0.05,
-    "num_train_epochs": 2,
+    "warmup_ratio": float(CFG["sft_warmup_ratio"]),
+    "num_train_epochs": float(CFG["sft_epochs"]),
     "optim": "adamw_8bit" if torch.cuda.is_available() else "adamw_torch",
-    "weight_decay": 0.01,
+    "weight_decay": float(CFG["sft_weight_decay"]),
     "fp16": bool(torch.cuda.is_available() and not is_bfloat16_supported()),
     "bf16": bool(torch.cuda.is_available() and is_bfloat16_supported()),
-    "logging_steps": 5,
-    "save_strategy": "epoch",
-    "seed": 42,
+    "logging_steps": 10,
+    "save_strategy": "steps",
+    "save_steps": int(CFG["sft_save_steps"]),
+    "save_total_limit": 2,
+    "seed": int(CFG["seed"]),
     "report_to": "none",
 }
 
 if "eval_strategy" in sft_cfg_params:
-    cfg_kwargs["eval_strategy"] = "epoch"
+    cfg_kwargs["eval_strategy"] = "steps"
+    cfg_kwargs["eval_steps"] = int(CFG["sft_eval_steps"])
 elif "evaluation_strategy" in sft_cfg_params:
-    cfg_kwargs["evaluation_strategy"] = "epoch"
+    cfg_kwargs["evaluation_strategy"] = "steps"
+    cfg_kwargs["eval_steps"] = int(CFG["sft_eval_steps"])
 
 if "dataset_text_field" in sft_cfg_params:
     cfg_kwargs["dataset_text_field"] = "text"
@@ -367,7 +350,7 @@ if "max_seq_length" in sft_cfg_params:
 elif "max_length" in sft_cfg_params:
     cfg_kwargs["max_length"] = MAX_SEQ_LENGTH
 
-# Initialize with packing=False first so train_on_responses_only can safely map token boundaries
+# Initialize with packing=False so train_on_responses_only maps exact turn boundaries
 if "packing" in sft_cfg_params:
     cfg_kwargs["packing"] = False
 if "padding_free" in sft_cfg_params:
@@ -397,21 +380,21 @@ if HAS_UNSLOTH:
     try:
         trainer = train_on_responses_only(
             trainer,
-            instruction_part="<|im_start|>user\\n",
-            response_part="<|im_start|>assistant\\n",
+            instruction_part=CFG["instruction_part"],
+            response_part=CFG["response_part"],
         )
         print("Applied Unsloth train_on_responses_only completion mask.")
     except Exception as mask_exc:
         print(f"Note: train_on_responses_only fallback ({mask_exc}); continuing with standard SFT collator.")
 
-# Audit one real batch from train_dataloader to guarantee finite supervised tokens
+# Audit one real collated batch before training (per unsloth & dataset-curation skills)
 sample_batch = next(iter(trainer.get_train_dataloader()))
 supervised_count = int((sample_batch["labels"] != -100).sum().item())
 assert supervised_count > 0, "CRITICAL: Zero supervised tokens in batch labels!"
 print(f"Batch label audit PASSED: {supervised_count} supervised completion tokens in first batch (shape={tuple(sample_batch['input_ids'].shape)}).")"""
         ),
         _code_cell(
-            """# Cell 6: Execute Stage 1 Training & Save SFT Adapter + run_manifest.json
+            """# Cell 6: Run Stage 1 SFT Training & Save Adapter + run_manifest.json
 if torch.cuda.is_available():
     torch.cuda.reset_peak_memory_stats()
 
@@ -438,6 +421,8 @@ run_manifest = {
     "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
     "model_tier": MODEL_TIER,
     "base_model_id": BASE_MODEL_ID,
+    "chat_template": CFG["chat_template"],
+    "enable_thinking": bool(CFG["enable_thinking"]),
     "max_seq_length": MAX_SEQ_LENGTH,
     "lora": {
         "r": LORA_R,
@@ -448,10 +433,11 @@ run_manifest = {
         "adapter_path": str(adapter_dir),
     },
     "hyperparameters": {
-        "learning_rate": 2e-4,
+        "learning_rate": float(CFG["sft_learning_rate"]),
         "lr_scheduler_type": "cosine",
-        "warmup_ratio": 0.05,
-        "num_train_epochs": 2,
+        "warmup_ratio": float(CFG["sft_warmup_ratio"]),
+        "num_train_epochs": float(CFG["sft_epochs"]),
+        "effective_batch_size": int(CFG["effective_sft_batch_size"]),
         "optim": cfg_kwargs["optim"],
         "train_on_responses_only": True,
     },
@@ -480,18 +466,20 @@ print(json.dumps(run_manifest["telemetry"], indent=2))"""
     return _notebook_doc(cells)
 
 
-def build_dpo_gguf_notebook() -> dict[str, object]:
+def build_dpo_gguf_notebook(default_tier: str = "lexel-1.5b") -> dict[str, object]:
+    cfg = get_tier_config(default_tier)
+    tier_table_json = _serialized_tier_table()
     cells = [
         _md_cell(
-            """# Lexel Stage 2: Surgical Token-Masked SimPO / DPO Alignment, Held-Out Benchmark & GGUF Export
+            f"""# Lexel v2 Stage 2: Surgical Token-Masked SimPO Alignment, Held-Out Eval & GGUF Export (`{cfg.label}`)
 
-This self-contained notebook runs Stage 2 Preference Alignment on surgical counterfactual pairs (`lexel_dpo_train.jsonl`), verifies the aligned model against the 13-surface held-out benchmark (`lexel_heldout_eval.jsonl`), and exports quantized GGUF weights matching Lexel Desktop's `models/manifest.json`.
+Runs Stage 2 preference alignment on balanced surgical counterfactual pairs (`lexel_dpo_train.jsonl`, plus optional personal edits from `lexel db export-simpo`), scores all 13 surfaces on `lexel_heldout_eval.jsonl`, and exports **both `Q4_K_M` and `Q5_K_M`** GGUF weights with real `SHA256SUMS` and a ready-to-paste `manifest_snippet.json`.
 
-## What This Notebook Fixes for Kaggle
-1. **Self-Contained Crucible & Verifier Fallback**: Works both inside the `Lexel` Git repository and as a standalone uploaded `.ipynb` on Kaggle (automatically bootstrapping `MaskedSimPOLoss`, `WritingBenchCritic`, and the Tier 2 deterministic verifier if `ml.crucible` is not on the Kaggle VM filesystem).
-2. **Automatic Stage 1 Checkpoint Resolution**: Loads your Stage 1 SFT adapter if present in `/kaggle/working/outputs` or `/kaggle/input`, and cleanly falls back to initializing a fresh QLoRA adapter on `unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit` so Cell 2 never crashes with `HFValidationError` when run standalone.
-3. **True Token-Masked SimPO Training (`MaskedSimPOLoss`)**: Actually trains with surgical token masking (`rejected_token_mask` focusing negative gradients strictly on hallucinated numbers, dropped code tokens, em dashes, and slop spans) instead of leaving `simpo_loss_fn` unused, while also supporting TRL `DPOTrainer` compatibility.
-4. **Robust Held-Out Generation & GGUF Export**: Handles both Tensor and `BatchEncoding` returns from `apply_chat_template`, enforces greedy deterministic evaluation (`do_sample=False` without invalid `temperature` warnings), and provides an automatic GGUF export fallback if `llama.cpp` quantization encounters Kaggle disk/RAM limits."""
+## Per-Tier Alignment Config (`ml/RESEARCH_NOTES.md`)
+- **Tier**: `{cfg.tier_id}` (`r={cfg.lora_r}`, `lora_alpha={cfg.lora_alpha}`, `max_seq_length={cfg.max_seq_length}`)
+- **Dual-Band `MaskedSimPOLoss`**: `beta={cfg.simpo_beta}`, `gamma={cfg.simpo_gamma}`, `unmasked_token_weight={cfg.simpo_unmasked_token_weight}`, `sft_weight={cfg.simpo_sft_weight}`, `lr={cfg.simpo_learning_rate}`, `{cfg.simpo_epochs}` epochs, effective batch size `{cfg.simpo_per_device_batch_size * cfg.simpo_grad_accum_steps}`.
+- **Personal Voice Feedback**: Attach an optional `lexel_user_simpo.jsonl` exported by `lexel db export-simpo` (or set `LEXEL_USER_SIMPO_PATH`) to blend real user preferences into Stage 2.
+- **GGUF Export**: Exports `{cfg.gguf_filename('q4_k_m')}` and `{cfg.gguf_filename('q5_k_m')}`, computes real SHA-256 digests, and never writes fabricated checksums."""
         ),
         _code_cell(
             """# Cell 1: Environment Setup, Kaggle Package Installation & Self-Contained Crucible Bootstrap
@@ -550,7 +538,7 @@ def ensure_stage2_packages() -> None:
                 ]
             )
         except Exception as pip_exc:
-            print(f"WARNING: pip install failed ({pip_exc}). Make sure 'Internet' is enabled in Kaggle Settings -> Turn on Internet.")
+            print(f"WARNING: pip install failed ({pip_exc}). Enable Internet in Kaggle Settings.")
     elif missing:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", *missing])
 
@@ -593,7 +581,7 @@ try:
     from ml.crucible.verifier import sanitize_model_output, verify_rewrite
     print("Loaded ml.crucible modules from repository.")
 except ImportError:
-    print("Standalone Kaggle notebook mode detected: bootstrapping self-contained MaskedSimPOLoss & Tier 2 Verifier...")
+    print("Standalone Kaggle mode: bootstrapping self-contained MaskedSimPOLoss & Tier 2 Verifier...")
     UNIT_BOUND_REGEX = re.compile(
         r"(?i)(?:(?<=^)|(?<=[\\s(\\[\\\"'`]))(#|\\$)?(\\d+(?:[.,]\\d+)?)\\s*(%|ms|us|\u00b5s|s|sec|min|hrs?|kb|mb|gb|tb|px|x|k|m|b)?(?=$|[\\s,.;:!?/\\)\\]\\'\\\"`])"
     )
@@ -753,21 +741,19 @@ except ImportError:
             return _Out()"""
         ),
         _code_cell(
-            """# Cell 2: Resolve Datasets & Load Stage 1 SFT Adapter (with Automatic Base-Model Fallback)
-MODEL_TIER = os.environ.get("LEXEL_MODEL_TIER", "lexel-1.5b")
-MAX_SEQ_LENGTH = 1536
-LORA_R = 32
-LORA_ALPHA = 64
-TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+            f"""# Cell 2: Per-Tier Config, Dataset Resolution & Load Stage 1 SFT Adapter
+TIER_CONFIGS = json.loads(r'''{tier_table_json}''')
 
-UNSLOTH_BASE_MAP = {
-    "lexel-1.5b": "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit",
-    "lexel-0.5b": "unsloth/Qwen2.5-0.5B-Instruct-bnb-4bit",
-}
-HF_BASE_MAP = {
-    "lexel-1.5b": "Qwen/Qwen2.5-1.5B-Instruct",
-    "lexel-0.5b": "Qwen/Qwen2.5-0.5B-Instruct",
-}
+DEFAULT_TIER = {default_tier!r}
+MODEL_TIER = os.environ.get("LEXEL_MODEL_TIER", DEFAULT_TIER)
+if MODEL_TIER not in TIER_CONFIGS:
+    raise ValueError(f"Unsupported LEXEL_MODEL_TIER={{MODEL_TIER!r}}. Valid: {{sorted(TIER_CONFIGS)}}")
+
+CFG = TIER_CONFIGS[MODEL_TIER]
+MAX_SEQ_LENGTH = int(CFG["max_seq_length"])
+LORA_R = int(CFG["lora_r"])
+LORA_ALPHA = int(CFG["lora_alpha"])
+TARGET_MODULES = list(CFG["target_modules"])
 
 def resolve_stage2_data_dir() -> Path:
     candidates = [
@@ -788,77 +774,49 @@ def resolve_stage2_data_dir() -> Path:
         if matches:
             return matches[0].parent.resolve()
 
-    fallback_dir = Path("/kaggle/working/lexel-datasets") if Path("/kaggle/working").is_dir() else (Path.cwd() / "lexel-datasets")
-    fallback_dir.mkdir(parents=True, exist_ok=True)
-    dpo_p = fallback_dir / "lexel_dpo_train.jsonl"
-    held_p = fallback_dir / "lexel_heldout_eval.jsonl"
-    if not dpo_p.is_file():
-        print("WARNING: Attached dataset not found; creating emergency Crucible DPO + Heldout fixtures in", fallback_dir)
-        sys_msg = "You are Lexel, a precise human writing editor.\\nRules:\\n- Output ONLY the rewritten text. No preamble, no quotes, no explanation.\\n- Preserve every number, metric, ID (#42), URL, and `code` token exactly.\\n- Never use em dashes (\\u2014) or AI buzzwords (delve, tapestry, seamless, leverage, game-changer, unlock, pivotal)."
-        dpo_rows = [
-            {
-                "pair_id": f"seed_dpo_{i:03d}",
-                "surface_id": "web_github_pr",
-                "task": "deslop",
-                "prompt": f"{sys_msg}\\n\\n<source>\\nGreat work! Fixed #{40+i} in `verifier.rs` cutting latency to 12ms.\\n</source>",
-                "chosen": f"Fixed #{40+i} in `verifier.rs`, cutting check latency to 12ms.",
-                "rejected": f"Fixed #{40+i} in `verifier.rs` \\u2014 seamlessly cutting check latency to 99ms.",
-                "perturbation_type": "numerical_hallucination",
-                "perturbed_spans": [{"original": "12ms", "perturbed": "99ms", "start_char": 58, "end_char": 62, "perturbation_type": "numerical_hallucination"}],
-                "rejected_token_mask": [0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 1, 1, 0],
-                "messages": [
-                    {"role": "system", "content": sys_msg},
-                    {"role": "user", "content": f"<source>\\nGreat work! Fixed #{40+i} in `verifier.rs` cutting latency to 12ms.\\n</source>"},
-                ],
-            }
-            for i in range(16)
-        ]
-        dpo_p.write_text("\\n".join(json.dumps(r) for r in dpo_rows) + "\\n", encoding="utf-8")
-        held_rows = [
-            {
-                "eval_id": f"seed_eval_{i:03d}",
-                "surface_id": "web_github_pr",
-                "task": "deslop",
-                "source": f"Awesome work! This PR seamlessly fixes #{100+i} in `lexel-core` and keeps latency under 2ms.",
-                "reference_target": f"Fixes #{100+i} in `lexel-core` and keeps latency under 2ms.",
-                "messages": [
-                    {"role": "system", "content": sys_msg},
-                    {"role": "user", "content": f"<source>\\nAwesome work! This PR seamlessly fixes #{100+i} in `lexel-core` and keeps latency under 2ms.\\n</source>"},
-                ],
-            }
-            for i in range(8)
-        ]
-        held_p.write_text("\\n".join(json.dumps(r) for r in held_rows) + "\\n", encoding="utf-8")
-    return fallback_dir.resolve()
+    raise FileNotFoundError(
+        "Could not find lexel_dpo_train.jsonl. Attach the `lexel-crucible-datasets` Kaggle Dataset "
+        "(or set LEXEL_DATA_DIR)."
+    )
 
 DATA_DIR = resolve_stage2_data_dir()
 DPO_FILE = DATA_DIR / "lexel_dpo_train.jsonl"
 HELDOUT_FILE = DATA_DIR / "lexel_heldout_eval.jsonl"
 
+# Optional personal preference pairs exported via `lexel db export-simpo`
+USER_SIMPO_PATH = Path(os.environ["LEXEL_USER_SIMPO_PATH"]) if "LEXEL_USER_SIMPO_PATH" in os.environ else (DATA_DIR / "lexel_user_simpo.jsonl")
+if not USER_SIMPO_PATH.is_file() and Path("/kaggle/input").is_dir():
+    user_matches = sorted(Path("/kaggle/input").rglob("lexel_user_simpo.jsonl"))
+    if user_matches:
+        USER_SIMPO_PATH = user_matches[0]
+
 def resolve_stage1_adapter() -> Path | None:
     adapter_candidates = [
         Path(os.environ["LEXEL_STAGE1_ADAPTER"]) if "LEXEL_STAGE1_ADAPTER" in os.environ else None,
-        Path(f"./outputs/{MODEL_TIER}-sft-adapter/adapter"),
-        Path(f"/kaggle/working/outputs/{MODEL_TIER}-sft-adapter/adapter"),
+        Path(f"./outputs/{{MODEL_TIER}}-sft-adapter/adapter"),
+        Path(f"/kaggle/working/outputs/{{MODEL_TIER}}-sft-adapter/adapter"),
     ]
     for cand in adapter_candidates:
         if cand and (cand / "adapter_config.json").is_file():
             return cand.resolve()
     if Path("/kaggle/input").is_dir():
         found = sorted(Path("/kaggle/input").rglob("adapter_config.json"))
+        for match in found:
+            if MODEL_TIER in str(match):
+                return match.parent.resolve()
         if found:
             return found[0].parent.resolve()
     return None
 
 STAGE1_ADAPTER_DIR = resolve_stage1_adapter()
-STAGE2_OUT_DIR = Path(os.environ.get("LEXEL_STAGE2_OUT", f"./outputs/{MODEL_TIER}-dpo-aligned")).resolve()
+STAGE2_OUT_DIR = Path(os.environ.get("LEXEL_STAGE2_OUT", f"./outputs/{{MODEL_TIER}}-dpo-aligned")).resolve()
 GGUF_OUT_DIR = STAGE2_OUT_DIR / "gguf"
 STAGE2_OUT_DIR.mkdir(parents=True, exist_ok=True)
 GGUF_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 if HAS_UNSLOTH:
     if STAGE1_ADAPTER_DIR is not None:
-        print(f"Resuming from Stage 1 SFT adapter: {STAGE1_ADAPTER_DIR}")
+        print(f"Resuming from Stage 1 SFT adapter: {{STAGE1_ADAPTER_DIR}}")
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=str(STAGE1_ADAPTER_DIR),
             max_seq_length=MAX_SEQ_LENGTH,
@@ -867,14 +825,15 @@ if HAS_UNSLOTH:
         )
         FastLanguageModel.for_training(model)
     else:
-        base_id = UNSLOTH_BASE_MAP[MODEL_TIER]
-        print(f"Stage 1 adapter directory not found; initializing fresh QLoRA adapter on {base_id}...")
+        base_id = CFG["unsloth_model_id"]
+        print(f"Stage 1 adapter not found; initializing fresh QLoRA adapter on {{base_id}}...")
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=base_id,
             max_seq_length=MAX_SEQ_LENGTH,
             dtype=None,
             load_in_4bit=True,
         )
+        tokenizer = get_chat_template(tokenizer, chat_template=CFG["chat_template"])
         model = FastLanguageModel.get_peft_model(
             model,
             r=LORA_R,
@@ -883,13 +842,13 @@ if HAS_UNSLOTH:
             lora_dropout=0,
             bias="none",
             use_gradient_checkpointing="unsloth",
-            random_state=42,
+            random_state=int(CFG["seed"]),
         )
 else:
     from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-    base_id = HF_BASE_MAP[MODEL_TIER]
+    base_id = CFG["hf_model_id"]
     tokenizer = AutoTokenizer.from_pretrained(str(STAGE1_ADAPTER_DIR or base_id))
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -914,7 +873,6 @@ else:
             LoraConfig(r=LORA_R, lora_alpha=LORA_ALPHA, lora_dropout=0, target_modules=TARGET_MODULES, bias="none", task_type="CAUSAL_LM"),
         )
 
-# Ensure LoRA parameters require gradients for Stage 2 alignment
 trainable_count = 0
 for name, param in model.named_parameters():
     if "lora_" in name:
@@ -922,32 +880,50 @@ for name, param in model.named_parameters():
     if param.requires_grad:
         trainable_count += param.numel()
 
-print(f"Stage 2 Model Ready | Trainable LoRA parameters: {trainable_count:,}")"""
+print(f"Stage 2 Model Ready ({{MODEL_TIER}}) | Trainable LoRA params: {{trainable_count:,}}")"""
         ),
         _code_cell(
-            """# Cell 3: Run Surgical Token-Masked SimPO Alignment (MaskedSimPOLoss)
+            """# Cell 3: Run Dual-Band Surgical Token-Masked SimPO Alignment (MaskedSimPOLoss)
 dpo_pairs = [
     json.loads(line)
     for line in DPO_FILE.read_text(encoding="utf-8").splitlines()
     if line.strip()
 ]
-print(f"Loaded {len(dpo_pairs)} surgical counterfactual preference pairs from {DPO_FILE.name}.")
+print(f"Loaded {len(dpo_pairs):,} surgical counterfactual preference pairs from {DPO_FILE.name}.")
+
+if USER_SIMPO_PATH.is_file():
+    user_pairs = [
+        json.loads(line)
+        for line in USER_SIMPO_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    print(f"Merging {len(user_pairs):,} personal preference pairs from {USER_SIMPO_PATH.name}.")
+    dpo_pairs.extend(user_pairs)
+
+SIMPO_BETA = float(CFG["simpo_beta"])
+SIMPO_GAMMA = float(CFG["simpo_gamma"])
+SIMPO_ALPHA = float(CFG["simpo_unmasked_token_weight"])
+SIMPO_SFT_W = float(CFG["simpo_sft_weight"])
+SIMPO_LR = float(CFG["simpo_learning_rate"])
+SIMPO_EPOCHS = float(CFG["simpo_epochs"])
+SIMPO_BS = int(CFG["simpo_per_device_batch_size"])
+SIMPO_ACCUM = int(CFG["simpo_grad_accum_steps"])
 
 if "run_masked_simpo_alignment" in globals():
     alignment_summary = run_masked_simpo_alignment(
         model=model,
         tokenizer=tokenizer,
         pairs=dpo_pairs,
-        beta=2.0,
-        gamma=1.0,
-        sft_weight=0.05,
-        unmasked_token_weight=0.05,
-        learning_rate=5e-6,
-        weight_decay=0.01,
-        warmup_ratio=0.10,
-        num_train_epochs=1.5,
-        per_device_batch_size=2,
-        gradient_accumulation_steps=4,
+        beta=SIMPO_BETA,
+        gamma=SIMPO_GAMMA,
+        sft_weight=SIMPO_SFT_W,
+        unmasked_token_weight=SIMPO_ALPHA,
+        learning_rate=SIMPO_LR,
+        weight_decay=float(CFG["simpo_weight_decay"]),
+        warmup_ratio=float(CFG["simpo_warmup_ratio"]),
+        num_train_epochs=SIMPO_EPOCHS,
+        per_device_batch_size=SIMPO_BS,
+        gradient_accumulation_steps=SIMPO_ACCUM,
         max_seq_length=MAX_SEQ_LENGTH,
         logging_steps=10,
     )
@@ -956,50 +932,60 @@ if "run_masked_simpo_alignment" in globals():
     final_margin = alignment_summary.final_reward_margin
     final_acc = alignment_summary.final_accuracy
 else:
-    # Standalone loop using bootstrapped MaskedSimPOLoss
-    simpo_loss_fn = MaskedSimPOLoss(beta=2.0, gamma=1.0, sft_weight=0.05, unmasked_token_weight=0.05)
+    # Standalone loop using bootstrapped Dual-Band MaskedSimPOLoss
+    simpo_loss_fn = MaskedSimPOLoss(
+        beta=SIMPO_BETA,
+        gamma=SIMPO_GAMMA,
+        sft_weight=SIMPO_SFT_W,
+        unmasked_token_weight=SIMPO_ALPHA,
+    )
     device = next(model.parameters()).device
     model.train()
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable_params, lr=5e-6, weight_decay=0.01)
-    pad_id = tokenizer.pad_token_id or tokenizer.eos_token_id or 0
+    optimizer = torch.optim.AdamW(trainable_params, lr=SIMPO_LR, weight_decay=float(CFG["simpo_weight_decay"]))
     t0 = time.perf_counter()
     optimizer.zero_grad()
     step = 0
+    micro_step = 0
+    total_micro = max(1, int(len(dpo_pairs) * SIMPO_EPOCHS))
     final_dpo_loss = final_margin = final_acc = 0.0
 
-    for idx, row in enumerate(dpo_pairs):
-        msgs = row.get("messages") or [{"role": "user", "content": row["prompt"]}]
-        prompt_str = "".join(f"<|im_start|>{m['role']}\\n{m['content']}<|im_end|>\\n" for m in msgs) + "<|im_start|>assistant\\n"
-        p_ids = list(tokenizer.encode(prompt_str, add_special_tokens=False))[:768]
-        c_ids = list(tokenizer.encode(f"{row['chosen'].strip()}<|im_end|>\\n", add_special_tokens=False))[:512]
-        r_ids = list(tokenizer.encode(f"{row['rejected'].strip()}<|im_end|>\\n", add_special_tokens=False))[:512]
+    for _epoch in range(max(1, int(math.ceil(SIMPO_EPOCHS)))):
+        for row in dpo_pairs:
+            if micro_step >= total_micro:
+                break
+            msgs = row.get("messages") or [{"role": "user", "content": row["prompt"]}]
+            prompt_str = "".join(f"<|im_start|>{m['role']}\\n{m['content']}<|im_end|>\\n" for m in msgs) + "<|im_start|>assistant\\n"
+            p_ids = list(tokenizer.encode(prompt_str, add_special_tokens=False))[:768]
+            c_ids = list(tokenizer.encode(f"{row['chosen'].strip()}<|im_end|>\\n", add_special_tokens=False))[:512]
+            r_ids = list(tokenizer.encode(f"{row['rejected'].strip()}<|im_end|>\\n", add_special_tokens=False))[:512]
 
-        c_inp = torch.tensor([p_ids + c_ids], dtype=torch.long, device=device)
-        c_lbl = torch.tensor([[-100] * len(p_ids) + c_ids], dtype=torch.long, device=device)
-        r_inp = torch.tensor([p_ids + r_ids], dtype=torch.long, device=device)
-        r_lbl = torch.tensor([[-100] * len(p_ids) + r_ids], dtype=torch.long, device=device)
+            c_inp = torch.tensor([p_ids + c_ids], dtype=torch.long, device=device)
+            c_lbl = torch.tensor([[-100] * len(p_ids) + c_ids], dtype=torch.long, device=device)
+            r_inp = torch.tensor([p_ids + r_ids], dtype=torch.long, device=device)
+            r_lbl = torch.tensor([[-100] * len(p_ids) + r_ids], dtype=torch.long, device=device)
 
-        raw_m = list(row.get("rejected_token_mask") or [1] * len(r_ids))
-        raw_m = (raw_m + [0] * len(r_ids))[: len(r_ids)]
-        if not any(raw_m):
-            raw_m = [1] * len(r_ids)
-        r_msk = torch.tensor([[0] * len(p_ids) + raw_m], dtype=torch.float32, device=device)
+            raw_m = list(row.get("rejected_token_mask") or [1] * len(r_ids))
+            raw_m = (raw_m + [0] * len(r_ids))[: len(r_ids)]
+            if not any(raw_m):
+                raw_m = [1] * len(r_ids)
+            r_msk = torch.tensor([[0] * len(p_ids) + raw_m], dtype=torch.float32, device=device)
 
-        c_out = model(input_ids=c_inp)
-        r_out = model(input_ids=r_inp)
-        out = simpo_loss_fn(c_out.logits.float(), c_lbl, r_out.logits.float(), r_lbl, rejected_token_mask=r_msk)
-        (out.loss / 4.0).backward()
+            c_out = model(input_ids=c_inp)
+            r_out = model(input_ids=r_inp)
+            out = simpo_loss_fn(c_out.logits.float(), c_lbl, r_out.logits.float(), r_lbl, rejected_token_mask=r_msk)
+            (out.loss / float(SIMPO_ACCUM)).backward()
+            micro_step += 1
 
-        if (idx + 1) % 4 == 0 or (idx + 1) == len(dpo_pairs):
-            torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
-            optimizer.step()
-            optimizer.zero_grad()
-            step += 1
-            m = out.to_metrics()
-            final_dpo_loss, final_margin, final_acc = m["loss"], m["reward_margin"], m["accuracy"]
-            if step % 15 == 0 or step == 1:
-                print(f"[MaskedSimPO] step={step} loss={final_dpo_loss:.4f} margin={final_margin:.4f} acc={final_acc:.3f}")
+            if micro_step % SIMPO_ACCUM == 0 or micro_step == total_micro:
+                torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
+                optimizer.step()
+                optimizer.zero_grad()
+                step += 1
+                m = out.to_metrics()
+                final_dpo_loss, final_margin, final_acc = m["loss"], m["reward_margin"], m["accuracy"]
+                if step % 15 == 0 or step == 1:
+                    print(f"[MaskedSimPO] step={step} loss={final_dpo_loss:.4f} margin={final_margin:.4f} acc={final_acc:.3f}")
 
     dpo_elapsed_sec = round(time.perf_counter() - t0, 2)
 
@@ -1007,10 +993,10 @@ aligned_adapter_dir = STAGE2_OUT_DIR / "adapter"
 aligned_adapter_dir.mkdir(parents=True, exist_ok=True)
 model.save_pretrained(str(aligned_adapter_dir))
 tokenizer.save_pretrained(str(aligned_adapter_dir))
-print(f"Stage 2 Masked-SimPO alignment finished in {dpo_elapsed_sec:.1f}s (loss={final_dpo_loss:.4f}, margin={final_margin:.4f}, acc={final_acc:.3f})")"""
+print(f"Stage 2 Masked-SimPO finished in {dpo_elapsed_sec:.1f}s (loss={final_dpo_loss:.4f}, margin={final_margin:.4f}, acc={final_acc:.3f})")"""
         ),
         _code_cell(
-            """# Cell 4: Held-Out Benchmark Evaluation Gate (All 13 Surfaces)
+            """# Cell 4: Held-Out Benchmark Evaluation Gate (All 13 Surfaces, 95% Clopper-Pearson CIs)
 if HAS_UNSLOTH:
     FastLanguageModel.for_inference(model)
 else:
@@ -1021,19 +1007,22 @@ heldout_rows = [
     for line in HELDOUT_FILE.read_text(encoding="utf-8").splitlines()
     if line.strip()
 ]
+eval_limit = int(os.environ.get("LEXEL_EVAL_LIMIT", "0"))
+if eval_limit > 0:
+    heldout_rows = heldout_rows[:eval_limit]
 
 critic = WritingBenchCritic()
 evaluated_records = []
 pairwise_wins = 0
 pairwise_decisive = 0
 device = next(model.parameters()).device
+apply_sig = inspect.signature(tokenizer.apply_chat_template).parameters
 
 for row in heldout_rows:
-    chat_prompt = tokenizer.apply_chat_template(
-        row["messages"],
-        tokenize=False,
-        add_generation_prompt=True,
-    )
+    tpl_kwargs = {"tokenize": False, "add_generation_prompt": True}
+    if "enable_thinking" in apply_sig:
+        tpl_kwargs["enable_thinking"] = bool(CFG["enable_thinking"])
+    chat_prompt = tokenizer.apply_chat_template(row["messages"], **tpl_kwargs)
     encoded_inputs = tokenizer(
         chat_prompt,
         return_tensors="pt",
@@ -1053,8 +1042,6 @@ for row in heldout_rows:
     raw_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
     candidate_text = sanitize_model_output(raw_text)
 
-    # Tier 2 Post-AI Verifier runtime guard: if the raw 1.5B generation violates a deterministic
-    # number/token/surface constraint, inspect whether the reference or sanitized fallback is needed
     rec_copy = dict(row)
     rec_copy["raw_candidate"] = candidate_text
     rec_copy["candidate"] = candidate_text
@@ -1071,6 +1058,7 @@ for row in heldout_rows:
             pairwise_wins += 1
 
 eval_summary = evaluate_heldout_generations(evaluated_records, candidate_key="candidate")
+eval_summary["model_tier"] = MODEL_TIER
 eval_summary["pairwise_win_rate_vs_source"] = round(
     pairwise_wins / max(1, pairwise_decisive), 4
 )
@@ -1083,26 +1071,25 @@ print(json.dumps(eval_summary, indent=2))
 
 if not eval_summary["gates_passed"]:
     print(
-        "NOTE: Raw single-shot 1.5B generation reported metric/slop drift on some held-out prompts "
-        "(expected on short training runs; Lexel's Tier 2 Rust verifier in crates/lexel-core/src/verifier.rs "
-        "enforces 100% deterministic rejection/fallback at runtime)."
+        "NOTE: Raw single-shot generation reported metric/slop drift on some held-out prompts; "
+        "Lexel's Tier 2 Rust verifier + 1-retry guided repair enforces hard constraints at runtime."
     )
 else:
     print("All Held-Out Benchmark Quality Gates PASSED.")"""
         ),
         _code_cell(
-            """# Cell 5: Export GGUF Weights (q4_k_m) & Build Lexel Desktop manifest.json
-QUANT_METHODS = ["q4_k_m"]
-CANONICAL_GGUF_NAMES = {
-    "lexel-1.5b": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-    "lexel-0.5b": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
-}
-canonical_filename = CANONICAL_GGUF_NAMES[MODEL_TIER]
-target_gguf = GGUF_OUT_DIR / canonical_filename
+            """# Cell 5: Export Q4_K_M + Q5_K_M GGUF Weights, Real SHA256SUMS & Manifest Snippet
+QUANT_METHODS = list(CFG["quant_methods"])  # ["q4_k_m", "q5_k_m"]
+GGUF_PREFIX = str(CFG["gguf_filename_prefix"])
 
-if HAS_UNSLOTH and hasattr(model, "save_pretrained_gguf"):
-    try:
-        for q_method in QUANT_METHODS:
+exported_artifacts = {}
+for q_method in QUANT_METHODS:
+    canonical_name = f"{GGUF_PREFIX}-{q_method}.gguf"
+    target_gguf = GGUF_OUT_DIR / canonical_name
+    before_files = set(GGUF_OUT_DIR.rglob("*.gguf")) | set(STAGE2_OUT_DIR.rglob("*.gguf")) | set(Path.cwd().glob("*.gguf"))
+
+    if HAS_UNSLOTH and hasattr(model, "save_pretrained_gguf"):
+        try:
             save_gguf_params = inspect.signature(model.save_pretrained_gguf).parameters
             gguf_kwargs = {"quantization_method": q_method}
             if "maximum_memory_usage" in save_gguf_params:
@@ -1112,95 +1099,108 @@ if HAS_UNSLOTH and hasattr(model, "save_pretrained_gguf"):
                 tokenizer,
                 **gguf_kwargs,
             )
-    except Exception as gguf_exc:
-        print(f"Note: Unsloth GGUF conversion encountered environment limit ({gguf_exc}).")
+        except Exception as gguf_exc:
+            print(f"Note: Unsloth GGUF export for {q_method} hit environment limit ({gguf_exc}).")
 
-# Locate exported .gguf (Unsloth may write to GGUF_OUT_DIR, gguf_gguf, STAGE2_OUT_DIR, or current working directory)
-exported_ggufs = [
-    *sorted(GGUF_OUT_DIR.glob("*.gguf")),
-    *sorted(STAGE2_OUT_DIR.glob("gguf_gguf/*.gguf")),
-    *sorted(STAGE2_OUT_DIR.rglob("*.gguf")),
-    *sorted(Path.cwd().rglob("*.gguf")),
-]
-if exported_ggufs and not target_gguf.exists():
-    exported_ggufs[0].rename(target_gguf)
+    after_files = set(GGUF_OUT_DIR.rglob("*.gguf")) | set(STAGE2_OUT_DIR.rglob("*.gguf")) | set(Path.cwd().glob("*.gguf"))
+    new_files = sorted(after_files - before_files)
+    if new_files and not target_gguf.exists():
+        new_files[0].rename(target_gguf)
+    elif not target_gguf.exists():
+        matching = sorted(p for p in after_files if q_method.lower() in p.name.lower() and p != target_gguf)
+        if matching:
+            matching[0].rename(target_gguf)
 
-if target_gguf.is_file():
-    gguf_sha256 = hashlib.sha256(target_gguf.read_bytes()).hexdigest()
-    gguf_size_bytes = target_gguf.stat().st_size
-    print(f"Exported GGUF: {target_gguf} ({gguf_size_bytes:,} bytes, sha256={gguf_sha256})")
-else:
-    # If GGUF conversion was skipped (e.g. no llama.cpp binary in offline kernel), preserve merged 16-bit / adapter weights
-    print("GGUF binary was not produced in this kernel environment; saving merged HuggingFace checkpoint & manifest...")
+    if target_gguf.is_file():
+        digest = hashlib.sha256(target_gguf.read_bytes()).hexdigest()
+        size_bytes = target_gguf.stat().st_size
+        exported_artifacts[q_method] = {
+            "filename": canonical_name,
+            "path": str(target_gguf),
+            "sha256": digest,
+            "sizeBytes": size_bytes,
+        }
+        print(f"Exported {q_method}: {target_gguf} ({size_bytes:,} bytes, sha256={digest})")
+
+if not exported_artifacts:
+    print("No GGUF binary was produced in this environment; saving merged HuggingFace checkpoint instead.")
     merged_dir = STAGE2_OUT_DIR / "merged_hf"
     merged_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(str(merged_dir))
     tokenizer.save_pretrained(str(merged_dir))
-    gguf_sha256 = (
-        "2c5b06b2b2a8d9aaa5cfbebb8993f86ccd10fec779790db3168abd89d8314e50"
-        if MODEL_TIER == "lexel-1.5b"
-        else "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db"
-    )
-    gguf_size_bytes = 986048224 if MODEL_TIER == "lexel-1.5b" else 491400032
 
+# Write real SHA256SUMS (only for artifacts actually generated on disk; never fabricated hashes)
+sha_lines = [
+    f"{meta['sha256']}  {meta['filename']}"
+    for _q, meta in exported_artifacts.items()
+]
 sha256sums_path = GGUF_OUT_DIR / "SHA256SUMS"
-sha256sums_path.write_text(f"{gguf_sha256}  {canonical_filename}\\n", encoding="utf-8")
+sha256sums_path.write_text(("\\n".join(sha_lines) + "\\n") if sha_lines else "", encoding="utf-8")
 
-desktop_manifest = {
-    "version": 1,
-    "defaultMainModel": "lexel-1.5b",
-    "models": [
+# Build ready-to-paste models/manifest.json snippet for this tier
+manifest_entries = []
+for q_method, meta in exported_artifacts.items():
+    is_q5 = q_method == "q5_k_m"
+    entry_id = f"{MODEL_TIER}-q5" if is_q5 else MODEL_TIER
+    label_suffix = " [Q5_K_M]" if is_q5 else ""
+    ram_mb = int(CFG["approx_ram_mb_q5"] if is_q5 else CFG["approx_ram_mb_q4"])
+    manifest_entries.append(
         {
-            "id": "lexel-0.5b",
-            "tier": "lite",
-            "label": "Lexel 0.5B (Lite)",
-            "description": "Fast CPU/GPU model (~469 MB) for 4-8 GB laptops and quick edits.",
-            "ollamaTag": "qwen2.5:0.5b",
-            "ggufRepo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
-            "ggufFilename": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
-            "ggufUrl": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-            "sha256": gguf_sha256 if MODEL_TIER == "lexel-0.5b" else "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
-            "sizeBytes": gguf_size_bytes if MODEL_TIER == "lexel-0.5b" else 491400032,
-            "approxRamMb": 450,
-        },
-        {
-            "id": "lexel-1.5b",
-            "tier": "standard",
-            "label": "Lexel 1.5B (Standard)",
-            "description": "Fine-tuned Lexel 1.5B anti-slop rewrite model (~940 MB) balancing prose quality and local latency.",
-            "ollamaTag": "qwen2.5:1.5b",
+            "id": entry_id,
+            "tier": CFG["tier_kind"],
+            "label": f"{CFG['label']}{label_suffix}",
+            "description": f"Fine-tuned {CFG['label']} ({q_method.upper()}) anti-slop rewrite model.",
+            "ollamaTag": CFG["ollama_tag"],
             "ggufRepo": "Lexel-Ai/Lexel",
-            "ggufFilename": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
-            "ggufUrl": "https://github.com/Lexel-Ai/Lexel/releases/download/models-v1/qwen2.5-1.5b-instruct-q4_k_m.gguf",
-            "sha256": gguf_sha256 if MODEL_TIER == "lexel-1.5b" else "2c5b06b2b2a8d9aaa5cfbebb8993f86ccd10fec779790db3168abd89d8314e50",
-            "sizeBytes": gguf_size_bytes if MODEL_TIER == "lexel-1.5b" else 986048224,
-            "approxRamMb": 950,
-        },
-    ],
-}
+            "ggufFilename": meta["filename"],
+            "ggufUrl": f"https://github.com/Lexel-Ai/Lexel/releases/download/models-v2/{meta['filename']}",
+            "sha256": meta["sha256"],
+            "sizeBytes": meta["sizeBytes"],
+            "approxRamMb": ram_mb,
+        }
+    )
 
-(GGUF_OUT_DIR / "manifest.json").write_text(
-    json.dumps(desktop_manifest, indent=2) + "\\n", encoding="utf-8"
+manifest_snippet = {
+    "generatedAt": datetime.now(UTC).isoformat(timespec="seconds"),
+    "modelTier": MODEL_TIER,
+    "status": "exported" if exported_artifacts else "skipped_no_gguf",
+    "entries": manifest_entries,
+}
+(GGUF_OUT_DIR / "manifest_snippet.json").write_text(
+    json.dumps(manifest_snippet, indent=2) + "\\n", encoding="utf-8"
 )
-print("Wrote SHA256SUMS and manifest.json to:", GGUF_OUT_DIR)"""
+(GGUF_OUT_DIR / "manifest.json").write_text(
+    json.dumps(
+        {
+            "version": 2,
+            "defaultMainModel": "lexel-1.5b",
+            "models": manifest_entries,
+        },
+        indent=2,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+print("Wrote SHA256SUMS, manifest_snippet.json, and manifest.json to:", GGUF_OUT_DIR)"""
         ),
     ]
     return _notebook_doc(cells)
 
 
-def build_all_in_one_notebook() -> dict[str, object]:
-    """Build a single unified Kaggle notebook (`lexel-end-to-end-kaggle.ipynb`) that runs Stage 1 SFT + Stage 2 Masked-SimPO + Held-out Eval + GGUF Export in one session."""
-    sft_cells = build_sft_notebook()["cells"]
-    dpo_cells = build_dpo_gguf_notebook()["cells"]
+def build_all_in_one_notebook(default_tier: str = "lexel-1.5b") -> dict[str, object]:
+    """Build a single unified Kaggle notebook running Stage 1 SFT -> Stage 2 Masked-SimPO -> Eval -> Q4_K_M + Q5_K_M GGUF export."""
+    cfg = get_tier_config(default_tier)
+    sft_cells = build_sft_notebook(default_tier=default_tier)["cells"]
+    dpo_cells = build_dpo_gguf_notebook(default_tier=default_tier)["cells"]
 
     header = _md_cell(
-        """# Lexel End-to-End Kaggle Training Pipeline (Stage 1 QLoRA SFT -> Stage 2 Masked-SimPO -> Held-Out Eval -> GGUF Export)
+        f"""# Lexel v2 End-to-End Kaggle Pipeline: `{cfg.label}` (SFT -> Masked-SimPO -> Held-Out Eval -> Q4_K_M + Q5_K_M GGUF)
 
-Run this single notebook top-to-bottom on a Kaggle **GPU T4 x2** or **GPU P100** session to execute the entire two-stage Lexel training pipeline without transferring intermediate adapter folders between separate notebooks:
-1. **Stage 1 QLoRA SFT** on `lexel_sft_train.jsonl` & `lexel_sft_val.jsonl` (`r=32`, `lora_alpha=64`, completion-only loss masking).
-2. **Stage 2 Surgical Token-Masked SimPO Alignment** on `lexel_dpo_train.jsonl` (`MaskedSimPOLoss`, `beta=2.0`, `gamma=1.0`, `sft_weight=0.05`, `unmasked_token_weight=0.05`).
-3. **13-Surface Held-Out Benchmark Evaluation** on `lexel_heldout_eval.jsonl` with 95% Clopper-Pearson confidence intervals.
-4. **GGUF Quantization (`q4_k_m`) & Desktop Manifest Generation** (`qwen2.5-1.5b-instruct-q4_k_m.gguf`, `SHA256SUMS`, `manifest.json`)."""
+Run this notebook top-to-bottom on a Kaggle **GPU T4 x2** (pinned to GPU 0) or **GPU P100** session:
+1. **Stage 1 QLoRA SFT** on `lexel_sft_train.jsonl` & `lexel_sft_val.jsonl` (`r={cfg.lora_r}`, `lora_alpha={cfg.lora_alpha}`, `lr={cfg.sft_learning_rate}`, `{cfg.sft_epochs}` epochs, completion-only loss masking + batch audit).
+2. **Stage 2 Dual-Band Masked-SimPO** on `lexel_dpo_train.jsonl` (+ optional `lexel_user_simpo.jsonl` from `lexel db export-simpo`) (`beta={cfg.simpo_beta}`, `gamma={cfg.simpo_gamma}`, `alpha={cfg.simpo_unmasked_token_weight}`, `sft_weight={cfg.simpo_sft_weight}`, `lr={cfg.simpo_learning_rate}`, `{cfg.simpo_epochs}` epochs).
+3. **13-Surface Held-Out Benchmark** on `lexel_heldout_eval.jsonl` with 95% Clopper-Pearson confidence intervals and swap+length-debiased `WritingBenchCritic`.
+4. **Dual GGUF Export (`q4_k_m` + `q5_k_m`)** with real `SHA256SUMS` and `manifest_snippet.json`."""
     )
 
     combined_cells = [
@@ -1208,23 +1208,33 @@ Run this single notebook top-to-bottom on a Kaggle **GPU T4 x2** or **GPU P100**
         dpo_cells[1],  # Unified imports + self-contained crucible bootstrap
         sft_cells[2],  # SFT config & dataset resolution
         sft_cells[3],  # Load 4-bit base model & attach LoRA
-        sft_cells[4],  # Format ChatML prompts
+        sft_cells[4],  # Render ChatML prompts
         sft_cells[5],  # Configure SFTTrainer & audit batch labels
         sft_cells[6],  # Train Stage 1 & save adapter
         dpo_cells[2],  # Stage 2 config & load Stage 1 adapter
         dpo_cells[3],  # Run Stage 2 Masked-SimPO alignment
         dpo_cells[4],  # Run Held-Out Evaluation
-        dpo_cells[5],  # Export GGUF & manifest.json
+        dpo_cells[5],  # Export Q4_K_M + Q5_K_M GGUF, SHA256SUMS & manifest_snippet.json
     ]
     return _notebook_doc(combined_cells)
 
 
 def write_all_kaggle_notebooks(output_dir: Path = KAGGLE_DIR) -> list[Path]:
+    """Generate both generic (default 1.5B) and tier-pinned Kaggle notebooks for `lexel-1.5b` and `lexel-0.5b`."""
     output_dir.mkdir(parents=True, exist_ok=True)
     notebooks = {
-        "lexel-sft-kaggle.ipynb": build_sft_notebook(),
-        "lexel-dpo-gguf-kaggle.ipynb": build_dpo_gguf_notebook(),
-        "lexel-end-to-end-kaggle.ipynb": build_all_in_one_notebook(),
+        # Canonical generic names (default lexel-1.5b; override via LEXEL_MODEL_TIER)
+        "lexel-sft-kaggle.ipynb": build_sft_notebook("lexel-1.5b"),
+        "lexel-dpo-gguf-kaggle.ipynb": build_dpo_gguf_notebook("lexel-1.5b"),
+        "lexel-end-to-end-kaggle.ipynb": build_all_in_one_notebook("lexel-1.5b"),
+        # Tier-pinned 1.5B Standard notebooks
+        "lexel-1.5b-sft-kaggle.ipynb": build_sft_notebook("lexel-1.5b"),
+        "lexel-1.5b-dpo-gguf-kaggle.ipynb": build_dpo_gguf_notebook("lexel-1.5b"),
+        "lexel-1.5b-end-to-end-kaggle.ipynb": build_all_in_one_notebook("lexel-1.5b"),
+        # Tier-pinned 0.5B Lite notebooks
+        "lexel-0.5b-sft-kaggle.ipynb": build_sft_notebook("lexel-0.5b"),
+        "lexel-0.5b-dpo-gguf-kaggle.ipynb": build_dpo_gguf_notebook("lexel-0.5b"),
+        "lexel-0.5b-end-to-end-kaggle.ipynb": build_all_in_one_notebook("lexel-0.5b"),
     }
     written: list[Path] = []
     for filename, doc in notebooks.items():

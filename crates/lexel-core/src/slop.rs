@@ -77,6 +77,12 @@ pub struct SlopScanner {
 }
 
 impl SlopScanner {
+    /// Return a lazily initialized process-wide scanner built from `rules/slop_terms.json`.
+    pub fn shared() -> &'static Self {
+        static SHARED: OnceLock<SlopScanner> = OnceLock::new();
+        SHARED.get_or_init(|| Self::load_embedded().expect("embedded slop_terms.json must parse"))
+    }
+
     /// Build a scanner directly from the canonical `rules/slop_terms.json` file.
     pub fn load_embedded() -> Result<Self, CoreError> {
         let parsed: SlopFile = serde_json::from_str(SLOP_JSON)?;

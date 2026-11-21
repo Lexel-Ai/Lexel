@@ -6,11 +6,19 @@ declare module 'obsidian' {
     };
   }
 
+  export interface EditorPosition {
+    line: number;
+    ch: number;
+  }
+
   export interface Editor {
     getValue(): string;
     setValue(text: string): void;
     getSelection(): string;
     replaceSelection(replacement: string): void;
+    getCursor?(): EditorPosition;
+    getRange?(from: EditorPosition, to: EditorPosition): string;
+    replaceRange?(replacement: string, from: EditorPosition, to?: EditorPosition): void;
   }
 
   export class MarkdownView {
@@ -26,12 +34,18 @@ declare module 'obsidian' {
     setName(name: string): this;
     setDesc(desc: string): this;
     addText(cb: (text: TextComponent) => void): this;
+    addToggle(cb: (toggle: ToggleComponent) => void): this;
   }
 
   export interface TextComponent {
     setPlaceholder(placeholder: string): this;
     setValue(value: string): this;
     onChange(cb: (value: string) => unknown): this;
+  }
+
+  export interface ToggleComponent {
+    setValue(value: boolean): this;
+    onChange(cb: (value: boolean) => unknown): this;
   }
 
   export abstract class PluginSettingTab {

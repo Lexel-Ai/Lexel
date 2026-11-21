@@ -206,6 +206,173 @@ pub fn verify_rewrite_with_overrides(
     })
 }
 
+/// Return explicit descriptions of hard Tier 2 gate failures suitable for a guided repair turn.
+/// Empty when all hard gates pass.
+pub fn hard_gate_failures(gates: &GateCheckSummary) -> Vec<String> {
+    let mut failures = Vec::new();
+    if !gates.zero_slop {
+        let mut found = false;
+        for w in &gates.warnings {
+            if w.contains("em dash") || w.contains("AI phrasing") {
+                failures.push(w.clone());
+                found = true;
+            }
+        }
+        if !found {
+            failures.push("Remove all AI buzzwords and em dashes.".to_owned());
+        }
+    }
+    if !gates.numbers_preserved {
+        let mut found = false;
+        for w in &gates.warnings {
+            if w.contains("number") {
+                failures.push(w.clone());
+                found = true;
+            }
+        }
+        if !found {
+            failures.push(
+                "Keep every number, metric, and ID from <source> unchanged and do not invent new ones."
+                    .to_owned(),
+            );
+        }
+    }
+    if !gates.tokens_preserved {
+        let mut found = false;
+        for w in &gates.warnings {
+            if w.contains("code/URL") {
+                failures.push(w.clone());
+                found = true;
+            }
+        }
+        if !found {
+            failures.push(
+                "Preserve every backtick code token, flag, and URL from <source>.".to_owned(),
+            );
+        }
+    }
+    if !gates.surface_compliant {
+        let mut found = false;
+        for w in &gates.warnings {
+            if w.contains("Exceeds ")
+                || w.contains("opener")
+                || w.contains("Hashtag")
+                || w.contains("emoji")
+                || w.contains("External links")
+                || w.contains("commit")
+            {
+                failures.push(w.clone());
+                found = true;
+            }
+        }
+        if !found {
+            failures
+                .push("Follow the target surface length limit and formatting rules.".to_owned());
+        }
+    }
+    if !gates.secrets_free {
+        failures.push("Do not include raw credentials, tokens, or sensitive PII.".to_owned());
+    }
+    failures
+}
+
+/// Deterministic quality score for comparing two verified rewrite candidates (higher is better).
+pub fn gate_score(gates: &GateCheckSummary) -> i32 {
+    let mut score = 0i32;
+    if gates.zero_slop {
+        score += 12;
+    }
+    if gates.numbers_preserved {
+        score += 14;
+    }
+    if gates.tokens_preserved {
+        score += 14;
+    }
+    if gates.surface_compliant {
+        score += 10;
+    }
+    if gates.secrets_free {
+        score += 20;
+    }
+    if gates.grammar_clean {
+        score += 4;
+    }
+    score -= (gates.warnings.len() as i32).min(10);
+    score
+}
+
+/// Tier 2 check for short inline ghost-text completions: enforces zero slop, no em dashes,
+/// no leaked secrets, no ungrounded invented numbers, and bounded completion length.
+pub fn verify_completion(
+    prefix: &str,
+    completion: &str,
+    surface_id: &str,
+    custom_surfaces: &[SurfaceProfile],
+    custom_slop_terms: &[String],
+    disabled_slop_terms: &[String],
+) -> Result<GateCheckSummary, CoreError> {
+    let slop_scanner = SlopScanner::load_embedded()?;
+    let catalog = SurfaceCatalog::load_with_custom(custom_surfaces)?;
+    let profile = catalog.get(surface_id)?;
+    let mut warnings = Vec::new();
+
+    let slop_hits = slop_scanner.scan_with_overrides(
+        completion,
+        profile.allow_em_dashes,
+        custom_slop_terms,
+        disabled_slop_terms,
+    );
+    let zero_slop = slop_hits.is_empty();
+    for hit in &slop_hits {
+        if hit.is_em_dash {
+            warnings.push("Completion contains an em dash.".to_owned());
+        } else {
+            warnings.push(format!("Completion contains AI phrasing: \"{}\"", hit.term));
+        }
+    }
+
+    let prefix_metrics = extract_unit_bound_metrics(prefix)?;
+    let comp_metrics = extract_unit_bound_metrics(completion)?;
+    let invented: Vec<&UnitMetric> = comp_metrics
+        .iter()
+        .filter(|cm| {
+            !prefix_metrics
+                .iter()
+                .any(|pm| (pm.value - cm.value).abs() < 1e-9 && pm.unit == cm.unit)
+        })
+        .collect();
+    let numbers_preserved = invented.is_empty();
+    if !invented.is_empty() {
+        let joined = invented
+            .iter()
+            .map(|m| m.raw.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        warnings.push(format!("Completion introduced ungrounded number: {joined}"));
+    }
+
+    let secret_hits = scan_secrets(completion);
+    let secrets_free = secret_hits.is_empty();
+    if !secrets_free {
+        warnings.push("Completion contained a secret-like pattern.".to_owned());
+    }
+
+    let surface_compliant = completion.chars().count() <= 180;
+    if !surface_compliant {
+        warnings.push("Completion exceeded short ghost-text length cap.".to_owned());
+    }
+
+    Ok(GateCheckSummary {
+        zero_slop,
+        numbers_preserved,
+        tokens_preserved: true,
+        surface_compliant,
+        grammar_clean: true,
+        secrets_free,
+        warnings,
+    })
+}
+
 /// Apply zero-AI, deterministic safe text cleanup for slop phrases, em dashes, emojis, and hashtags.
 /// Preserves Markdown fenced code blocks, inline backtick spans, and `> ` quote lines.
 pub fn apply_safe_deterministic_fixes(

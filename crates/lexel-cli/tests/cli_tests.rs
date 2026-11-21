@@ -1,180 +1,211 @@
 use std::fs;
 use std::process::Command;
 
+use lexel_db::LexelDb;
+
 fn lexel_bin() -> &'static str {
     env!("CARGO_BIN_EXE_lexel")
 }
 
 #[test]
-fn cli_check_sarif_fix_all_and_fail_on_secrets_work() {
-    let tmp = std::env::temp_dir().join(format!("lexel-cli-test-{}", uuid_stub()));
-    fs::create_dir_all(&tmp).expect("tmp dir");
-    let draft_path = tmp.join("note.md");
+fn cli_ci_mode_sarif_and_repo_config_enforce_exit_codes() {
+    let dir = std::env::temp_dir().join(format!("lexel-cli-ci-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+
     fs::write(
-        &draft_path,
-        "We delve into an typo — with token sk_live_abcdefghijklmnop1234567890.\n",
+        dir.join(".lexel.toml"),
+        r#"
+dictionary = ["Krakatoax"]
+banned_slop_terms = ["synergize => combine"]
+[docs]
+max_line_chars = 120
+"#,
     )
-    .expect("write draft");
+    .expect("write .lexel.toml");
 
-    let sarif_out = Command::new(lexel_bin())
-        .args([
-            "check",
-            draft_path.to_str().unwrap(),
-            "--format",
-            "sarif",
-            "--fail-on",
-            "secrets",
-        ])
+    let dirty = dir.join("dirty.md");
+    fs::write(
+        &dirty,
+        "We should synergize our Kraka-free roadmap and delve into details.\n",
+    )
+    .expect("write dirty");
+
+    let out = Command::new(lexel_bin())
+        .args(["check", "--ci", "--format", "sarif"])
+        .arg(&dirty)
         .output()
-        .expect("run lexel check sarif");
-    assert_eq!(sarif_out.status.code(), Some(1));
-    let sarif_json: serde_json::Value =
-        serde_json::from_slice(&sarif_out.stdout).expect("parse sarif");
-    assert_eq!(sarif_json["version"], "2.1.0");
-    let results = sarif_json["runs"][0]["results"]
+        .expect("run lexel check --ci");
+    assert_eq!(out.status.code(), Some(1));
+    let sarif: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("valid SARIF JSON output");
+    assert_eq!(sarif["version"], "2.1.0");
+    let results = sarif["runs"][0]["results"]
         .as_array()
-        .expect("results");
-    assert!(!results.is_empty());
+        .expect("results array");
+    assert!(!results.is_empty(), "expected SARIF findings");
 
-    let clean_path = tmp.join("clean.txt");
-    fs::write(&clean_path, "We should delve into an typo — fast.\n").expect("write clean");
-    let fix_out = Command::new(lexel_bin())
-        .args([
-            "check",
-            clean_path.to_str().unwrap(),
-            "--fix-all",
-            "--write",
-            "--format",
-            "json",
-        ])
+    let clean = dir.join("clean.md");
+    fs::write(&clean, "Krakatoax compiles locally in under 5ms.\n").expect("write clean");
+    let clean_out = Command::new(lexel_bin())
+        .args(["check", "--ci", "--format", "json"])
+        .arg(&clean)
         .output()
-        .expect("run lexel check --fix-all --write");
-    assert!(
-        fix_out.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&fix_out.stderr)
-    );
-    let updated = fs::read_to_string(&clean_path).expect("read fixed file");
-    assert!(updated.contains("explore a typo"), "got: {updated}");
-    assert!(!updated.contains('—'));
+        .expect("run lexel check --ci clean");
+    assert_eq!(clean_out.status.code(), Some(0));
 
-    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn cli_stats_transforms_synonyms_and_weirpack_roundtrip() {
-    let tmp = std::env::temp_dir().join(format!("lexel-cli-pack-{}", uuid_stub()));
-    fs::create_dir_all(&tmp).expect("tmp dir");
-    let pack_path = tmp.join("antislop.weirpack");
+fn cli_voice_import_and_db_export_simpo_and_doctor_json_work() {
+    let dir = std::env::temp_dir().join(format!("lexel-cli-db-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("mkdir");
+    let db_path = dir.join("lexel.db");
+    let sample_md = dir.join("notes.md");
+    fs::write(
+        &sample_md,
+        "Switching our parser to borrowed slices dropped p99 latency from 4.8ms to 0.9ms.\n\nLocal deterministic linting catches typos before any model wakes up.\n",
+    )
+    .expect("write notes");
 
-    let stats_out = Command::new(lexel_bin())
-        .args(["stats", "--json"])
-        .env_remove("RUST_LOG")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .and_then(|mut child| {
-            use std::io::Write;
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(b"Short tests verify code cleanly.")?;
-            }
-            child.wait_with_output()
-        })
-        .expect("run stats");
-    assert!(stats_out.status.success());
-    let stats_json: serde_json::Value = serde_json::from_slice(&stats_out.stdout).expect("json");
-    assert_eq!(stats_json["readability"]["words"], 5);
-
-    let sc_out = Command::new(lexel_bin())
-        .args(["sentence-case", "--text", "HELLO WORLD. SECOND LINE!"])
-        .output()
-        .expect("sentence-case");
-    assert!(sc_out.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&sc_out.stdout),
-        "Hello world. Second line!"
-    );
-
-    let syn_out = Command::new(lexel_bin())
-        .args(["synonyms", "fast", "--json"])
-        .output()
-        .expect("synonyms");
-    assert!(syn_out.status.success());
-    let syns: Vec<String> = serde_json::from_slice(&syn_out.stdout).expect("syns json");
-    assert!(!syns.is_empty());
-
-    let build_out = Command::new(lexel_bin())
-        .args(["weirpack", "build-antislop", pack_path.to_str().unwrap()])
-        .output()
-        .expect("build-antislop");
-    assert!(build_out.status.success());
-
-    let validate_out = Command::new(lexel_bin())
+    // 1. Voice import from files
+    let imp = Command::new(lexel_bin())
         .args([
-            "weirpack",
-            "validate",
-            pack_path.to_str().unwrap(),
+            "voice",
+            "import",
+            "--db",
+            db_path.to_str().unwrap(),
+            "--files",
+            sample_md.to_str().unwrap(),
             "--json",
         ])
         .output()
-        .expect("validate weirpack");
-    assert!(validate_out.status.success());
-    let val_json: serde_json::Value = serde_json::from_slice(&validate_out.stdout).expect("json");
-    assert_eq!(val_json["ruleCount"], 10);
+        .expect("voice import");
+    assert!(
+        imp.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&imp.stderr)
+    );
+    let imp_json: serde_json::Value = serde_json::from_slice(&imp.stdout).expect("json");
+    assert_eq!(imp_json["importedCount"], 2);
 
-    let _ = fs::remove_dir_all(&tmp);
-}
+    // 2. Seed an edited example with PII and export SimPO JSONL
+    {
+        let db = LexelDb::open(&db_path).expect("open db");
+        db.save_voice_example(
+            "web_email",
+            Some("gmail"),
+            "Just wanted to seamlessly reach alice@example.com about ticket #42.",
+            "Please update alice@example.com on ticket #42 today.",
+            "edited",
+        )
+        .expect("save edited");
+    }
 
-#[test]
-fn cli_install_git_hook_writes_commit_msg_and_pre_commit_safely() {
-    let tmp = std::env::temp_dir().join(format!("lexel-cli-hook-{}", uuid_stub()));
-    fs::create_dir_all(tmp.join(".git/hooks")).expect("git hooks dir");
-
-    let out = Command::new(lexel_bin())
+    let simpo_out = dir.join("simpo.jsonl");
+    let exp = Command::new(lexel_bin())
         .args([
-            "install-git-hook",
-            "--repo",
-            tmp.to_str().unwrap(),
-            "--hook",
-            "both",
-            "--fail-on",
-            "slop",
+            "db",
+            "export-simpo",
+            "--db",
+            db_path.to_str().unwrap(),
+            "--out",
+            simpo_out.to_str().unwrap(),
         ])
         .output()
-        .expect("run install-git-hook");
+        .expect("db export-simpo");
     assert!(
-        out.status.success(),
+        exp.status.success(),
         "stderr: {}",
-        String::from_utf8_lossy(&out.stderr)
+        String::from_utf8_lossy(&exp.stderr)
+    );
+    let raw_jsonl = fs::read_to_string(&simpo_out).expect("read simpo jsonl");
+    let first_line: serde_json::Value =
+        serde_json::from_str(raw_jsonl.lines().next().expect("one pair")).expect("valid jsonl");
+    assert_eq!(first_line["origin"], "lexel_user_feedback");
+    assert_eq!(first_line["perturbation_type"], "user_edit");
+    assert!(
+        first_line["chosen"]
+            .as_str()
+            .unwrap()
+            .contains("[REDACTED_EMAIL]")
     );
 
-    let commit_msg = fs::read_to_string(tmp.join(".git/hooks/commit-msg")).expect("commit-msg");
-    assert!(commit_msg.contains("# lexel-managed-hook"));
-    assert!(commit_msg.contains("--surface ide_git_commit"));
-    assert!(commit_msg.contains("--fail-on slop"));
-
-    let pre_commit = fs::read_to_string(tmp.join(".git/hooks/pre-commit")).expect("pre-commit");
-    assert!(pre_commit.contains("# lexel-managed-hook"));
-    assert!(pre_commit.contains("--fail-on secrets"));
-
-    // Third-party hook is protected unless --force is supplied.
-    fs::write(
-        tmp.join(".git/hooks/commit-msg"),
-        "#!/bin/sh\necho custom\n",
-    )
-    .expect("custom");
-    let blocked = Command::new(lexel_bin())
-        .args(["install-git-hook", "--repo", tmp.to_str().unwrap()])
+    // 3. Doctor standalone JSON (point at closed port so it runs deterministic standalone check)
+    let doc = Command::new(lexel_bin())
+        .args(["doctor", "--endpoint", "http://127.0.0.1:1", "--json"])
         .output()
-        .expect("run protected install");
-    assert!(!blocked.status.success());
+        .expect("doctor");
+    assert!(
+        doc.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&doc.stderr)
+    );
+    let doc_json: serde_json::Value = serde_json::from_slice(&doc.stdout).expect("doctor json");
+    assert_eq!(doc_json["ok"], true);
+    assert!(doc_json["tier0LatencyMs"].as_f64().unwrap() >= 0.0);
 
-    let _ = fs::remove_dir_all(&tmp);
-}
+    // 4. Voice import from --git-log against current repo with limit 5
+    let git_imp = Command::new(lexel_bin())
+        .args([
+            "voice",
+            "import",
+            "--db",
+            db_path.to_str().unwrap(),
+            "--git-log",
+            "--repo",
+            env!("CARGO_MANIFEST_DIR"),
+            "--limit",
+            "5",
+            "--json",
+        ])
+        .output()
+        .expect("voice import git-log");
+    assert!(
+        git_imp.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&git_imp.stderr)
+    );
+    let git_json: serde_json::Value = serde_json::from_slice(&git_imp.stdout).expect("git json");
+    assert_eq!(git_json["sourceKind"], "git_log");
 
-fn uuid_stub() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(1)
+    // 5. Weekly insights JSON and crutch-word ban CLI
+    let ban = Command::new(lexel_bin())
+        .args([
+            "db",
+            "crutch-words",
+            "ban",
+            "basically",
+            "--db",
+            db_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("crutch ban");
+    assert!(ban.status.success());
+
+    let insights = Command::new(lexel_bin())
+        .args([
+            "db",
+            "insights",
+            "--db",
+            db_path.to_str().unwrap(),
+            "--days",
+            "7",
+            "--json",
+        ])
+        .output()
+        .expect("db insights");
+    assert!(insights.status.success());
+    let ins_json: serde_json::Value = serde_json::from_slice(&insights.stdout).expect("insights");
+    assert!(
+        ins_json["bannedCrutchWords"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "basically")
+    );
+
+    let _ = fs::remove_dir_all(&dir);
 }

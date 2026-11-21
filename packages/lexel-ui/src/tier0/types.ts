@@ -104,12 +104,119 @@ export interface SurfaceGradeTarget {
   audienceLabel: string;
 }
 
+export type SlopMeterContributorKind = 'cliche' | 'em_dash' | 'filler_opener' | 'flat_rhythm';
+export type SlopMeterLabel = 'human' | 'mild_ai' | 'likely_ai' | 'heavy_slop';
+
+export interface SlopMeterSpan {
+  kind: SlopMeterContributorKind;
+  label: string;
+  matchedText: string;
+  start: number;
+  end: number;
+  weight: number;
+}
+
+export interface Tier0SlopMeterBreakdown {
+  clichePoints: number;
+  emDashPoints: number;
+  fillerOpenerPoints: number;
+  flatRhythmPoints: number;
+  clicheDensityPer100Words: number;
+  emDashCount: number;
+  fillerOpenerCount: number;
+  sentenceLengthStddev: number;
+}
+
+export interface SlopMeterOptions {
+  allowEmDashes?: boolean;
+  customSlopTerms?: string[];
+  disabledSlopTerms?: string[];
+  surfaceBannedOpeners?: string[];
+}
+
+export interface SlopMeterReport {
+  score: number;
+  humanScore: number;
+  label: SlopMeterLabel;
+  wordCount: number;
+  clicheCount: number;
+  emDashCount: number;
+  fillerOpenerCount: number;
+  rhythmFlatness: number;
+  breakdown: Tier0SlopMeterBreakdown;
+  contributors: SlopMeterSpan[];
+}
+
+export interface PastedAiThresholds {
+  minChars?: number;
+  minScore?: number;
+  minSignals?: number;
+  minDensityPer100Words?: number;
+}
+
+export interface PastedAiAssessment {
+  shouldOfferHumanize: boolean;
+  charCount: number;
+  wordCount: number;
+  slopScore: number;
+  slopDensityPer100Words: number;
+  signalCount: number;
+  reason: string | null;
+  meter: SlopMeterReport;
+}
+
+export type ConsistencyKind =
+  | 'spelling_dialect'
+  | 'hyphenation'
+  | 'product_casing'
+  | 'version_format';
+
+export interface ConsistencyIssue {
+  kind: ConsistencyKind;
+  message: string;
+  found: string;
+  preferred: string;
+  start: number;
+  end: number;
+  groupKey: string;
+}
+
+export type WritingGuardKind =
+  | 'wall_of_text'
+  | 'buried_ask'
+  | 'abrasive_tone'
+  | 'missing_attachment'
+  | 'crutch_word';
+
+export type WritingGuardSeverity = 'info' | 'warning';
+
+export interface WritingGuardHit {
+  kind: WritingGuardKind;
+  severity: WritingGuardSeverity;
+  ruleId: string;
+  message: string;
+  matchedText: string;
+  start: number;
+  end: number;
+  suggestion?: string;
+  quickAction?: string;
+}
+
+export interface ParagraphCacheStats {
+  paragraphsTotal: number;
+  cacheHits: number;
+  cacheMisses: number;
+}
+
 export interface Tier0Options {
   allowCustomTerms?: boolean;
   customSlopTerms?: string[];
   disabledSlopTerms?: string[];
   customSurfaces?: SurfaceProfile[];
   styleGuide?: StyleGuideRule[];
+  crutchWords?: string[];
+  hasAttachmentSignal?: boolean;
+  preferredDialect?: number;
 }
 
 export interface UnitBoundMetric {

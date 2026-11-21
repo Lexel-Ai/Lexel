@@ -4,9 +4,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use lexel_core::{
-    HarperEngine, SlopScanner, SurfaceCatalog, UnifiedSettings, apply_safe_deterministic_fixes,
-    apply_style_guide_fixes, detect_language_from_path, normalize_typography, scan_invisible_chars,
-    scan_secrets, scan_structure_issues, scan_style_guide,
+    HarperEngine, RepoConfig, SlopScanner, SurfaceCatalog, UnifiedSettings,
+    apply_safe_deterministic_fixes, apply_style_guide_fixes, detect_language_from_path,
+    normalize_typography, scan_invisible_chars, scan_secrets, scan_structure_issues,
+    scan_style_guide,
 };
 use lexel_db::{LexelDb, default_db_path, default_token_path};
 use serde::{Deserialize, Serialize};
@@ -85,14 +86,41 @@ pub fn resolve_language_and_surface(
         "plaintext".to_owned()
     };
 
-    let surface = match lang.as_str() {
-        "git-commit" | "gitcommit" | "scminput" => "ide_git_commit",
-        "markdown" | "mdx" | "asciidoc" | "org" | "tex" | "latex" | "typst" => "docs_markdown",
-        "plaintext" => "general",
-        _ => "ide_code_comment",
+    let is_pr_file = path
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| {
+            let lower = name.to_ascii_lowercase();
+            lower.contains("pull_request")
+                || lower == "pr_editmsg"
+                || lower == "pr.md"
+                || lower == "pr-body.md"
+        });
+
+    let surface = if is_pr_file {
+        "web_github_pr"
+    } else {
+        match lang.as_str() {
+            "git-commit" | "gitcommit" | "scminput" => "ide_git_commit",
+            "markdown" | "mdx" | "asciidoc" | "org" | "tex" | "latex" | "typst" => "docs_markdown",
+            "plaintext" => "general",
+            _ => "ide_code_comment",
+        }
     };
 
     (lang, surface)
+}
+
+fn effective_settings_for_path(
+    path: Option<&Path>,
+    base: &UnifiedSettings,
+) -> (UnifiedSettings, Option<RepoConfig>) {
+    let repo_cfg = path.and_then(RepoConfig::discover).map(|(_, cfg)| cfg);
+    let mut merged = base.clone();
+    if let Some(ref cfg) = repo_cfg {
+        cfg.apply_to_settings(&mut merged);
+    }
+    (merged, repo_cfg)
 }
 
 /// Compute all deterministic Tier 0 LSP diagnostics for a document without loading any LLM.
@@ -107,6 +135,8 @@ pub fn analyze_document(
     }
 
     let (lang, surface_id) = resolve_language_and_surface(language_id, path);
+    let (effective_settings, repo_cfg) = effective_settings_for_path(path, settings);
+    let settings = &effective_settings;
     let mut diagnostics = Vec::new();
 
     if let Ok(mut engine) = HarperEngine::new(
@@ -147,9 +177,13 @@ pub fn analyze_document(
         && let Ok(profile) = catalog.get(surface_id)
     {
         if let Ok(scanner) = SlopScanner::load_embedded() {
+            let allow_em_dashes = repo_cfg
+                .as_ref()
+                .map(|c| c.effective_allow_em_dashes(surface_id, profile.allow_em_dashes))
+                .unwrap_or(profile.allow_em_dashes);
             for hit in scanner.scan_with_overrides(
                 text,
-                profile.allow_em_dashes,
+                allow_em_dashes,
                 &settings.custom_slop_terms,
                 &settings.disabled_slop_terms,
             ) {
@@ -210,6 +244,21 @@ pub fn analyze_document(
                     ..Default::default()
                 });
             }
+        }
+    }
+
+    if let Some(ref cfg) = repo_cfg {
+        for v in cfg.validate_text(text, surface_id) {
+            let start = byte_offset_to_position(text, v.start);
+            let end = byte_offset_to_position(text, v.end);
+            diagnostics.push(Diagnostic {
+                range: Range::new(start, end),
+                severity: Some(DiagnosticSeverity::WARNING),
+                code: Some(NumberOrString::String(v.kind)),
+                source: Some("Lexel/RepoConfig".to_owned()),
+                message: v.message,
+                ..Default::default()
+            });
         }
     }
 
@@ -309,6 +358,8 @@ pub fn apply_full_safe_fixes(
     settings: &UnifiedSettings,
 ) -> Option<String> {
     let (lang, surface_id) = resolve_language_and_surface(language_id, path);
+    let (effective_settings, _repo_cfg) = effective_settings_for_path(path, settings);
+    let settings = &effective_settings;
     let mut current = text.to_owned();
     let mut total = 0usize;
 
@@ -423,8 +474,20 @@ pub fn build_code_actions(
         let uri_str = uri.as_str().to_owned();
         let ai_actions: &[(&str, &str)] = if surface_id == "ide_git_commit" {
             &[
-                ("Lexel: Polish Commit Message (Local AI)", "rewrite_surface"),
+                (
+                    "Lexel: Polish Commit Message with Staged Diff (Local AI)",
+                    "rewrite_surface",
+                ),
                 ("Lexel: Deslop Commit Message (Local AI)", "deslop"),
+            ]
+        } else if surface_id == "web_github_pr" {
+            &[
+                (
+                    "Lexel: Polish PR Description with Branch Diff (Local AI)",
+                    "rewrite_surface",
+                ),
+                ("Lexel: Deslop PR Description (Local AI)", "deslop"),
+                ("Lexel: Shorten Concisely (Local AI)", "shorten"),
             ]
         } else {
             &[
@@ -472,13 +535,11 @@ fn load_active_settings() -> UnifiedSettings {
     UnifiedSettings::default()
 }
 
-fn read_git_staged_stat(doc_path: Option<&Path>) -> Option<String> {
+fn run_git(dir: Option<&Path>, args: &[&str]) -> Option<String> {
     let mut cmd = std::process::Command::new("git");
-    cmd.args(["diff", "--cached", "--stat"]);
-    if let Some(p) = doc_path
-        && let Some(parent) = p.parent()
-    {
-        cmd.current_dir(parent);
+    cmd.args(args);
+    if let Some(d) = dir {
+        cmd.current_dir(d);
     }
     let out = cmd.output().ok()?;
     if !out.status.success() {
@@ -486,6 +547,81 @@ fn read_git_staged_stat(doc_path: Option<&Path>) -> Option<String> {
     }
     let text = String::from_utf8_lossy(&out.stdout).trim().to_owned();
     if text.is_empty() { None } else { Some(text) }
+}
+
+fn truncate_context(text: String, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text;
+    }
+    let clipped: String = text.chars().take(max_chars).collect();
+    format!("{clipped}\n... (truncated)")
+}
+
+/// Build diff-grounded Git context for commit messages (`staged`) or PR descriptions (`branch`).
+pub fn read_git_diff_context(
+    doc_path: Option<&Path>,
+    surface_id: &str,
+    diff_mode: Option<&str>,
+    base_branch: Option<&str>,
+) -> Option<String> {
+    let mode = diff_mode
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("auto")
+        .to_ascii_lowercase();
+    if mode == "off" || mode == "none" {
+        return None;
+    }
+
+    let workdir = doc_path.and_then(|p| if p.is_dir() { Some(p) } else { p.parent() });
+
+    let want_staged = mode == "staged" || (mode == "auto" && surface_id == "ide_git_commit");
+    let want_branch = mode == "branch" || (mode == "auto" && surface_id == "web_github_pr");
+
+    if want_staged {
+        let stat = run_git(workdir, &["diff", "--cached", "--stat"])
+            .or_else(|| run_git(workdir, &["diff", "--stat"]))?;
+        let mut sections = vec![format!("Staged git diff stat:\n{stat}")];
+        if let Some(names) = run_git(workdir, &["diff", "--cached", "--name-status"]) {
+            sections.push(format!("Changed files:\n{names}"));
+        }
+        return Some(truncate_context(sections.join("\n\n"), 1400));
+    }
+
+    if want_branch {
+        let mut candidates: Vec<String> = Vec::new();
+        if let Some(custom) = base_branch.map(str::trim).filter(|s| !s.is_empty()) {
+            candidates.push(custom.to_owned());
+        }
+        candidates.extend([
+            "origin/HEAD".to_owned(),
+            "main".to_owned(),
+            "master".to_owned(),
+        ]);
+
+        for base in candidates {
+            let range = format!("{base}...HEAD");
+            if let Some(stat) = run_git(workdir, &["diff", "--stat", &range]) {
+                let mut sections = vec![format!("Branch diff stat against {base}:\n{stat}")];
+                let log_range = format!("{base}..HEAD");
+                if let Some(commits) =
+                    run_git(workdir, &["log", "--oneline", "-n", "10", &log_range])
+                {
+                    sections.push(format!("Branch commits:\n{commits}"));
+                }
+                return Some(truncate_context(sections.join("\n\n"), 1600));
+            }
+        }
+
+        if let Some(stat) = run_git(workdir, &["diff", "--stat", "HEAD"]) {
+            return Some(truncate_context(
+                format!("Working tree diff stat:\n{stat}"),
+                1400,
+            ));
+        }
+    }
+
+    None
 }
 
 /// Stdio LSP backend synced with local `lexel.db` active profile settings.
@@ -677,6 +813,8 @@ impl LanguageServer for LexelLanguageServer {
             .next()
             .and_then(|v| v.as_str().map(str::to_owned))
             .unwrap_or_else(|| "general".to_owned());
+        let diff_mode = args.next().and_then(|v| v.as_str().map(str::to_owned));
+        let base_branch = args.next().and_then(|v| v.as_str().map(str::to_owned));
 
         let Ok(uri) = uri_str.parse::<Uri>() else {
             return Ok(None);
@@ -697,10 +835,25 @@ impl LanguageServer for LexelLanguageServer {
         };
         let token = raw_token.trim();
         let path_buf = uri.to_file_path().map(|p| p.into_owned());
-        let thread_context = if surface_id == "ide_git_commit" {
-            read_git_staged_stat(path_buf.as_deref())
-        } else {
+        let mut context_parts = Vec::new();
+        if let Some(diff_ctx) = read_git_diff_context(
+            path_buf.as_deref(),
+            &surface_id,
+            diff_mode.as_deref(),
+            base_branch.as_deref(),
+        ) {
+            context_parts.push(diff_ctx);
+        }
+        if let Some(p) = path_buf.as_deref()
+            && let Some((_, repo_cfg)) = RepoConfig::discover(p)
+            && let Some(notes) = repo_cfg.prompt_notes(&surface_id)
+        {
+            context_parts.push(notes);
+        }
+        let thread_context = if context_parts.is_empty() {
             None
+        } else {
+            Some(context_parts.join("\n\n"))
         };
 
         let client = reqwest::Client::new();

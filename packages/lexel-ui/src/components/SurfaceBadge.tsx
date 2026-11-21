@@ -1,19 +1,24 @@
-import React from 'react';
-
 export interface SurfaceBadgeProps {
   label: string;
   subcontext?: string | null;
   charCount?: number;
   maxChars?: number;
+  autoDetected?: boolean;
 }
 
-export function SurfaceBadge({ label, subcontext, charCount, maxChars }: SurfaceBadgeProps) {
+export function SurfaceBadge({
+  label,
+  subcontext,
+  charCount,
+  maxChars,
+  autoDetected = false,
+}: SurfaceBadgeProps) {
   const overLimit =
     typeof charCount === 'number' && typeof maxChars === 'number' && charCount > maxChars;
 
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-[4px] border px-2 py-0.5 text-xs font-medium lexel-mono"
+      className="inline-flex items-center gap-1.5 rounded-[4px] border px-2 py-0.5 text-xs font-medium lexel-mono lx-tab-nums"
       style={{
         backgroundColor: overLimit ? 'var(--lx-danger-bg)' : 'var(--lx-muted)',
         borderColor: overLimit ? 'var(--lx-danger)' : 'var(--lx-border)',
@@ -21,6 +26,7 @@ export function SurfaceBadge({ label, subcontext, charCount, maxChars }: Surface
       }}
     >
       <span>{label}</span>
+      {autoDetected ? <span style={{ color: 'var(--lx-signal)' }}>(auto)</span> : null}
       {subcontext ? <span style={{ color: 'var(--lx-fg-muted)' }}>/ {subcontext}</span> : null}
       {typeof charCount === 'number' && typeof maxChars === 'number' ? (
         <span style={{ color: overLimit ? 'var(--lx-danger)' : 'var(--lx-fg-muted)' }}>

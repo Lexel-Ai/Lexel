@@ -97,16 +97,75 @@ ENTITY_SWAP_MAP: dict[str, list[str]] = {
     "Rust": ["Go", "C++11", "Java 8", "Node.js"],
     "Python": ["Perl", "Ruby", "PHP"],
     "TypeScript": ["Vanilla JavaScript", "Flow", "CoffeeScript"],
+    "JavaScript": ["PHP", "Lua", "Perl"],
     "Kubernetes": ["Docker Swarm", "Nomad", "Apache Mesos"],
     "k8s": ["swarm", "mesos"],
     "Docker": ["LXC", "Podman", "Vagrant"],
     "Linux": ["FreeBSD", "Windows Server", "Solaris"],
+    "macOS": ["Windows XP", "Solaris", "FreeBSD"],
+    "Windows": ["FreeBSD", "OpenBSD", "Solaris"],
     "systemd": ["SysVinit", "Upstart", "OpenRC"],
     "eBPF": ["libpcap", "kernel modules", "iptables"],
     "TLS 1.3": ["SSL 3.0", "TLS 1.0", "plaintext HTTP"],
     "HTTP/2": ["HTTP/1.1", "HTTP/0.9"],
+    "HTTP/3": ["HTTP/1.0", "FTP", "Telnet"],
     "QUIC": ["TCP", "SCTP"],
     "OAuth2": ["HTTP Basic Auth", "Kerberos", "NTLM"],
+    "GitHub": ["Bitbucket", "SourceForge", "Subversion"],
+    "Git": ["Subversion", "Mercurial", "CVS"],
+    "Chromium": ["Internet Explorer", "Opera Presto", "Safari 9"],
+    "Firefox": ["Internet Explorer", "Edge Legacy", "Konqueror"],
+    "Chrome": ["Internet Explorer", "Safari 10", "Lynx"],
+    "Neovim": ["Nano", "Notepad", "Eclipse"],
+    "VS Code": ["Notepad++", "Sublime Text 2", "NetBeans"],
+    "Obsidian": ["WordPad", "Apple Notes", "Google Keep"],
+    "Emacs": ["Nano", "Pico", "Notepad"],
+    "Helix": ["Nano", "Ed", "WordPad"],
+    "WebAssembly": ["Flash", "Java Applet", "Silverlight"],
+    "WASM": ["ActiveX", "Flash", "JVM bytecode"],
+    "Markdown": ["RTF", "WordPerfect", "LaTeX 2.09"],
+    "JSON": ["XML", "INI", "SOAP"],
+    "TOML": ["XML", "INI", "CSV"],
+    "YAML": ["XML", "CSV", "INI"],
+    "HTML": ["PostScript", "RTF", "XAML"],
+    "CSS": ["XSLT", "inline tables", "Flash styles"],
+    "React": ["jQuery", "AngularJS 1.x", "Backbone.js"],
+    "Vite": ["Gulp", "Grunt", "Browserify"],
+    "Tailwind": ["Bootstrap 3", "Foundation 4", "inline styles"],
+    "Tauri": ["Electron", "Java Swing", "GTK2"],
+    "Electron": ["Java Applet", "Silverlight", "ActiveX"],
+    "Cargo": ["Make", "Maven", "Ant"],
+    "Harper": ["Grammarly", "LanguageTool", "Hunspell"],
+    "Lexel": ["Grammarly", "ProWritingAid", "QuillBot"],
+    "PyTorch": ["Theano", "Caffe", "MXNet"],
+    "CUDA": ["OpenCL", "DirectCompute", "WebGL"],
+    "Unsloth": ["DeepSpeed ZeRO-3", "Megatron-LM", "Fairseq"],
+    "GGUF": ["ONNX", "TorchScript", "SavedModel"],
+    "LoRA": ["Prefix Tuning", "BitFit", "IA3"],
+    "QLoRA": ["Full FP32 FT", "BitFit", "Prompt Tuning"],
+    "SimPO": ["REINFORCE", "PPO", "A2C"],
+    "DPO": ["PPO", "TRPO", "DQN"],
+    "Qwen": ["GPT-2", "OPT-1.3B", "BLOOM-1B"],
+    "Llama": ["GPT-2", "BLOOM", "Falcon-7B"],
+    "Ollama": ["TorchServe", "Triton", "TensorFlow Serving"],
+    "Nginx": ["Apache 1.3", "IIS 6", "Lighttpd"],
+    "Cloudflare": ["Akamai Legacy", "Fastly", "Squid Proxy"],
+    "Terraform": ["Chef", "Puppet", "CFEngine"],
+    "Unicode": ["ASCII", "EBCDIC", "Latin-1"],
+    "UTF-8": ["UTF-32", "Latin-1", "EBCDIC"],
+    "ASCII": ["EBCDIC", "UTF-32", "Shift-JIS"],
+    "LSP": ["SOAP", "CORBA", "XML-RPC"],
+    "SQL": ["XQuery", "LDAP", "SPARQL"],
+    "DOM": ["Shadow Canvas", "XUL", "Flash Stage"],
+    "API": ["FTP", "SMTP", "SNMP"],
+    "CLI": ["GUI wizard", "SOAP endpoint", "telnet prompt"],
+    "SSH": ["Telnet", "FTP", "rsh"],
+    "URL": ["UNC path", "URN", "file descriptor"],
+    "CPU": ["FPGA", "TPU v1", "DSP"],
+    "GPU": ["CPU", "ASIC", "FPGA"],
+    "English": ["Latin", "Esperanto", "Old Norse"],
+    "British": ["Australian", "Canadian", "Irish"],
+    "American": ["Australian", "South African", "New Zealand"],
 }
 
 SLOP_SUBSTITUTIONS: list[tuple[str, str]] = [
@@ -293,15 +352,62 @@ def perturb_negation(
         (r"\bdid not\b", "did"),
         (r"\bdoes not\b", "does"),
         (r"\bdo not\b", "do"),
+        (r"\bwill not\b", "will"),
+        (r"\bshould not\b", "should"),
+        (r"\bmust not\b", "must"),
         (r"\bcannot\b", "can"),
+        (r"\bcan't\b", "can"),
+        (r"\bdon't\b", "do"),
+        (r"\bdoesn't\b", "does"),
+        (r"\bdidn't\b", "did"),
+        (r"\bwon't\b", "will"),
+        (r"\bisn't\b", "is"),
+        (r"\baren't\b", "are"),
+        (r"\bwasn't\b", "was"),
+        (r"\bweren't\b", "were"),
+        (r"\bhaven't\b", "have"),
+        (r"\bhasn't\b", "has"),
+        (r"\bno longer\b", "still"),
         (r"\bnever\b", "always"),
+        (r"\balways\b", "never"),
         (r"\bwithout\b", "with"),
         (r"\bnot\b", "always"),
         (r"\bprevented\b", "triggered"),
+        (r"\bprevent\b", "trigger"),
+        (r"\bprevents\b", "triggers"),
         (r"\bavoided\b", "caused"),
+        (r"\bavoid\b", "cause"),
+        (r"\bavoids\b", "causes"),
         (r"\beliminated\b", "introduced"),
+        (r"\beliminate\b", "introduce"),
         (r"\bsucceeded\b", "failed"),
         (r"\breduced\b", "increased"),
+        (r"\breduce\b", "increase"),
+        (r"\breduces\b", "increases"),
+        (r"\bincreased\b", "decreased"),
+        (r"\bincrease\b", "decrease"),
+        (r"\bremoves\b", "adds"),
+        (r"\bremove\b", "add"),
+        (r"\bremoved\b", "added"),
+        (r"\bblocks\b", "allows"),
+        (r"\bblock\b", "allow"),
+        (r"\brejects\b", "accepts"),
+        (r"\breject\b", "accept"),
+        (r"\bforbids\b", "allows"),
+        (r"\brequires\b", "skips"),
+        (r"\brequire\b", "skip"),
+        (r"\benables\b", "disables"),
+        (r"\benable\b", "disable"),
+        (r"\bdisables\b", "enables"),
+        (r"\bdisable\b", "enable"),
+        (r"\bpasses\b", "fails"),
+        (r"\bfails\b", "passes"),
+        (r"\bvalid\b", "invalid"),
+        (r"\binvalid\b", "valid"),
+        (r"\btrue\b", "false"),
+        (r"\bfalse\b", "true"),
+        (r"\bbefore\b", "after"),
+        (r"\bafter\b", "before"),
     ]
     candidates: list[tuple[re.Match[str], str]] = []
     for pattern_str, replacement in negation_pairs:
@@ -639,26 +745,42 @@ def inject_reverse_slop(
     em_dash = "\u2014"
 
     if surface_id == "ide_git_commit" or task == "polish_commit":
-        # Turn clean commit into a sloppy past-tense commit with trailing period and filler
+        # Turn clean commit into a realistic sloppy commit (past tense, filler, trailing period)
         lines = clean_target.splitlines()
         if not lines:
             return clean_target
         subject = lines[0]
+        sloppy_prefixes = (
+            "wip: seamlessly updated ",
+            "misc fixes: leveraged changes to ",
+            "minor changes: holistically updated ",
+            "updated stuff: ",
+        )
         sloppy_subj = re.sub(
-            r"^([a-z]+(?:\([^)]+\))?!?:\s*)(add|fix|remove|update|use|drop|enforce|prevent|keep|cut|support)\b",
-            lambda m: f"{m.group(1)}updated stuff and seamlessly {m.group(2)}ed",
+            r"^([a-z]+(?:\([^)]+\))?!?:\s*)(add|fix|remove|update|use|drop|enforce|prevent|keep|cut|support|enable|split|flag|replace|darken|mark|stop|allow|detect|pin|merge|tag|move|simplify|clean|expose|wire|build)\b",
+            lambda m: f"{m.group(1)}{rng.choice(['seamlessly ', 'holistically ', 'pivotal update to '])}{m.group(2)}ed",
             subject,
             flags=re.IGNORECASE,
         )
         if sloppy_subj == subject:
-            sloppy_subj = f"wip: seamlessly updated {subject}"
+            sloppy_subj = f"{rng.choice(sloppy_prefixes)}{subject}"
         if not sloppy_subj.endswith("."):
             sloppy_subj += "."
         rest = "\n".join(lines[1:])
         return f"{sloppy_subj}\n{rest}".strip()
 
     if surface_id == "ide_code_comment" or task == "polish_comment":
-        return f"This function is designed to seamlessly leverage the current state {em_dash} furthermore, it is important to note that: {clean_target}"
+        comment_intros = (
+            f"This function seamlessly leverages internal state {em_dash} ",
+            f"Helper method to holistically handle this step {em_dash} ",
+            f"Note that in order to unlock clean execution {em_dash} ",
+            f"This function is designed to seamlessly coordinate {em_dash} ",
+            f"Helper method to delve into the logic here: ",
+            f"Basically, this block leverages the runtime in order to ensure: ",
+            f"Furthermore, it is worth noting that ",
+            f"This function smoothly orchestrates behavior: ",
+        )
+        return f"{rng.choice(comment_intros)}{clean_target}"
 
     current = clean_target
     ignored = ignored_prose_ranges(current)

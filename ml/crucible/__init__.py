@@ -91,6 +91,13 @@ from ml.crucible.loss import (
     MaskedSimPOLoss,
     compute_token_logprobs,
 )
+from ml.crucible.tier_configs import (
+    ALL_LINEAR_TARGET_MODULES,
+    TIER_CONFIGS,
+    TierTrainingConfig,
+    get_tier_config,
+    write_tier_config_files,
+)
 from ml.crucible.verifier import (
     UNIT_BOUND_REGEX,
     GateCheckSummary,

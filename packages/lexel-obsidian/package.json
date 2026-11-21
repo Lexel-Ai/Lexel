@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build -l warn"
   },
   "dependencies": {
-    "lexel-ui": "workspace:*"
+    "lexel-ui": "workspace:*",
+    "lexel-wasm": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

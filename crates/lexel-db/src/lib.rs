@@ -1,7 +1,14 @@
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lexel_core::{LexelProfile, MainModelTier, SurfaceCatalog, UnifiedSettings, VoiceExample};
+use lexel_core::{
+    AiTaskId, ChatMessage, LexelProfile, MainModelTier, SlopScanner, SurfaceCatalog,
+    UnifiedSettings, VoiceExample, analyze_readability, build_rewrite_messages_with_surfaces,
+    scan_secrets,
+};
+use regex::Regex;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -21,6 +28,115 @@ pub enum DbError {
     CannotDeleteLastProfile,
     #[error("invalid backup payload: {0}")]
     InvalidBackup(String),
+    #[error("import error: {0}")]
+    Import(String),
+}
+
+/// One human writing sample passed into cold-start voice import.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceImportSample {
+    pub surface_id: String,
+    pub text: String,
+    #[serde(default)]
+    pub original: Option<String>,
+}
+
+/// Aggregated stylistic fingerprint derived from local `voice_examples`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceStyleStats {
+    pub total_examples: usize,
+    pub avg_sentence_words: f64,
+    pub avg_word_length: f64,
+    pub directness_score: u8,
+    pub em_dash_free_rate: f64,
+    pub top_surfaces: Vec<(String, usize)>,
+    pub sample_openers: Vec<String>,
+}
+
+/// Summary returned after seeding `voice_examples` from pasted samples, Git commits, or files.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceImportReport {
+    pub imported_count: usize,
+    pub skipped_count: usize,
+    pub source_kind: String,
+    pub style_stats: VoiceStyleStats,
+}
+
+/// Character-level difference span on `rejected` relative to `chosen` for SimPO/DPO credit assignment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PerturbedSpan {
+    pub original: String,
+    pub perturbed: String,
+    pub start_char: usize,
+    pub end_char: usize,
+    pub perturbation_type: String,
+}
+
+/// PII-scrubbed SimPO/DPO preference training pair exported from local `voice_examples`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SimpoExportPair {
+    pub pair_id: String,
+    pub example_id: String,
+    pub surface_id: String,
+    pub task: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subcontext: Option<String>,
+    pub source: String,
+    pub prompt: String,
+    pub chosen: String,
+    pub rejected: String,
+    pub perturbation_type: String,
+    pub perturbed_spans: Vec<PerturbedSpan>,
+    pub rejected_token_mask: Vec<u8>,
+    pub origin: String,
+    pub messages: Vec<ChatMessage>,
+    pub created_at: i64,
+}
+
+/// Crutch-word usage frequency and ban status for Private Weekly Insights.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CrutchWordStat {
+    pub word: String,
+    pub count: usize,
+    pub banned: bool,
+}
+
+/// One UTC calendar day bucket of local writing metrics (counts only, zero raw text).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyWritingBucket {
+    pub day_utc: String,
+    pub checks: usize,
+    pub words: usize,
+    pub slop_hits: usize,
+    pub grammar_hits: usize,
+    pub fixes_applied: usize,
+}
+
+/// Local-only Private Weekly Writing Insights aggregated strictly from SQLite.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WeeklyInsightsReport {
+    pub period_days: usize,
+    pub checks_in_period: usize,
+    pub words_in_period: usize,
+    pub slop_caught_in_period: usize,
+    pub grammar_hits_in_period: usize,
+    pub secrets_blocked_in_period: usize,
+    pub fixes_applied_in_period: usize,
+    pub clarity_score: u8,
+    pub clarity_delta: i16,
+    pub conciseness_score: u8,
+    pub conciseness_delta: i16,
+    pub top_crutch_words: Vec<CrutchWordStat>,
+    pub banned_crutch_words: Vec<String>,
+    pub top_slop_patterns: Vec<(String, usize)>,
+    pub daily_buckets: Vec<DailyWritingBucket>,
+    pub voice_examples_count: usize,
 }
 
 /// Complete portable JSON backup of a Lexel local database.
@@ -218,6 +334,22 @@ impl LexelDb {
 
             CREATE INDEX IF NOT EXISTS idx_draft_snapshots_profile
                 ON draft_snapshots(profile_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS crutch_word_bans (
+                profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                word TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (profile_id, word)
+            );
+
+            CREATE TABLE IF NOT EXISTS writing_pattern_hits (
+                profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                term TEXT NOT NULL,
+                hit_count INTEGER NOT NULL DEFAULT 1,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY (profile_id, kind, term)
+            );
             "#,
         )?;
 
@@ -839,6 +971,8 @@ impl LexelDb {
                 "DELETE FROM voice_examples_fts;
                  DELETE FROM voice_examples;
                  DELETE FROM writing_events;
+                 DELETE FROM writing_pattern_hits;
+                 DELETE FROM crutch_word_bans;
                  DELETE FROM draft_snapshots;
                  DELETE FROM sub_contexts;
                  DELETE FROM profiles;",
@@ -917,12 +1051,638 @@ impl LexelDb {
             "DELETE FROM voice_examples_fts;
              DELETE FROM voice_examples;
              DELETE FROM writing_events;
+             DELETE FROM writing_pattern_hits;
+             DELETE FROM crutch_word_bans;
              DELETE FROM draft_snapshots;
              DELETE FROM sub_contexts;
              DELETE FROM profiles;",
         )?;
         self.ensure_default_profile()?;
         self.active_profile()
+    }
+
+    /// Seed local `voice_examples` from pasted prose, imported files, or git commits and return style stats.
+    pub fn import_voice_samples(
+        &self,
+        source_kind: &str,
+        samples: &[VoiceImportSample],
+    ) -> Result<VoiceImportReport, DbError> {
+        let active = self.active_profile()?;
+        let mut existing: HashSet<String> = HashSet::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT rewritten FROM voice_examples WHERE profile_id = ?1")?;
+            let rows = stmt.query_map(params![active.id], |r| r.get::<_, String>(0))?;
+            for row in rows {
+                existing.insert(normalize_dedup_key(&row?));
+            }
+        }
+
+        let action = format!("imported:{source_kind}");
+        let mut imported_count = 0usize;
+        let mut skipped_count = 0usize;
+
+        for sample in samples {
+            let cleaned = sample.text.trim();
+            let char_len = cleaned.chars().count();
+            if !(15..=4000).contains(&char_len) || !scan_secrets(cleaned).is_empty() {
+                skipped_count += 1;
+                continue;
+            }
+            let dedup_key = normalize_dedup_key(cleaned);
+            if existing.contains(&dedup_key) {
+                skipped_count += 1;
+                continue;
+            }
+
+            let surface_id = if sample.surface_id.trim().is_empty() {
+                "general"
+            } else {
+                sample.surface_id.trim()
+            };
+            let original = sample
+                .original
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| synthesize_baseline_draft(cleaned, surface_id));
+
+            self.save_voice_example(surface_id, Some(source_kind), &original, cleaned, &action)?;
+            existing.insert(dedup_key);
+            imported_count += 1;
+        }
+
+        let style_stats = self.voice_style_stats(None)?;
+        Ok(VoiceImportReport {
+            imported_count,
+            skipped_count,
+            source_kind: source_kind.to_owned(),
+            style_stats,
+        })
+    }
+
+    /// Import recent non-merge commit messages from a local Git repository into `voice_examples`.
+    pub fn import_voice_from_git_log(
+        &self,
+        repo_path: &Path,
+        author: Option<&str>,
+        limit: usize,
+    ) -> Result<VoiceImportReport, DbError> {
+        let cap = limit.clamp(1, 500);
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(repo_path).args([
+            "log",
+            "--no-merges",
+            "-n",
+            &cap.to_string(),
+            "--pretty=format:%s%n%b%x1e",
+        ]);
+        if let Some(a) = author.map(str::trim).filter(|s| !s.is_empty()) {
+            cmd.arg(format!("--author={a}"));
+        }
+
+        let output = cmd
+            .output()
+            .map_err(|e| DbError::Import(format!("failed to invoke git log: {e}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(DbError::Import(if stderr.is_empty() {
+                "git log exited with non-zero status".to_owned()
+            } else {
+                stderr
+            }));
+        }
+
+        let raw = String::from_utf8_lossy(&output.stdout);
+        let mut samples = Vec::new();
+        for record in raw.split('\u{1e}') {
+            let trimmed = record.trim();
+            if trimmed.is_empty()
+                || trimmed.starts_with("Merge ")
+                || trimmed.starts_with("Revert \"")
+            {
+                continue;
+            }
+            let cleaned: String = trimmed
+                .lines()
+                .filter(|line| {
+                    let l = line.trim_start();
+                    !l.starts_with("Signed-off-by:")
+                        && !l.starts_with("Co-authored-by:")
+                        && !l.starts_with("Change-Id:")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                .trim()
+                .to_owned();
+            if !cleaned.is_empty() {
+                samples.push(VoiceImportSample {
+                    surface_id: "ide_git_commit".to_owned(),
+                    text: cleaned,
+                    original: None,
+                });
+            }
+        }
+
+        self.import_voice_samples("git_log", &samples)
+    }
+
+    /// Import human writing paragraphs from local text or markdown files into `voice_examples`.
+    pub fn import_voice_from_files(
+        &self,
+        paths: &[PathBuf],
+        surface_id: &str,
+    ) -> Result<VoiceImportReport, DbError> {
+        let mut samples = Vec::new();
+        for path in paths {
+            let raw = std::fs::read_to_string(path)
+                .map_err(|e| DbError::Import(format!("failed to read {}: {e}", path.display())))?;
+            let effective_surface = if surface_id.trim().is_empty() || surface_id == "auto" {
+                match path.extension().and_then(|e| e.to_str()) {
+                    Some("md" | "mdx" | "rst" | "adoc") => "docs_markdown",
+                    _ => "general",
+                }
+            } else {
+                surface_id
+            };
+            for para in extract_prose_paragraphs(&raw) {
+                samples.push(VoiceImportSample {
+                    surface_id: effective_surface.to_owned(),
+                    text: para,
+                    original: None,
+                });
+            }
+        }
+        self.import_voice_samples("files", &samples)
+    }
+
+    /// Compute local voice fingerprint statistics from stored `voice_examples`.
+    pub fn voice_style_stats(&self, surface_id: Option<&str>) -> Result<VoiceStyleStats, DbError> {
+        let examples = self.list_voice_examples(surface_id, 500)?;
+        if examples.is_empty() {
+            return Ok(VoiceStyleStats::default());
+        }
+
+        let scanner = SlopScanner::load_embedded()?;
+        let mut total_words = 0usize;
+        let mut total_sentences = 0usize;
+        let mut total_word_chars = 0usize;
+        let mut word_token_count = 0usize;
+        let mut em_dash_free = 0usize;
+        let mut total_slop_hits = 0usize;
+        let mut surface_counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut opener_counts: BTreeMap<String, usize> = BTreeMap::new();
+
+        for ex in &examples {
+            *surface_counts.entry(ex.surface_id.clone()).or_insert(0) += 1;
+            let text = ex.rewritten.trim();
+            let rd = analyze_readability(text);
+            total_words += rd.words;
+            total_sentences += rd.sentences.max(1);
+            for w in text.split_whitespace() {
+                let letters = w.chars().filter(|c| c.is_alphabetic()).count();
+                if letters > 0 {
+                    total_word_chars += letters;
+                    word_token_count += 1;
+                }
+            }
+            if !text.contains('—') && !text.contains(" -- ") {
+                em_dash_free += 1;
+            }
+            total_slop_hits += scanner.scan(text, false).len();
+            if let Some(first_two) = first_two_words(text) {
+                *opener_counts.entry(first_two).or_insert(0) += 1;
+            }
+        }
+
+        let total = examples.len();
+        let avg_sentence_words = round2(total_words as f64 / total_sentences.max(1) as f64);
+        let avg_word_length = round2(total_word_chars as f64 / word_token_count.max(1) as f64);
+        let em_dash_free_rate = round2(em_dash_free as f64 / total as f64);
+
+        let slop_per_example = total_slop_hits as f64 / total as f64;
+        let length_penalty = ((avg_sentence_words - 16.0).max(0.0) * 1.5).min(30.0);
+        let slop_penalty = (slop_per_example * 25.0).min(40.0);
+        let directness_score = (100.0 - length_penalty - slop_penalty).clamp(0.0, 100.0) as u8;
+
+        let mut top_surfaces: Vec<(String, usize)> = surface_counts.into_iter().collect();
+        top_surfaces.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        top_surfaces.truncate(6);
+
+        let mut openers: Vec<(String, usize)> = opener_counts.into_iter().collect();
+        openers.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let sample_openers = openers.into_iter().take(5).map(|(k, _)| k).collect();
+
+        Ok(VoiceStyleStats {
+            total_examples: total,
+            avg_sentence_words,
+            avg_word_length,
+            directness_score,
+            em_dash_free_rate,
+            top_surfaces,
+            sample_openers,
+        })
+    }
+
+    /// Export edited/rejected voice examples as PII-scrubbed SimPO/DPO preference pairs.
+    pub fn export_simpo_pairs(
+        &self,
+        surface_id: Option<&str>,
+        include_accepted: bool,
+        limit: usize,
+    ) -> Result<Vec<SimpoExportPair>, DbError> {
+        let active = self.active_profile()?;
+        let examples = self.list_voice_examples(surface_id, limit.clamp(1, 500))?;
+        let mut pairs = Vec::new();
+
+        for ex in examples {
+            let action_lower = ex.action.trim().to_ascii_lowercase();
+            let is_preference_action = matches!(
+                action_lower.as_str(),
+                "edited" | "rejected" | "edited_hunk" | "partial_accept"
+            );
+            if !is_preference_action && !include_accepted {
+                continue;
+            }
+            if action_lower.starts_with("imported:") && !include_accepted {
+                continue;
+            }
+
+            let (raw_chosen, raw_rejected, raw_source, perturbation_type) =
+                if action_lower == "rejected" {
+                    (
+                        ex.original.as_str(),
+                        ex.rewritten.as_str(),
+                        ex.original.as_str(),
+                        "user_rejection",
+                    )
+                } else {
+                    (
+                        ex.rewritten.as_str(),
+                        ex.original.as_str(),
+                        ex.original.as_str(),
+                        "user_edit",
+                    )
+                };
+
+            let chosen = scrub_pii_for_export(raw_chosen);
+            let rejected = scrub_pii_for_export(raw_rejected);
+            let source = scrub_pii_for_export(raw_source);
+            if chosen.is_empty() || rejected.is_empty() || chosen == rejected {
+                continue;
+            }
+
+            let mut messages = build_rewrite_messages_with_surfaces(
+                &source,
+                AiTaskId::RewriteSurface,
+                &ex.surface_id,
+                ex.subcontext.as_deref(),
+                None,
+                &[],
+                &active.settings.custom_surfaces,
+            )?;
+            for msg in &mut messages {
+                msg.content = scrub_pii_for_export(&msg.content);
+            }
+            let prompt = messages
+                .iter()
+                .map(|m| m.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+
+            // Fail closed: drop the row if any secret pattern still survives after scrubbing.
+            if !scan_secrets(&source).is_empty()
+                || !scan_secrets(&chosen).is_empty()
+                || !scan_secrets(&rejected).is_empty()
+                || !scan_secrets(&prompt).is_empty()
+            {
+                continue;
+            }
+
+            let perturbed_spans = compute_perturbed_spans(&chosen, &rejected, perturbation_type);
+
+            pairs.push(SimpoExportPair {
+                pair_id: format!("user_pref_{}", ex.id),
+                example_id: ex.id,
+                surface_id: ex.surface_id,
+                task: "rewrite_surface".to_owned(),
+                subcontext: ex.subcontext,
+                source,
+                prompt,
+                chosen,
+                rejected,
+                perturbation_type: perturbation_type.to_owned(),
+                perturbed_spans,
+                rejected_token_mask: Vec::new(),
+                origin: "lexel_user_feedback".to_owned(),
+                messages,
+                created_at: ex.created_at,
+            });
+        }
+
+        Ok(pairs)
+    }
+
+    /// List banned personal crutch words for the active profile.
+    pub fn list_crutch_word_bans(&self) -> Result<Vec<String>, DbError> {
+        let active = self.active_profile()?;
+        let mut stmt = self.conn.prepare(
+            "SELECT word FROM crutch_word_bans
+             WHERE profile_id = ?1
+             ORDER BY word ASC",
+        )?;
+        let rows = stmt.query_map(params![active.id], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Replace the active profile's banned crutch words and sync them with `custom_slop_terms`.
+    pub fn set_crutch_word_bans(&self, words: &[String]) -> Result<Vec<String>, DbError> {
+        let active = self.active_profile()?;
+        let previous = self.list_crutch_word_bans()?;
+        let now = now_millis();
+
+        let mut normalized: Vec<String> = Vec::new();
+        for raw in words {
+            let clean = raw.trim().to_ascii_lowercase();
+            if !clean.is_empty() && !normalized.contains(&clean) {
+                normalized.push(clean);
+            }
+        }
+        normalized.sort();
+
+        self.conn.execute(
+            "DELETE FROM crutch_word_bans WHERE profile_id = ?1",
+            params![active.id],
+        )?;
+        for word in &normalized {
+            self.conn.execute(
+                "INSERT INTO crutch_word_bans (profile_id, word, created_at)
+                 VALUES (?1, ?2, ?3)",
+                params![active.id, word, now],
+            )?;
+        }
+
+        self.sync_crutch_bans_to_custom_slop(&previous, &normalized)?;
+        Ok(normalized)
+    }
+
+    /// Ban or unban a single personal crutch word for the active profile.
+    pub fn toggle_crutch_word_ban(&self, word: &str, banned: bool) -> Result<Vec<String>, DbError> {
+        let clean = word.trim().to_ascii_lowercase();
+        let mut current = self.list_crutch_word_bans()?;
+        if clean.is_empty() {
+            return Ok(current);
+        }
+        if banned {
+            if !current.contains(&clean) {
+                current.push(clean);
+            }
+        } else {
+            current.retain(|w| w != &clean);
+        }
+        self.set_crutch_word_bans(&current)
+    }
+
+    fn sync_crutch_bans_to_custom_slop(
+        &self,
+        previous: &[String],
+        current: &[String],
+    ) -> Result<(), DbError> {
+        let mut active = self.active_profile()?;
+        for old in previous {
+            if !current.contains(old) {
+                active.settings.custom_slop_terms.retain(|entry| {
+                    let term = entry.split("=>").next().unwrap_or(entry).trim();
+                    !term.eq_ignore_ascii_case(old)
+                });
+            }
+        }
+        for word in current {
+            let already = active.settings.custom_slop_terms.iter().any(|entry| {
+                let term = entry.split("=>").next().unwrap_or(entry).trim();
+                term.eq_ignore_ascii_case(word)
+            });
+            if !already {
+                active.settings.custom_slop_terms.push(word.clone());
+            }
+        }
+        self.update_active_settings(&active.settings)?;
+        Ok(())
+    }
+
+    /// Record aggregate pattern hit counts (slop or crutch word) without storing raw user text.
+    pub fn record_pattern_hits(&self, kind: &str, terms: &[String]) -> Result<(), DbError> {
+        let active = self.active_profile()?;
+        let now = now_millis();
+        for term in terms {
+            let clean = term.trim().to_ascii_lowercase();
+            if clean.is_empty() {
+                continue;
+            }
+            self.conn.execute(
+                "INSERT INTO writing_pattern_hits (profile_id, kind, term, hit_count, updated_at)
+                 VALUES (?1, ?2, ?3, 1, ?4)
+                 ON CONFLICT(profile_id, kind, term)
+                 DO UPDATE SET hit_count = hit_count + 1, updated_at = excluded.updated_at",
+                params![active.id, kind, clean, now],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Compute Private Weekly Writing Insights strictly from local SQLite tables.
+    pub fn weekly_insights(&self, days: usize) -> Result<WeeklyInsightsReport, DbError> {
+        let active = self.active_profile()?;
+        let period_days = days.clamp(1, 90);
+        let now = now_millis();
+        let day_ms = 86_400_000_i64;
+        let window_start = now - (period_days as i64) * day_ms;
+        let prev_window_start = window_start - (period_days as i64) * day_ms;
+
+        let (checks_cur, words_cur, grammar_cur, slop_cur, secrets_cur, fixes_cur) =
+            self.aggregate_events_window(&active.id, window_start, now + 1)?;
+        let (_checks_prev, words_prev, grammar_prev, slop_prev, _secrets_prev, _fixes_prev) =
+            self.aggregate_events_window(&active.id, prev_window_start, window_start)?;
+
+        let clarity_score = compute_clarity_score(words_cur, grammar_cur, slop_cur);
+        let conciseness_score = compute_conciseness_score(words_cur, slop_cur, fixes_cur);
+
+        let clarity_delta = if words_prev > 0 {
+            clarity_score as i16 - compute_clarity_score(words_prev, grammar_prev, slop_prev) as i16
+        } else {
+            0
+        };
+        let conciseness_delta = if words_prev > 0 {
+            conciseness_score as i16 - compute_conciseness_score(words_prev, slop_prev, 0) as i16
+        } else {
+            0
+        };
+
+        let mut bucket_map: BTreeMap<String, DailyWritingBucket> = BTreeMap::new();
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch') as day_utc,
+                        COUNT(*),
+                        COALESCE(SUM(words_checked), 0),
+                        COALESCE(SUM(slop_hits), 0),
+                        COALESCE(SUM(grammar_hits), 0),
+                        COALESCE(SUM(fixes_applied), 0)
+                 FROM writing_events
+                 WHERE profile_id = ?1 AND created_at >= ?2
+                 GROUP BY day_utc
+                 ORDER BY day_utc ASC",
+            )?;
+            let rows = stmt.query_map(params![active.id, window_start], |r| {
+                Ok(DailyWritingBucket {
+                    day_utc: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    checks: r.get::<_, i64>(1)?.max(0) as usize,
+                    words: r.get::<_, i64>(2)?.max(0) as usize,
+                    slop_hits: r.get::<_, i64>(3)?.max(0) as usize,
+                    grammar_hits: r.get::<_, i64>(4)?.max(0) as usize,
+                    fixes_applied: r.get::<_, i64>(5)?.max(0) as usize,
+                })
+            })?;
+            for row in rows {
+                let bucket = row?;
+                if !bucket.day_utc.is_empty() {
+                    bucket_map.insert(bucket.day_utc.clone(), bucket);
+                }
+            }
+        }
+        let daily_buckets: Vec<DailyWritingBucket> = bucket_map.into_values().collect();
+
+        let banned_crutch_words = self.list_crutch_word_bans()?;
+        let mut crutch_counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut slop_counts: BTreeMap<String, usize> = BTreeMap::new();
+
+        {
+            let mut stmt = self.conn.prepare(
+                "SELECT kind, term, hit_count
+                 FROM writing_pattern_hits
+                 WHERE profile_id = ?1",
+            )?;
+            let rows = stmt.query_map(params![active.id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?.max(0) as usize,
+                ))
+            })?;
+            for row in rows {
+                let (kind, term, count) = row?;
+                if kind == "crutch" {
+                    *crutch_counts.entry(term).or_insert(0) += count;
+                } else if kind == "slop" {
+                    *slop_counts.entry(term).or_insert(0) += count;
+                }
+            }
+        }
+
+        // Supplement with local voice_examples and draft_snapshots scans so users see real crutch words immediately.
+        let scanner = SlopScanner::load_embedded()?;
+        let voice_examples = self.list_voice_examples(None, 200)?;
+        let voice_examples_count = voice_examples.len();
+        for ex in &voice_examples {
+            count_crutch_words_in_text(&ex.original, &banned_crutch_words, &mut crutch_counts);
+            for hit in scanner.scan(&ex.original, false) {
+                let label = if hit.is_em_dash {
+                    "em_dash".to_owned()
+                } else {
+                    hit.term.to_ascii_lowercase()
+                };
+                *slop_counts.entry(label).or_insert(0) += 1;
+            }
+        }
+        for draft in self.list_draft_snapshots(50)? {
+            count_crutch_words_in_text(&draft.content, &banned_crutch_words, &mut crutch_counts);
+            for hit in scanner.scan(&draft.content, false) {
+                let label = if hit.is_em_dash {
+                    "em_dash".to_owned()
+                } else {
+                    hit.term.to_ascii_lowercase()
+                };
+                *slop_counts.entry(label).or_insert(0) += 1;
+            }
+        }
+
+        let mut top_crutch_words: Vec<CrutchWordStat> = crutch_counts
+            .into_iter()
+            .filter(|(_, count)| *count > 0)
+            .map(|(word, count)| CrutchWordStat {
+                banned: banned_crutch_words.iter().any(|b| b == &word),
+                word,
+                count,
+            })
+            .collect();
+        top_crutch_words.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.word.cmp(&b.word)));
+        top_crutch_words.truncate(8);
+
+        let mut top_slop_patterns: Vec<(String, usize)> = slop_counts.into_iter().collect();
+        top_slop_patterns.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        top_slop_patterns.truncate(8);
+
+        Ok(WeeklyInsightsReport {
+            period_days,
+            checks_in_period: checks_cur,
+            words_in_period: words_cur,
+            slop_caught_in_period: slop_cur,
+            grammar_hits_in_period: grammar_cur,
+            secrets_blocked_in_period: secrets_cur,
+            fixes_applied_in_period: fixes_cur,
+            clarity_score,
+            clarity_delta,
+            conciseness_score,
+            conciseness_delta,
+            top_crutch_words,
+            banned_crutch_words,
+            top_slop_patterns,
+            daily_buckets,
+            voice_examples_count,
+        })
+    }
+
+    fn aggregate_events_window(
+        &self,
+        profile_id: &str,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<(usize, usize, usize, usize, usize, usize), DbError> {
+        let (checks, words, grammar, slop, secrets, fixes): (i64, i64, i64, i64, i64, i64) =
+            self.conn.query_row(
+                "SELECT COUNT(*),
+                        COALESCE(SUM(words_checked), 0),
+                        COALESCE(SUM(grammar_hits), 0),
+                        COALESCE(SUM(slop_hits), 0),
+                        COALESCE(SUM(secret_blocks), 0),
+                        COALESCE(SUM(fixes_applied), 0)
+                 FROM writing_events
+                 WHERE profile_id = ?1 AND created_at >= ?2 AND created_at < ?3",
+                params![profile_id, start_ms, end_ms],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )?;
+        Ok((
+            checks.max(0) as usize,
+            words.max(0) as usize,
+            grammar.max(0) as usize,
+            slop.max(0) as usize,
+            secrets.max(0) as usize,
+            fixes.max(0) as usize,
+        ))
     }
 
     fn parse_voice_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<VoiceExample> {
@@ -964,4 +1724,218 @@ fn merge_json_objects(
         }
         (base_slot, new_val) => *base_slot = new_val,
     }
+}
+
+const DEFAULT_CRUTCH_WORDS: &[&str] = &[
+    "just",
+    "actually",
+    "basically",
+    "honestly",
+    "literally",
+    "really",
+    "very",
+    "simply",
+    "obviously",
+    "clearly",
+    "definitely",
+    "probably",
+    "perhaps",
+    "kind of",
+    "sort of",
+];
+
+/// Scrub secrets, email addresses, phone numbers, and IPv4 addresses before exporting preference pairs.
+pub fn scrub_pii_for_export(text: &str) -> String {
+    let mut out = text.to_owned();
+    let mut matches = scan_secrets(&out);
+    matches.sort_by_key(|a| std::cmp::Reverse(a.start));
+    for m in matches {
+        if m.end <= out.len() && m.start <= m.end {
+            out.replace_range(
+                m.start..m.end,
+                &format!("[REDACTED_{}]", m.kind.to_ascii_uppercase()),
+            );
+        }
+    }
+    if let Ok(email_re) = Regex::new(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b") {
+        out = email_re.replace_all(&out, "[REDACTED_EMAIL]").into_owned();
+    }
+    if let Ok(phone_re) = Regex::new(
+        r"(?x)(?:^|[\s(])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]\d{3}[\s.-]\d{4}\b",
+    ) {
+        out = phone_re.replace_all(&out, " [REDACTED_PHONE]").into_owned();
+    }
+    if let Ok(ip_re) = Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b") {
+        out = ip_re.replace_all(&out, "[REDACTED_IP]").into_owned();
+    }
+    out.trim().to_owned()
+}
+
+fn normalize_dedup_key(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn synthesize_baseline_draft(clean_sample: &str, surface_id: &str) -> String {
+    if surface_id == "ide_git_commit" {
+        format!("Updated changes in order to seamlessly apply: {clean_sample}")
+    } else {
+        format!("It is important to note that {clean_sample}")
+    }
+}
+
+fn extract_prose_paragraphs(raw: &str) -> Vec<String> {
+    let mut paragraphs = Vec::new();
+    let mut current = Vec::new();
+    let mut in_fence = false;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            if !current.is_empty() {
+                paragraphs.push(current.join(" "));
+                current.clear();
+            }
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('|') {
+            if !current.is_empty() {
+                paragraphs.push(current.join(" "));
+                current.clear();
+            }
+            continue;
+        }
+        current.push(trimmed.to_owned());
+    }
+    if !current.is_empty() {
+        paragraphs.push(current.join(" "));
+    }
+
+    paragraphs
+        .into_iter()
+        .map(|p| p.trim().to_owned())
+        .filter(|p| {
+            let chars = p.chars().count();
+            let words = p.split_whitespace().count();
+            (20..=1500).contains(&chars) && words >= 5
+        })
+        .collect()
+}
+
+fn first_two_words(text: &str) -> Option<String> {
+    let words: Vec<&str> = text
+        .split_whitespace()
+        .take(2)
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|w| !w.is_empty())
+        .collect();
+    if words.is_empty() {
+        None
+    } else {
+        Some(words.join(" ").to_ascii_lowercase())
+    }
+}
+
+fn count_crutch_words_in_text(
+    text: &str,
+    extra_banned: &[String],
+    counts: &mut BTreeMap<String, usize>,
+) {
+    let lower = text.to_ascii_lowercase();
+    let mut candidates: Vec<&str> = DEFAULT_CRUTCH_WORDS.to_vec();
+    for extra in extra_banned {
+        if !candidates.iter().any(|c| c.eq_ignore_ascii_case(extra)) {
+            candidates.push(extra.as_str());
+        }
+    }
+    for phrase in candidates {
+        let needle = phrase.trim();
+        if needle.is_empty() {
+            continue;
+        }
+        if needle.contains(' ') {
+            let hit_count = lower.matches(needle).count();
+            if hit_count > 0 {
+                *counts.entry(needle.to_owned()).or_insert(0) += hit_count;
+            }
+        } else {
+            let hit_count = lower
+                .split(|c: char| !c.is_alphanumeric() && c != '\'')
+                .filter(|tok| *tok == needle)
+                .count();
+            if hit_count > 0 {
+                *counts.entry(needle.to_owned()).or_insert(0) += hit_count;
+            }
+        }
+    }
+}
+
+fn compute_clarity_score(words: usize, grammar_hits: usize, slop_hits: usize) -> u8 {
+    if words == 0 {
+        return 100;
+    }
+    let issues_per_100 = ((grammar_hits + slop_hits) as f64 / words as f64) * 100.0;
+    (100.0 - issues_per_100 * 5.0).clamp(15.0, 100.0).round() as u8
+}
+
+fn compute_conciseness_score(words: usize, slop_hits: usize, fixes_applied: usize) -> u8 {
+    if words == 0 {
+        return 100;
+    }
+    let slop_per_100 = (slop_hits as f64 / words as f64) * 100.0;
+    let fix_bonus = (fixes_applied.min(10) as f64) * 0.5;
+    (100.0 - slop_per_100 * 6.0 + fix_bonus)
+        .clamp(15.0, 100.0)
+        .round() as u8
+}
+
+fn round2(val: f64) -> f64 {
+    (val * 100.0).round() / 100.0
+}
+
+fn compute_perturbed_spans(
+    chosen: &str,
+    rejected: &str,
+    perturbation_type: &str,
+) -> Vec<PerturbedSpan> {
+    let chosen_chars: Vec<char> = chosen.chars().collect();
+    let rejected_chars: Vec<char> = rejected.chars().collect();
+    let mut prefix = 0usize;
+    while prefix < chosen_chars.len()
+        && prefix < rejected_chars.len()
+        && chosen_chars[prefix] == rejected_chars[prefix]
+    {
+        prefix += 1;
+    }
+
+    let mut suffix = 0usize;
+    while suffix + prefix < chosen_chars.len()
+        && suffix + prefix < rejected_chars.len()
+        && chosen_chars[chosen_chars.len() - 1 - suffix]
+            == rejected_chars[rejected_chars.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+
+    let c_end = chosen_chars.len().saturating_sub(suffix);
+    let r_end = rejected_chars.len().saturating_sub(suffix);
+    if prefix >= r_end && prefix >= c_end {
+        return Vec::new();
+    }
+
+    let original: String = chosen_chars[prefix..c_end].iter().collect();
+    let perturbed: String = rejected_chars[prefix..r_end].iter().collect();
+    vec![PerturbedSpan {
+        original,
+        perturbed,
+        start_char: prefix,
+        end_char: r_end,
+        perturbation_type: perturbation_type.to_owned(),
+    }]
 }

@@ -1,4 +1,4 @@
-.PHONY: sync-harper install install-app install-hooks setup dev-browser build-browser zip-browser dev-desktop build-desktop tauri-dev tauri-build package lint format check typecheck test build rust-check rust-test daemon ml-test
+.PHONY: sync-harper install install-app install-hooks setup dev-browser build-browser zip-browser dev-desktop build-desktop tauri-dev tauri-build package lint format check typecheck test build rust-check rust-test daemon doctor bench ci-docs ml-test
 
 install:
 	pnpm install
@@ -23,6 +23,15 @@ rust-test:
 
 daemon:
 	cargo run -p lexel-daemon -- serve
+
+doctor:
+	cargo run -p lexel-cli -- doctor
+
+bench:
+	cargo run -p lexel-cli -- bench
+
+ci-docs:
+	cargo run -p lexel-cli -- check --ci README.md docs/ci-github-actions.md
 
 dev-browser:
 	pnpm --filter lexel-browser dev

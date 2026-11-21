@@ -88,7 +88,6 @@ function formatSuggestionDisplay(
       return { action: 'Remove', label: `"${problemText}"` };
     case SuggestionKind.InsertAfter:
       return { action: 'Insert', label: suggestion.replacement_text };
-    case SuggestionKind.Replace:
     default:
       return { action: 'Replace', label: suggestion.replacement_text || '(empty)' };
   }
@@ -117,6 +116,8 @@ function categoryBadgeStyle(
   if (
     rule === 'LexelAntiSlop' ||
     rule === 'LexelSurface' ||
+    rule === 'LexelGuard' ||
+    rule === 'LexelConsistency' ||
     lintKind === 'Style' ||
     lintKind === 'Readability'
   ) {
@@ -177,8 +178,8 @@ export function LexelSuggestionPopover({
     if (!box) return;
     const measure = () => {
       const card = cardRef.current;
-      const width = card?.offsetWidth || 308;
-      const height = card?.offsetHeight || 190;
+      const width = card?.offsetWidth || 320;
+      const height = card?.offsetHeight || 196;
       const margin = 10;
       const gap = 6;
       const belowTop = box.y + box.height + gap;
@@ -201,7 +202,8 @@ export function LexelSuggestionPopover({
         onClose();
         return;
       }
-      if (active.trigger !== 'keyboard' || !box || box.lint.suggestions.length === 0) return;
+      if (!box || box.lint.suggestions.length === 0) return;
+      if (active.trigger !== 'keyboard' && document.activeElement !== cardRef.current) return;
       if (event.key === 'ArrowDown') {
         event.preventDefault();
         setSelectedIndex((idx) => (idx + 1) % box.lint.suggestions.length);
@@ -234,7 +236,9 @@ export function LexelSuggestionPopover({
     Boolean(box.rule) &&
     box.rule !== 'LexelAntiSlop' &&
     box.rule !== 'LexelSurface' &&
-    box.rule !== 'LexelSecrets';
+    box.rule !== 'LexelSecrets' &&
+    box.rule !== 'LexelGuard' &&
+    box.rule !== 'LexelConsistency';
   const canAllowSlopTerm =
     Boolean(onAllowSlopTerm) &&
     box.rule === 'LexelAntiSlop' &&
@@ -252,7 +256,7 @@ export function LexelSuggestionPopover({
     <div
       ref={cardRef}
       data-theme={theme}
-      className="lexel-root"
+      className="lexel-root lx-surface-enter lx-elevated"
       role="dialog"
       aria-label={`Lexel ${box.lint.lint_kind_pretty} suggestion`}
       onPointerEnter={() => onHoverChange(true)}
@@ -261,7 +265,7 @@ export function LexelSuggestionPopover({
         position: 'fixed',
         top: `${coords.top}px`,
         left: `${coords.left}px`,
-        width: '308px',
+        width: '320px',
         maxWidth: 'calc(100vw - 20px)',
         zIndex: 2147483647,
         pointerEvents: 'auto',
@@ -269,11 +273,10 @@ export function LexelSuggestionPopover({
         border: '1px solid var(--lx-border)',
         backgroundColor: 'var(--lx-bg)',
         color: 'var(--lx-fg)',
-        boxShadow: '0 12px 28px rgba(0, 0, 0, 0.36)',
-        padding: '10px',
+        padding: '12px',
         display: 'flex',
         flexDirection: 'column',
-        gap: '8px',
+        gap: '9px',
       }}
     >
       <div className="flex items-center justify-between gap-2">
@@ -302,17 +305,16 @@ export function LexelSuggestionPopover({
           onMouseDown={(e) => e.preventDefault()}
           onClick={onClose}
           aria-label="Close suggestion"
-          className="rounded-[6px] p-1 shrink-0"
-          style={{
-            backgroundColor: 'transparent',
-            color: 'var(--lx-fg-muted)',
-          }}
+          className="lx-pressable lx-btn-ghost inline-flex h-6 w-6 items-center justify-center shrink-0"
         >
           <CloseIcon className="w-3.5 h-3.5" />
         </button>
       </div>
 
-      <div className="text-xs leading-relaxed space-y-1.5" style={{ color: 'var(--lx-fg-muted)' }}>
+      <div
+        className="text-[12px] leading-relaxed space-y-1.5"
+        style={{ color: 'var(--lx-fg-muted)' }}
+      >
         {paragraphs.map((segments) => {
           const pKey = segments.map((s) => `${s.type}:${s.text}`).join('|');
           return (
@@ -362,9 +364,9 @@ export function LexelSuggestionPopover({
                 onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => setSelectedIndex(idx)}
                 onClick={() => void handleApply(sug)}
-                className="w-full flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-left text-xs transition-colors"
+                className="lx-pressable w-full flex items-center justify-between gap-2 rounded-[6px] border px-2.5 py-1.5 text-left text-[12px]"
                 style={{
-                  backgroundColor: isSelected ? 'var(--lx-card)' : 'var(--lx-muted)',
+                  backgroundColor: isSelected ? 'var(--lx-card)' : 'var(--lx-surface)',
                   borderColor: isSelected ? 'var(--lx-signal)' : 'var(--lx-border)',
                   color: 'var(--lx-fg)',
                 }}
@@ -385,12 +387,12 @@ export function LexelSuggestionPopover({
         <div
           className="rounded-[6px] border px-2.5 py-2 flex items-center justify-between gap-2 text-[11px]"
           style={{
-            backgroundColor: 'var(--lx-card)',
+            backgroundColor: 'var(--lx-surface)',
             borderColor: 'var(--lx-border)',
             color: 'var(--lx-fg-muted)',
           }}
         >
-          <span>No 1-click fix available.</span>
+          <span>No 1-click deterministic fix.</span>
           {aiEnabled ? (
             <button
               type="button"
@@ -399,11 +401,7 @@ export function LexelSuggestionPopover({
                 onFixWithAi(box);
                 onClose();
               }}
-              className="rounded-[6px] px-2 py-1 text-[11px] font-semibold shrink-0"
-              style={{
-                backgroundColor: 'var(--lx-accent)',
-                color: 'var(--lx-on-accent)',
-              }}
+              className="lx-pressable lx-btn-primary px-2.5 py-1 text-[11px] font-semibold shrink-0"
             >
               Rewrite with AI
             </button>
@@ -412,7 +410,7 @@ export function LexelSuggestionPopover({
       )}
 
       <div
-        className="flex flex-wrap items-center gap-1.5 pt-1.5 border-t"
+        className="flex flex-wrap items-center gap-1.5 pt-2 border-t"
         style={{ borderColor: 'var(--lx-border)' }}
       >
         {box.ignoreLint ? (
@@ -425,12 +423,7 @@ export function LexelSuggestionPopover({
                 onClose();
               });
             }}
-            className="rounded-[6px] border px-2 py-1 text-[11px] font-medium"
-            style={{
-              backgroundColor: 'var(--lx-muted)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
+            className="lx-pressable lx-btn-secondary px-2 py-1 text-[11px] font-medium"
           >
             Dismiss
           </button>
@@ -446,12 +439,7 @@ export function LexelSuggestionPopover({
                 onClose();
               });
             }}
-            className="rounded-[6px] border px-2 py-1 text-[11px] font-medium"
-            style={{
-              backgroundColor: 'var(--lx-muted)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
+            className="lx-pressable lx-btn-secondary px-2 py-1 text-[11px] font-medium"
           >
             + Dictionary
           </button>
@@ -467,8 +455,7 @@ export function LexelSuggestionPopover({
                 onClose();
               });
             }}
-            className="rounded-[6px] px-2 py-1 text-[11px]"
-            style={{ color: 'var(--lx-fg-muted)' }}
+            className="lx-pressable lx-btn-ghost px-2 py-1 text-[11px]"
             title={`Allow "${box.lint.problem_text.trim()}" on all drafts`}
           >
             Allow term
@@ -485,8 +472,7 @@ export function LexelSuggestionPopover({
                 onClose();
               });
             }}
-            className="rounded-[6px] px-2 py-1 text-[11px]"
-            style={{ color: 'var(--lx-fg-muted)' }}
+            className="lx-pressable lx-btn-ghost px-2 py-1 text-[11px]"
             title={`Disable rule ${box.rule}`}
           >
             Mute rule
@@ -500,12 +486,11 @@ export function LexelSuggestionPopover({
             void onOpenSettings();
             onClose();
           }}
-          className="ml-auto inline-flex items-center gap-1 rounded-[6px] px-2 py-1 text-[11px]"
-          style={{ color: 'var(--lx-fg-muted)' }}
+          className="lx-pressable lx-btn-ghost ml-auto inline-flex items-center gap-1 px-2 py-1 text-[11px]"
           title="Open Lexel Settings"
         >
           <SlidersIcon className="w-3 h-3" />
-          <span>Lexel Settings</span>
+          <span>Settings</span>
         </button>
       </div>
     </div>

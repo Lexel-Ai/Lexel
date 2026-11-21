@@ -126,6 +126,8 @@ jobs:
 
       - name: Collect platform artifacts
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           mkdir -p release-artifacts
@@ -133,6 +135,10 @@ jobs:
             cp target/release/lexel.exe "release-artifacts/lexel-cli-${{ matrix.target }}.exe"
             cp target/release/lexel-daemon.exe "release-artifacts/lexel-daemon-${{ matrix.target }}.exe"
             cp target/release/lexel-ls.exe "release-artifacts/lexel-ls-${{ matrix.target }}.exe"
+            (
+              cd target/release
+              7z a -tzip "${GITHUB_WORKSPACE}/release-artifacts/lexel-${RELEASE_TAG}-${{ matrix.target }}.zip" lexel.exe lexel-daemon.exe lexel-ls.exe >/dev/null
+            )
             find apps/lexel-desktop/src-tauri/target/release/bundle -type f \( -name "*.msi" -o -name "*.exe" \) -exec cp {} release-artifacts/ \;
             first_exe="$(find apps/lexel-desktop/src-tauri/target/release/bundle -type f -name "*-setup.exe" | head -n 1 || true)"
             if [ -n "${first_exe}" ]; then
@@ -146,6 +152,7 @@ jobs:
             cp target/release/lexel "release-artifacts/lexel-cli-${{ matrix.target }}"
             cp target/release/lexel-daemon "release-artifacts/lexel-daemon-${{ matrix.target }}"
             cp target/release/lexel-ls "release-artifacts/lexel-ls-${{ matrix.target }}"
+            tar -C target/release -czf "release-artifacts/lexel-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" lexel lexel-daemon lexel-ls
             find apps/lexel-desktop/src-tauri/target/release/bundle -type f -name "*.dmg" -exec cp {} release-artifacts/ \;
             first_dmg="$(find apps/lexel-desktop/src-tauri/target/release/bundle -type f -name "*.dmg" | head -n 1 || true)"
             if [ -n "${first_dmg}" ]; then
@@ -155,6 +162,7 @@ jobs:
             cp target/release/lexel "release-artifacts/lexel-cli-${{ matrix.target }}"
             cp target/release/lexel-daemon "release-artifacts/lexel-daemon-${{ matrix.target }}"
             cp target/release/lexel-ls "release-artifacts/lexel-ls-${{ matrix.target }}"
+            tar -C target/release -czf "release-artifacts/lexel-${RELEASE_TAG}-${{ matrix.target }}.tar.gz" lexel lexel-daemon lexel-ls
             cp apps/lexel-desktop/src-tauri/target/release/lexel-desktop "release-artifacts/lexel-desktop-${{ matrix.target }}"
             find apps/lexel-desktop/src-tauri/target/release/bundle -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.rpm" \) -exec cp {} release-artifacts/ \;
             first_appimage="$(find apps/lexel-desktop/src-tauri/target/release/bundle -type f -name "*.AppImage" | head -n 1 || true)"
@@ -188,6 +196,26 @@ jobs:
       - name: Generate SHA256SUMS.txt
         working-directory: all-artifacts
         run: sha256sum * > SHA256SUMS.txt
+
+      - name: Render Homebrew, AUR, and Winget manifests from real SHA-256 outputs
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          bash scripts/render-packaging.sh \
+            --tag "${RELEASE_TAG}" \
+            --checksums all-artifacts/SHA256SUMS.txt \
+            --out rendered-packaging \
+            --repo "${GITHUB_REPOSITORY}"
+          cp rendered-packaging/homebrew/lexel.rb all-artifacts/lexel.rb
+          cp rendered-packaging/aur/PKGBUILD all-artifacts/PKGBUILD
+          cp rendered-packaging/winget/LexelAI.Lexel.yaml all-artifacts/LexelAI.Lexel.yaml
+          cp rendered-packaging/winget/LexelAI.Lexel.installer.yaml all-artifacts/LexelAI.Lexel.installer.yaml
+          cp rendered-packaging/winget/LexelAI.Lexel.locale.en-US.yaml all-artifacts/LexelAI.Lexel.locale.en-US.yaml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-manifests
+          path: rendered-packaging/**
 
       - name: Publish Release
         uses: softprops/action-gh-release@v2

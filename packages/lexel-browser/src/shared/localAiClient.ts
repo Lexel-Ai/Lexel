@@ -114,12 +114,14 @@ export async function checkLocalAiHealth(settings: AiSettings): Promise<LocalAiH
 export async function generateLocalRewrite(
   settings: AiSettings,
   messages: Array<{ role: 'system' | 'user'; content: string }>,
+  overrideMaxTokens?: number,
 ): Promise<string> {
   if (!settings.enabled) {
     throw new Error('Local AI is disabled. Enable it in Lexel Settings.');
   }
 
   const base = normalizeEndpoint(settings.endpoint);
+  const maxTokens = overrideMaxTokens ?? settings.maxTokens;
 
   if (settings.provider === 'ollama') {
     const res = await fetch(`${base}/api/chat`, {
@@ -131,7 +133,7 @@ export async function generateLocalRewrite(
         stream: false,
         options: {
           temperature: settings.temperature,
-          num_predict: settings.maxTokens,
+          num_predict: maxTokens,
         },
       }),
     });
@@ -164,7 +166,7 @@ export async function generateLocalRewrite(
       model: settings.model,
       messages,
       temperature: settings.temperature,
-      max_tokens: settings.maxTokens,
+      max_tokens: maxTokens,
       stream: false,
     }),
   });

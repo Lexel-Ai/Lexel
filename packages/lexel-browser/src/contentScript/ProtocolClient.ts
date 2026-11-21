@@ -1,6 +1,8 @@
 import type { LintOptions } from 'harper.js';
+import type { DoctorReportData } from 'lexel-ui';
 import type { UnpackedLintGroups } from 'lint-framework';
 import { LRUCache } from 'lru-cache';
+import type { StreamChunkPayload } from '../shared/daemonClient';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { DEFAULT_AI_SETTINGS } from '../shared/storage';
 import type {
@@ -8,10 +10,13 @@ import type {
   AiSettings,
   AiTaskId,
   ExtensionRequest,
+  GhostCompletionRequest,
+  GhostCompletionResponse,
   Hotkey,
   LintResponse,
   PageLintSummary,
   RewriteResult,
+  ScopedThreadContext,
   SurfaceId,
 } from '../shared/types';
 
@@ -139,6 +144,56 @@ export default class ProtocolClient {
     return res?.theme ?? 'dark';
   }
 
+  public static async getGhostTextEnabled(): Promise<boolean> {
+    const res = await send<{ enabled?: boolean }>({ kind: 'getGhostTextEnabled' });
+    return res?.enabled === true;
+  }
+
+  public static async setGhostTextEnabled(enabled: boolean): Promise<void> {
+    await send({ kind: 'setGhostTextEnabled', enabled });
+  }
+
+  public static async getRedactSecrets(): Promise<boolean> {
+    const res = await send<{ enabled?: boolean }>({ kind: 'getRedactSecrets' });
+    return res?.enabled === true;
+  }
+
+  public static async setRedactSecrets(enabled: boolean): Promise<void> {
+    await send({ kind: 'setRedactSecrets', enabled });
+  }
+
+  public static async getCrutchWords(): Promise<string[]> {
+    const res = await send<{ words?: string[] }>({ kind: 'getCrutchWords' });
+    return res?.words ?? [];
+  }
+
+  public static async setCrutchWords(words: string[]): Promise<void> {
+    await send({ kind: 'setCrutchWords', words });
+  }
+
+  public static async getPrivacyStats(): Promise<{
+    localSecretBlocks: number;
+    redactSecrets: boolean;
+    blocklistCount: number;
+  }> {
+    const res = await send<{
+      localSecretBlocks?: number;
+      redactSecrets?: boolean;
+      blocklistCount?: number;
+    }>({ kind: 'getPrivacyStats' });
+    return {
+      localSecretBlocks: res?.localSecretBlocks ?? 0,
+      redactSecrets: res?.redactSecrets === true,
+      blocklistCount: res?.blocklistCount ?? 0,
+    };
+  }
+
+  public static async getDoctorReport(
+    bench = false,
+  ): Promise<{ ok: true; report: DoctorReportData } | { ok: false; error: string }> {
+    return send({ kind: 'getDoctorReport', bench });
+  }
+
   public static async aiRewrite(params: {
     text: string;
     task: AiTaskId;
@@ -146,8 +201,115 @@ export default class ProtocolClient {
     subcontext: string | null;
     threadContext?: string;
     domain?: string;
+    candidates?: 1 | 2;
+    redactSecrets?: boolean | null;
   }): Promise<{ ok: true; result: RewriteResult } | { ok: false; error: string }> {
     return send({ kind: 'aiRewrite', ...params });
+  }
+
+  /**
+   * Stream local AI rewrite tokens over a Chrome runtime port backed by Native Messaging chunks,
+   * with clean cancellation and automatic fallback to `aiRewrite`.
+   */
+  public static aiRewriteStream(
+    params: {
+      text: string;
+      task: AiTaskId;
+      surfaceId: SurfaceId;
+      subcontext: string | null;
+      threadContext?: string;
+      domain?: string;
+      candidates?: 1 | 2;
+      redactSecrets?: boolean | null;
+    },
+    onChunk: (chunk: StreamChunkPayload) => void,
+    signal?: AbortSignal,
+  ): Promise<{ ok: true; result: RewriteResult } | { ok: false; error: string }> {
+    if (typeof chrome === 'undefined' || typeof chrome.runtime?.connect !== 'function') {
+      return this.aiRewrite(params);
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const port = chrome.runtime.connect({ name: 'lexel-rewrite-stream' });
+
+      const finish = (res: { ok: true; result: RewriteResult } | { ok: false; error: string }) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener('abort', onAbort);
+        try {
+          port.disconnect();
+        } catch {
+          // Port may already be closed.
+        }
+        resolve(res);
+      };
+
+      const onAbort = () => {
+        finish({ ok: false, error: 'Rewrite cancelled.' });
+      };
+
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      signal?.addEventListener('abort', onAbort, { once: true });
+
+      port.onMessage.addListener((msg: unknown) => {
+        const frame = msg as
+          | { type: 'chunk'; delta: string; accumulated: string }
+          | { type: 'complete'; result: RewriteResult }
+          | { type: 'error'; error: string };
+        if (!frame || typeof frame !== 'object') return;
+        if (frame.type === 'chunk') {
+          onChunk({ delta: frame.delta, accumulated: frame.accumulated });
+        } else if (frame.type === 'complete') {
+          finish({ ok: true, result: frame.result });
+        } else if (frame.type === 'error') {
+          finish({ ok: false, error: frame.error });
+        }
+      });
+
+      port.onDisconnect.addListener(() => {
+        if (!settled) {
+          finish({
+            ok: false,
+            error: chrome.runtime.lastError?.message ?? 'Rewrite stream closed before completing.',
+          });
+        }
+      });
+
+      port.postMessage({ kind: 'aiRewriteStream', ...params });
+    });
+  }
+
+  public static async ghostComplete(
+    params: GhostCompletionRequest,
+  ): Promise<{ ok: true; result: GhostCompletionResponse } | { ok: false; error: string }> {
+    return send({ kind: 'ghostComplete', ...params });
+  }
+
+  public static async scopeThreadContext(
+    source: string,
+    threadContext: string,
+    maxTokens = 300,
+  ): Promise<ScopedThreadContext> {
+    const res = await send<{ scoped?: ScopedThreadContext }>({
+      kind: 'scopeThreadContext',
+      source,
+      threadContext,
+      maxTokens,
+    });
+    return (
+      res?.scoped ?? {
+        scopedText: threadContext.slice(0, maxTokens * 4),
+        estimatedTokens: Math.ceil(threadContext.length / 4),
+        originalTokens: Math.ceil(threadContext.length / 4),
+        truncated: false,
+        keptBlocks: 1,
+        totalBlocks: 1,
+      }
+    );
   }
 
   public static async saveVoiceExample(params: {
@@ -222,6 +384,19 @@ export default class ProtocolClient {
       kind: 'getCustomSurfaces',
     });
     return res?.surfaces ?? [];
+  }
+
+  public static async getCustomSlopConfig(): Promise<{
+    customTerms: string[];
+    disabledTerms: string[];
+  }> {
+    const res = await send<{ customTerms?: string[]; disabledTerms?: string[] }>({
+      kind: 'getCustomSlopConfig',
+    });
+    return {
+      customTerms: res?.customTerms ?? [],
+      disabledTerms: res?.disabledTerms ?? [],
+    };
   }
 
   public static async getSnippets(): Promise<import('../shared/types').TextSnippet[]> {

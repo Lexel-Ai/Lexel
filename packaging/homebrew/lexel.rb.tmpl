@@ -1,0 +1,32 @@
+class Lexel < Formula
+  desc "Local-first, zero-telemetry writing assistant CLI, daemon, and LSP server"
+  homepage "https://github.com/Lexel-Ai/Lexel"
+  version "{{VERSION}}"
+  license "Apache-2.0"
+
+  on_macos do
+    on_arm do
+      url "{{URL_MACOS_ARM64}}"
+      sha256 "{{SHA256_MACOS_ARM64}}"
+    end
+  end
+
+  on_linux do
+    on_intel do
+      url "{{URL_LINUX_X86_64}}"
+      sha256 "{{SHA256_LINUX_X86_64}}"
+    end
+  end
+
+  def install
+    bin.install "lexel"
+    bin.install "lexel-daemon"
+    bin.install "lexel-ls"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/lexel --version")
+    output = pipe_output("#{bin}/lexel check --format json", "Local deterministic checks run offline.\n")
+    assert_match "readability", output
+  end
+end

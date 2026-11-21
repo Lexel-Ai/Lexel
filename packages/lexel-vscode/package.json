@@ -1,7 +1,7 @@
 {
   "name": "lexel-vscode",
   "displayName": "Lexel Local Writing Assistant",
-  "description": "100% local grammar, anti-slop, secrets guard, and team style guide linting for VS Code, Cursor, and Windsurf powered by lexel-ls.",
+  "description": "100% local grammar, anti-slop, secrets guard, .lexel.toml repo rules, and diff-grounded commit/PR polish for VS Code, Cursor, and Windsurf powered by lexel-ls.",
   "version": "0.1.0",
   "publisher": "lexel-ai",
   "license": "Apache-2.0",
@@ -58,7 +58,27 @@
       },
       {
         "command": "lexel.polishCommit",
-        "title": "Lexel: Polish Commit Message (Local AI)"
+        "title": "Lexel: Polish Commit Message with Staged Diff (Local AI)"
+      },
+      {
+        "command": "lexel.polishPr",
+        "title": "Lexel: Polish PR Description with Branch Diff (Local AI)"
+      },
+      {
+        "command": "lexel.runDoctor",
+        "title": "Lexel: Run Doctor Diagnostics"
+      },
+      {
+        "command": "lexel.initRepoConfig",
+        "title": "Lexel: Create .lexel.toml Repo Config"
+      },
+      {
+        "command": "lexel.checkWorkspaceCi",
+        "title": "Lexel: Check Current File (CI Mode)"
+      },
+      {
+        "command": "lexel.importGitVoice",
+        "title": "Lexel: Clone My Voice from Git Log"
       }
     ],
     "configuration": {
@@ -67,12 +87,38 @@
         "lexel.enable": {
           "type": "boolean",
           "default": true,
-          "description": "Enable live Lexel grammar, anti-slop, secrets guard, and style guide linting."
+          "description": "Enable live Lexel grammar, anti-slop, secrets guard, .lexel.toml, and style guide linting."
         },
         "lexel.path": {
           "type": "string",
           "default": "",
           "description": "Optional absolute path to the lexel-ls binary. Defaults to lexel-ls on PATH."
+        },
+        "lexel.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to the lexel CLI binary used by doctor, CI check, and voice import commands. Defaults to lexel on PATH."
+        },
+        "lexel.diffGrounding": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "staged",
+            "branch",
+            "off"
+          ],
+          "default": "auto",
+          "description": "Feed Git diff stats into local AI commit and PR rewrites so suggestions reference real changed files."
+        },
+        "lexel.baseBranch": {
+          "type": "string",
+          "default": "",
+          "description": "Optional base branch (for example main) used for branch diff grounding on PR descriptions. Auto-detects origin/HEAD, main, or master when blank."
+        },
+        "lexel.useRepoConfig": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically discover and apply .lexel.toml repository configuration when linting and rewriting files."
         }
       }
     }

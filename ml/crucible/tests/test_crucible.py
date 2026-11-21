@@ -68,6 +68,12 @@ from ml.crucible.loss import (
     MaskedSimPOLoss,
     compute_token_logprobs,
 )
+from ml.crucible.tier_configs import (
+    ALL_LINEAR_TARGET_MODULES,
+    TIER_CONFIGS,
+    get_tier_config,
+    write_tier_config_files,
+)
 from ml.crucible.verifier import (
     extract_code_and_url_tokens,
     extract_unit_bound_metrics,
@@ -639,13 +645,35 @@ def test_generated_datasets_and_kaggle_notebooks_valid() -> None:
         assert p.is_file(), f"Missing dataset artifact: {p}"
 
     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 2
     assert manifest["crucible_gate_stats"]["final_split_crucible_pass_rate"] == 1.0
+    assert manifest["leakage_audit"]["sft_train_vs_heldout_8gram_leaks"] == 0
+    assert manifest["leakage_audit"]["sft_val_vs_heldout_8gram_leaks"] == 0
+    assert manifest["leakage_audit"]["dpo_vs_heldout_8gram_leaks"] == 0
+    assert manifest["files"]["lexel_sft_train.jsonl"]["rows"] >= 4000
+    assert manifest["files"]["lexel_dpo_train.jsonl"]["rows"] >= 2000
+    assert manifest["files"]["lexel_heldout_eval.jsonl"]["rows"] >= 260
     assert set(manifest["surface_distribution"]["train"].keys()) == set(
+        ALL_SURFACE_IDS
+    )
+    assert set(manifest["surface_distribution"]["val"].keys()) == set(
         ALL_SURFACE_IDS
     )
     assert set(manifest["surface_distribution"]["heldout"].keys()) == set(
         ALL_SURFACE_IDS
     )
+    assert all(
+        cnt >= 20 for cnt in manifest["surface_distribution"]["heldout"].values()
+    )
+    assert set(manifest["task_distribution"]["train"].keys()) == set(ALL_TASK_IDS)
+    assert set(manifest["task_distribution"]["val"].keys()) == set(ALL_TASK_IDS)
+    assert set(manifest["task_distribution"]["heldout"].keys()) == set(ALL_TASK_IDS)
+
+    # Check balanced DPO perturbation distribution across all 7 types
+    dpo_dist = manifest["dpo_perturbation_distribution"]
+    expected_pts = {pt.value for pt in PerturbationType}
+    assert set(dpo_dist.keys()) == expected_pts
+    assert all(cnt >= 300 for cnt in dpo_dist.values())
 
     # Check heldout evaluation pass rates on reference targets
     heldout_rows = [
@@ -653,6 +681,7 @@ def test_generated_datasets_and_kaggle_notebooks_valid() -> None:
         for line in heldout_eval.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    assert len(heldout_rows) >= 260
     eval_summary = evaluate_heldout_generations(heldout_rows)
     assert eval_summary["gates_passed"] is True
     assert eval_summary["zero_slop_rate"] == 1.0
@@ -666,8 +695,8 @@ def test_generated_datasets_and_kaggle_notebooks_valid() -> None:
         for line in dpo_train.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert len(dpo_rows) >= 300
-    for r in dpo_rows[:20]:
+    assert len(dpo_rows) >= 2000
+    for r in dpo_rows[:30]:
         for key in (
             "prompt",
             "chosen",
@@ -704,15 +733,37 @@ def test_generated_datasets_and_kaggle_notebooks_valid() -> None:
     assert preflight_json["train"]["issue_count"] == 0
     assert preflight_json["eval"]["issue_count"] == 0
 
-    # Verify Jupyter notebooks in ml/kaggle/*.ipynb are valid nbformat v4 JSON and every code cell compiles as pure Python
+    # Verify per-tier configs exist and obey research invariants (alpha == 2 * r, all 7 linears, eff BS <= 32)
+    configs_dir = REPO_ROOT / "ml" / "configs"
+    written_cfgs = write_tier_config_files(configs_dir)
+    assert len(written_cfgs) == len(TIER_CONFIGS)
+    for tier_id in ("lexel-0.5b", "lexel-1.5b", "qwen3-1.7b-bakeoff"):
+        cfg = get_tier_config(tier_id)
+        assert cfg.lora_alpha == 2 * cfg.lora_r
+        assert cfg.target_modules == ALL_LINEAR_TARGET_MODULES
+        assert cfg.sft_per_device_batch_size * cfg.sft_grad_accum_steps <= 32
+        assert cfg.sft_epochs <= 2.0
+        assert set(cfg.quant_methods) == {"q4_k_m", "q5_k_m"}
+        cfg_file = configs_dir / f"{tier_id}.json"
+        assert cfg_file.is_file()
+        loaded = json.loads(cfg_file.read_text(encoding="utf-8"))
+        assert loaded["tier_id"] == tier_id
+
+    # Verify all 9 Kaggle notebooks are valid nbformat v4 JSON and every code cell compiles as pure Python
     kaggle_dir = REPO_ROOT / "ml" / "kaggle"
     written_nbs = write_all_kaggle_notebooks(kaggle_dir)
-    assert len(written_nbs) == 3
+    assert len(written_nbs) == 9
 
     for nb_name in (
         "lexel-sft-kaggle.ipynb",
         "lexel-dpo-gguf-kaggle.ipynb",
         "lexel-end-to-end-kaggle.ipynb",
+        "lexel-1.5b-sft-kaggle.ipynb",
+        "lexel-1.5b-dpo-gguf-kaggle.ipynb",
+        "lexel-1.5b-end-to-end-kaggle.ipynb",
+        "lexel-0.5b-sft-kaggle.ipynb",
+        "lexel-0.5b-dpo-gguf-kaggle.ipynb",
+        "lexel-0.5b-end-to-end-kaggle.ipynb",
     ):
         nb_path = kaggle_dir / nb_name
         assert nb_path.is_file()
@@ -732,20 +783,56 @@ def test_generated_datasets_and_kaggle_notebooks_valid() -> None:
     assert (datasets_dir / "slop_terms.json").is_file()
     assert (datasets_dir / "surfaces.json").is_file()
 
-    # Verify PreferenceBatchCollator aligns token masks and pads cleanly
+    # Verify PreferenceBatchCollator aligns token masks on BOTH synthetic SCM pairs AND `lexel db export-simpo` user feedback rows
     pref_collator = PreferenceBatchCollator(
         tokenizer=None, max_seq_length=256, pad_to_multiple_of=8, return_tensors="list"
     )
     from ml.crucible.counterfactual import _WhitespaceFallbackTokenizer
 
     pref_collator.tokenizer = _WhitespaceFallbackTokenizer()
-    collated_dpo = pref_collator(dpo_rows[:2])
-    assert len(collated_dpo["chosen_input_ids"]) == 2
-    assert len(collated_dpo["rejected_input_ids"]) == 2
+    user_simpo_row_with_spans = {
+        "pair_id": "user_pref_ve_1",
+        "example_id": "ve_1",
+        "surface_id": "web_github_pr",
+        "task": "deslop",
+        "subcontext": "Lexel-Ai/Lexel",
+        "source": "Awesome work! Fixed #42 in 12ms.",
+        "prompt": "System\n\n<source>\nAwesome work! Fixed #42 in 12ms.\n</source>",
+        "messages": [
+            {"role": "system", "content": "You are Lexel, a precise human writing editor."},
+            {"role": "user", "content": "<source>\nAwesome work! Fixed #42 in 12ms.\n</source>"},
+        ],
+        "chosen": "Fixed #42 in 12ms.",
+        "rejected": "Seamlessly fixed #42 in 12ms.",
+        "perturbation_type": "user_edit",
+        "perturbed_spans": [
+            {
+                "original": "",
+                "perturbed": "Seamlessly ",
+                "start_char": 0,
+                "end_char": 11,
+                "perturbation_type": "user_edit",
+            }
+        ],
+        "rejected_token_mask": [],
+        "origin": "lexel_user_feedback",
+        "created_at": 1700000000000,
+    }
+    user_simpo_row_empty_spans = dict(
+        user_simpo_row_with_spans,
+        pair_id="user_pref_ve_2",
+        perturbation_type="user_rejection",
+        perturbed_spans=[],
+        rejected_token_mask=[],
+    )
+    collated_dpo = pref_collator([dpo_rows[0], user_simpo_row_with_spans, user_simpo_row_empty_spans])
+    assert len(collated_dpo["chosen_input_ids"]) == 3
+    assert len(collated_dpo["rejected_input_ids"]) == 3
     assert len(collated_dpo["chosen_input_ids"][0]) % 8 == 0
     assert len(collated_dpo["rejected_input_ids"][0]) % 8 == 0
     assert sum(collated_dpo["rejected_token_mask"][0]) >= 1
     assert sum(collated_dpo["rejected_token_mask"][1]) >= 1
+    assert sum(collated_dpo["rejected_token_mask"][2]) >= 1
 
 
 def test_kaggle_notebooks_end_to_end_execution_simulation(tmp_path: Path) -> None:
@@ -1017,18 +1104,21 @@ def test_kaggle_notebooks_end_to_end_execution_simulation(tmp_path: Path) -> Non
             output_dir: str = "",
             per_device_train_batch_size: int = 2,
             per_device_eval_batch_size: int = 2,
-            gradient_accumulation_steps: int = 4,
+            gradient_accumulation_steps: int = 8,
             learning_rate: float = 2e-4,
             lr_scheduler_type: str = "cosine",
             warmup_ratio: float = 0.05,
-            num_train_epochs: int = 2,
+            num_train_epochs: float = 2.0,
             optim: str = "adamw_8bit",
             weight_decay: float = 0.01,
             fp16: bool = False,
             bf16: bool = False,
-            logging_steps: int = 5,
-            save_strategy: str = "epoch",
-            eval_strategy: str = "epoch",
+            logging_steps: int = 10,
+            save_strategy: str = "steps",
+            save_steps: int = 100,
+            save_total_limit: int = 2,
+            eval_strategy: str = "steps",
+            eval_steps: int = 50,
             dataset_text_field: str = "text",
             max_length: int = 1536,
             packing: bool = False,
@@ -1082,6 +1172,7 @@ def test_kaggle_notebooks_end_to_end_execution_simulation(tmp_path: Path) -> Non
     orig_env_sft = os.environ.get("LEXEL_SFT_OUT")
     orig_env_s2 = os.environ.get("LEXEL_STAGE2_OUT")
     orig_env_s1 = os.environ.get("LEXEL_STAGE1_ADAPTER")
+    orig_env_eval_lim = os.environ.get("LEXEL_EVAL_LIMIT")
 
     try:
         sys.modules["torch"] = fake_torch
@@ -1101,11 +1192,7 @@ def test_kaggle_notebooks_end_to_end_execution_simulation(tmp_path: Path) -> Non
         align_mod.HAS_TORCH = True
         align_mod.torch = fake_torch
 
-        sft_out = tmp_path / "sft_out"
-        s2_out = tmp_path / "stage2_out"
-        os.environ["LEXEL_SFT_OUT"] = str(sft_out)
-        os.environ["LEXEL_STAGE1_ADAPTER"] = str(sft_out / "adapter")
-        os.environ["LEXEL_STAGE2_OUT"] = str(s2_out)
+        os.environ["LEXEL_EVAL_LIMIT"] = "4"
 
         # Monkeypatch run_masked_simpo_alignment to run 2 fast steps during the simulation
         orig_run_simpo = align_mod.run_masked_simpo_alignment
@@ -1116,20 +1203,37 @@ def test_kaggle_notebooks_end_to_end_execution_simulation(tmp_path: Path) -> Non
 
         align_mod.run_masked_simpo_alignment = _fast_simpo  # type: ignore[assignment]
 
-        shared_ns: dict[str, object] = {"__name__": "__main__"}
-        for idx, cell in enumerate(nb_data["cells"]):
-            if cell["cell_type"] != "code":
-                continue
-            code_str = "".join(cell["source"])
-            exec(compile(code_str, f"lexel-end-to-end-kaggle.ipynb#cell_{idx}", "exec"), shared_ns)
+        # Test BOTH 1.5B Standard and 0.5B Lite end-to-end notebooks top-to-bottom
+        for nb_file, prefix in (
+            ("lexel-1.5b-end-to-end-kaggle.ipynb", "qwen2.5-1.5b-instruct"),
+            ("lexel-0.5b-end-to-end-kaggle.ipynb", "qwen2.5-0.5b-instruct"),
+        ):
+            sft_out = tmp_path / f"{prefix}_sft"
+            s2_out = tmp_path / f"{prefix}_s2"
+            os.environ["LEXEL_SFT_OUT"] = str(sft_out)
+            os.environ["LEXEL_STAGE1_ADAPTER"] = str(sft_out / "adapter")
+            os.environ["LEXEL_STAGE2_OUT"] = str(s2_out)
 
-        assert (sft_out / "run_manifest.json").is_file()
-        assert (s2_out / "heldout_eval_report.json").is_file()
-        assert (s2_out / "gguf" / "qwen2.5-1.5b-instruct-q4_k_m.gguf").is_file()
-        assert (s2_out / "gguf" / "SHA256SUMS").is_file()
-        assert (s2_out / "gguf" / "manifest.json").is_file()
+            tier_doc = json.loads((REPO_ROOT / "ml" / "kaggle" / nb_file).read_text(encoding="utf-8"))
+            shared_ns: dict[str, object] = {"__name__": "__main__"}
+            for idx, cell in enumerate(tier_doc["cells"]):
+                if cell["cell_type"] != "code":
+                    continue
+                code_str = "".join(cell["source"])
+                exec(compile(code_str, f"{nb_file}#cell_{idx}", "exec"), shared_ns)
 
-        # Also execute lexel-sft-kaggle.ipynb and lexel-dpo-gguf-kaggle.ipynb top-to-bottom
+            assert (sft_out / "run_manifest.json").is_file()
+            assert (s2_out / "heldout_eval_report.json").is_file()
+            assert (s2_out / "gguf" / f"{prefix}-q4_k_m.gguf").is_file()
+            assert (s2_out / "gguf" / f"{prefix}-q5_k_m.gguf").is_file()
+            sha_text = (s2_out / "gguf" / "SHA256SUMS").read_text(encoding="utf-8")
+            assert f"{prefix}-q4_k_m.gguf" in sha_text
+            assert f"{prefix}-q5_k_m.gguf" in sha_text
+            snippet = json.loads((s2_out / "gguf" / "manifest_snippet.json").read_text(encoding="utf-8"))
+            assert snippet["status"] == "exported"
+            assert len(snippet["entries"]) == 2
+
+        # Also execute split notebooks top-to-bottom
         for single_nb_name in ("lexel-sft-kaggle.ipynb", "lexel-dpo-gguf-kaggle.ipynb"):
             single_doc = json.loads((REPO_ROOT / "ml" / "kaggle" / single_nb_name).read_text(encoding="utf-8"))
             single_ns: dict[str, object] = {"__name__": "__main__"}
@@ -1139,7 +1243,7 @@ def test_kaggle_notebooks_end_to_end_execution_simulation(tmp_path: Path) -> Non
                 c_src = "".join(c_cell["source"])
                 exec(compile(c_src, f"{single_nb_name}#cell_{c_idx}", "exec"), single_ns)
 
-        # Also test standalone Kaggle mode (where ml.crucible is NOT on the filesystem and the notebook uses its built-in bootstrap)
+        # Also test standalone Kaggle mode (where ml.crucible is NOT on the filesystem and notebook uses built-in bootstrap)
         dpo_doc = json.loads((REPO_ROOT / "ml" / "kaggle" / "lexel-dpo-gguf-kaggle.ipynb").read_text(encoding="utf-8"))
         standalone_ns: dict[str, object] = {"__name__": "__main__"}
         for c_idx, c_cell in enumerate(dpo_doc["cells"]):
@@ -1149,8 +1253,9 @@ def test_kaggle_notebooks_end_to_end_execution_simulation(tmp_path: Path) -> Non
                 "from ml.crucible.alignment import",
                 "from _nonexistent_kaggle_pkg import",
             )
-            if "for idx, row in enumerate(dpo_pairs):" in c_src:
-                c_src = c_src.replace("for idx, row in enumerate(dpo_pairs):", "for idx, row in enumerate(dpo_pairs[:4]):")
+            if "for row in dpo_pairs:" in c_src:
+                c_src = c_src.replace("for row in dpo_pairs:", "for row in dpo_pairs[:4]:")
+                c_src = c_src.replace("total_micro = max(1, int(len(dpo_pairs) * SIMPO_EPOCHS))", "total_micro = 4")
             exec(compile(c_src, f"standalone#cell_{c_idx}", "exec"), standalone_ns)
     finally:
         loss_mod.HAS_TORCH = orig_has_torch
@@ -1164,6 +1269,7 @@ def test_kaggle_notebooks_end_to_end_execution_simulation(tmp_path: Path) -> Non
             ("LEXEL_SFT_OUT", orig_env_sft),
             ("LEXEL_STAGE2_OUT", orig_env_s2),
             ("LEXEL_STAGE1_ADAPTER", orig_env_s1),
+            ("LEXEL_EVAL_LIMIT", orig_env_eval_lim),
         ):
             if orig_v is None:
                 os.environ.pop(env_k, None)

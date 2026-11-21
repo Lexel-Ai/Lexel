@@ -1,17 +1,31 @@
 import {
   type AiHealthState,
   computeReadabilityMetrics,
+  DEFAULT_TONE_PILLS,
+  type GuardAlertItem,
+  GuardAlerts,
   getSurfaceGradeTarget,
   NibIcon,
+  PrivacyProofBadge,
+  type RewriteApplyMeta,
   RewriteDiffCard,
   SlidersIcon,
+  SlopMeter,
   StatusPill,
+  StreamingTextView,
   SurfaceBadge,
   ThemeToggle,
+  type TonePillDef,
+  type TonePillId,
+  TonePills,
+  UndoToast,
 } from 'lexel-ui';
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ProtocolClient from '../contentScript/ProtocolClient';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { getSurfaceProfile, listSurfaceProfiles } from '../shared/surfaceDetector';
+import { scopeThreadContextLocally } from '../shared/threadContext';
+import { analyzeFullTier0 } from '../shared/tier0Engine';
 import type {
   AiSettings,
   AiTaskId,
@@ -21,24 +35,34 @@ import type {
 } from '../shared/types';
 import { scanTier0Diagnostics } from '../shared/verifier';
 
-const TASK_OPTIONS: Array<{ id: AiTaskId; label: string }> = [
-  { id: 'rewrite_surface', label: 'Match surface style' },
-  { id: 'deslop', label: 'Remove AI slop' },
-  { id: 'fix_grammar_flow', label: 'Fix grammar & flow' },
-  { id: 'shorten', label: 'Shorten concisely' },
-  { id: 'reply_draft', label: 'Draft reply' },
+const SHORT_TWO_TAKE_SURFACES = new Set<SurfaceId>([
+  'web_x',
+  'ide_git_commit',
+  'web_discord_slack',
+]);
+
+const WORKFLOW_PILLS: readonly TonePillDef[] = [
+  { id: 'rewrite_surface', label: 'Match surface', hint: 'Adapt to target surface norms' },
+  { id: 'bluf', label: 'Lead with ask', hint: 'Put the question or decision first' },
+  { id: 'natural_english', label: 'Natural English', hint: 'Smooth wording into natural prose' },
+  { id: 'reply_draft', label: 'Draft reply', hint: 'Use scoped thread context to draft a reply' },
 ];
 
 export function SidePanelApp() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [text, setText] = useState('');
   const [threadContext, setThreadContext] = useState('');
+  const [threadSourceHint, setThreadSourceHint] = useState<string | null>(null);
   const [surfaceId, setSurfaceId] = useState<SurfaceId>('general');
   const [subcontext, setSubcontext] = useState<string | null>(null);
-  const [task, setTask] = useState<AiTaskId>('rewrite_surface');
+  const [activeTask, setActiveTask] = useState<AiTaskId>('deslop');
+  const [twoTakes, setTwoTakes] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [streamingText, setStreamingText] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [undoText, setUndoText] = useState<string | null>(null);
+  const [undoEntry, setUndoEntry] = useState<{ previousText: string; message: string } | null>(
+    null,
+  );
   const [synonymWord, setSynonymWord] = useState('');
   const [synonyms, setSynonyms] = useState<string[]>([]);
   const [synonymStatus, setSynonymStatus] = useState<string | null>(null);
@@ -47,14 +71,23 @@ export function SidePanelApp() {
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
   const [aiHealth, setAiHealth] = useState<LocalAiHealth | null>(null);
   const [customSurfaces, setCustomSurfaces] = useState<SurfaceProfile[]>([]);
+  const [crutchWords, setCrutchWords] = useState<string[]>([]);
+  const [redactSecrets, setRedactSecrets] = useState(false);
+  const [secretBlocks, setSecretBlocks] = useState(0);
   const [slopConfig, setSlopConfig] = useState<{ customTerms: string[]; disabledTerms: string[] }>({
     customTerms: [],
     disabledTerms: [],
   });
 
+  const abortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
-    (async () => {
-      const [themeRes, draftRes, aiRes, healthRes, surfacesRes, slopRes] = await Promise.all([
+    setTwoTakes(SHORT_TWO_TAKE_SURFACES.has(surfaceId));
+  }, [surfaceId]);
+
+  const hydrate = useCallback(async () => {
+    const [themeRes, draftRes, aiRes, healthRes, surfacesRes, slopRes, crutchRes, privacyRes] =
+      await Promise.all([
         chrome.runtime.sendMessage({ kind: 'getTheme' }) as Promise<{ theme: 'dark' | 'light' }>,
         chrome.runtime.sendMessage({ kind: 'getActiveDraft' }) as Promise<{
           draft: { text: string; surfaceId: SurfaceId; subcontext: string | null } | null;
@@ -68,49 +101,80 @@ export function SidePanelApp() {
           customTerms?: string[];
           disabledTerms?: string[];
         }>,
+        chrome.runtime.sendMessage({ kind: 'getCrutchWords' }) as Promise<{ words?: string[] }>,
+        chrome.runtime.sendMessage({ kind: 'getPrivacyStats' }) as Promise<{
+          localSecretBlocks?: number;
+          redactSecrets?: boolean;
+        }>,
       ]);
-      setTheme(themeRes.theme);
-      setAiSettings(aiRes.settings);
-      setAiHealth(healthRes);
-      setCustomSurfaces(surfacesRes?.surfaces ?? []);
-      setSlopConfig({
-        customTerms: slopRes?.customTerms ?? [],
-        disabledTerms: slopRes?.disabledTerms ?? [],
-      });
-      if (draftRes.draft) {
-        setText(draftRes.draft.text);
-        setSurfaceId(draftRes.draft.surfaceId);
-        setSubcontext(draftRes.draft.subcontext);
-      }
-    })();
+
+    setTheme(themeRes?.theme === 'light' ? 'light' : 'dark');
+    setAiSettings(aiRes?.settings ?? null);
+    setAiHealth(healthRes ?? null);
+    setCustomSurfaces(surfacesRes?.surfaces ?? []);
+    setSlopConfig({
+      customTerms: slopRes?.customTerms ?? [],
+      disabledTerms: slopRes?.disabledTerms ?? [],
+    });
+    setCrutchWords(crutchRes?.words ?? []);
+    setRedactSecrets(privacyRes?.redactSecrets === true);
+    setSecretBlocks(privacyRes?.localSecretBlocks ?? 0);
+    if (draftRes?.draft) {
+      setText(draftRes.draft.text);
+      setSurfaceId(draftRes.draft.surfaceId);
+      setSubcontext(draftRes.draft.subcontext);
+    }
   }, []);
+
+  useEffect(() => {
+    void hydrate().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, [hydrate]);
 
   const allSurfaces = listSurfaceProfiles(customSurfaces);
   const profile = getSurfaceProfile(surfaceId, customSurfaces);
-  const tier0 = text.trim()
-    ? scanTier0Diagnostics(text, surfaceId, {
+
+  const tier0 = useMemo(
+    () =>
+      text.trim()
+        ? scanTier0Diagnostics(text, surfaceId, {
+            customSlopTerms: slopConfig.customTerms,
+            disabledSlopTerms: slopConfig.disabledTerms,
+            customSurfaces,
+          })
+        : {
+            slopLints: [],
+            surfaceLints: [],
+            secretLints: [],
+            invisibleLints: [],
+            structureLints: [],
+            styleGuideLints: [],
+            secrets: [],
+          },
+    [text, surfaceId, slopConfig, customSurfaces],
+  );
+
+  const fullTier0 = useMemo(
+    () =>
+      analyzeFullTier0(text, surfaceId, {
         customSlopTerms: slopConfig.customTerms,
         disabledSlopTerms: slopConfig.disabledTerms,
-        customSurfaces,
-      })
-    : {
-        slopLints: [],
-        surfaceLints: [],
-        secretLints: [],
-        invisibleLints: [],
-        structureLints: [],
-        styleGuideLints: [],
-        secrets: [],
-      };
+        crutchWords,
+      }),
+    [text, surfaceId, slopConfig, crutchWords],
+  );
+
+  const scopedPreview = useMemo(
+    () => (threadContext.trim() ? scopeThreadContextLocally(text, threadContext, 300) : null),
+    [text, threadContext],
+  );
 
   async function handleRefreshHealth() {
+    setError(null);
     await chrome.runtime.sendMessage({ kind: 'syncFromDaemon' });
-    const [aiRes, health] = await Promise.all([
-      chrome.runtime.sendMessage({ kind: 'getAiSettings' }) as Promise<{ settings: AiSettings }>,
-      chrome.runtime.sendMessage({ kind: 'aiHealth' }) as Promise<LocalAiHealth>,
-    ]);
-    setAiSettings(aiRes.settings);
-    setAiHealth(health);
+    await hydrate();
   }
 
   async function handleThemeToggle() {
@@ -141,52 +205,122 @@ export function SidePanelApp() {
       setSubcontext(draft.subcontext);
       setResult(null);
     } catch {
-      setError('Cannot read text from this tab (try reloading the page after installing Lexel).');
+      setError('Cannot read text from this tab. Reload the tab or paste your draft below.');
     }
   }
 
-  async function handleRewrite() {
-    if (!text.trim()) {
-      setError('Enter or pull text before running a rewrite.');
-      return;
-    }
-    if (tier0.secrets.length > 0) {
-      setError(
-        'Secrets Guard blocked AI rewrite because sensitive credentials or PII were detected.',
-      );
-      return;
-    }
-    setLoading(true);
+  async function handleExtractSmartContext() {
     setError(null);
-    setCopied(false);
-    const res = (await chrome.runtime.sendMessage({
-      kind: 'aiRewrite',
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id == null) {
+        setError('No active browser tab found.');
+        return;
+      }
+      const extracted = (await chrome.tabs.sendMessage(tab.id, {
+        kind: 'getSmartThreadContext',
+      })) as { rawContext: string; sourceHint: string } | null;
+      if (!extracted?.rawContext) {
+        setError('No parent comment or PR diff hunk found near the active field.');
+        return;
+      }
+      const scoped = await ProtocolClient.scopeThreadContext(text, extracted.rawContext, 300);
+      setThreadContext(scoped.scopedText);
+      setThreadSourceHint(`${extracted.sourceHint} (~${scoped.estimatedTokens} tokens)`);
+      setActiveTask('reply_draft');
+    } catch {
+      setError('Cannot read thread context from this tab. Paste the parent text manually.');
+    }
+  }
+
+  const runRewrite = useCallback(
+    async (taskToRun: AiTaskId) => {
+      if (!text.trim()) {
+        setError('Write or pull text before running a rewrite.');
+        return;
+      }
+      if (!redactSecrets && tier0.secrets.length > 0) {
+        setError(
+          'Secrets Guard blocked AI rewrite because credentials or PII were detected. Enable redact-and-restore in Settings to mask them automatically.',
+        );
+        return;
+      }
+
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      setActiveTask(taskToRun);
+      setLoading(true);
+      setStreamingText('');
+      setResult(null);
+      setError(null);
+      setCopied(false);
+
+      const res = await ProtocolClient.aiRewriteStream(
+        {
+          text,
+          task: taskToRun,
+          surfaceId,
+          subcontext,
+          threadContext:
+            taskToRun === 'reply_draft' || threadContext.trim()
+              ? (scopedPreview?.scopedText ?? threadContext)
+              : undefined,
+          candidates: twoTakes ? 2 : 1,
+          redactSecrets,
+        },
+        (chunk) => {
+          setStreamingText(chunk.accumulated);
+        },
+        controller.signal,
+      );
+
+      if (controller.signal.aborted) {
+        setLoading(false);
+        return;
+      }
+
+      setLoading(false);
+      setStreamingText('');
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      setResult(res.result);
+    },
+    [
       text,
-      task,
+      redactSecrets,
+      tier0.secrets.length,
       surfaceId,
       subcontext,
-      threadContext: task === 'reply_draft' ? threadContext : undefined,
-    })) as { ok: true; result: RewriteResult } | { ok: false; error: string };
+      threadContext,
+      scopedPreview,
+      twoTakes,
+    ],
+  );
 
-    setLoading(false);
-    if (!res.ok) {
-      setError(res.error);
-      return;
-    }
-    setResult(res.result);
-  }
-
-  async function handleApplyToPage() {
+  async function handleApplyComposed(composedText: string, meta: RewriteApplyMeta) {
     if (!result) return;
-    setText(result.suggestion);
+    const previous = text;
+    setText(composedText);
+    setUndoEntry({
+      previousText: previous,
+      message: meta.partial
+        ? `Applied ${meta.acceptedHunks} of ${meta.totalHunks} edits.`
+        : meta.candidateLabel
+          ? `Applied "${meta.candidateLabel}" take.`
+          : 'Applied local AI rewrite.',
+    });
     await chrome.runtime.sendMessage({
       kind: 'saveVoiceExample',
       example: {
         surfaceId,
         subcontext,
         original: result.original,
-        rewritten: result.suggestion,
-        action: 'accepted',
+        rewritten: composedText,
+        action: meta.partial ? 'edited' : 'accepted',
       },
     });
     try {
@@ -194,7 +328,7 @@ export function SidePanelApp() {
       if (tab?.id != null) {
         await chrome.tabs.sendMessage(tab.id, {
           kind: 'applyDraftToFocused',
-          text: result.suggestion,
+          text: composedText,
         });
       }
     } catch {
@@ -203,7 +337,48 @@ export function SidePanelApp() {
     setResult(null);
   }
 
+  async function handleFixSafeSlop() {
+    if (!text.trim()) return;
+    const res = (await chrome.runtime.sendMessage({
+      kind: 'fixSafeIssues',
+      text,
+      surfaceId,
+    })) as { result?: { text: string; fixesApplied: number } };
+    if (res?.result && res.result.fixesApplied > 0 && res.result.text !== text) {
+      setUndoEntry({
+        previousText: text,
+        message: `Cleaned ${res.result.fixesApplied} deterministic slop/format issue${res.result.fixesApplied === 1 ? '' : 's'}.`,
+      });
+      setText(res.result.text);
+      setError(null);
+    } else {
+      setError('No safe deterministic slop, em dash, emoji, or hashtag fixes needed.');
+    }
+  }
+
+  async function handleFixAllSafe() {
+    if (!text.trim()) return;
+    const res = (await chrome.runtime.sendMessage({
+      kind: 'fixAllSafe',
+      text,
+      surfaceId,
+    })) as { result?: { text: string; fixesApplied: number } };
+    if (res?.result && res.result.fixesApplied > 0 && res.result.text !== text) {
+      setUndoEntry({
+        previousText: text,
+        message: `Applied ${res.result.fixesApplied} safe grammar and slop fix${res.result.fixesApplied === 1 ? '' : 'es'}.`,
+      });
+      setText(res.result.text);
+      setError(null);
+    } else {
+      setError('No deterministic slop, typography, or safe grammar fixes needed.');
+    }
+  }
+
   const connected = Boolean(aiHealth?.daemonConnected);
+  const aiReady = Boolean(
+    connected && aiSettings?.enabled && aiHealth?.ok && aiHealth.modelAvailable !== false,
+  );
   const aiState: AiHealthState = !connected
     ? 'offline'
     : !aiSettings?.enabled
@@ -213,7 +388,7 @@ export function SidePanelApp() {
         : 'error';
 
   const aiLabel = !connected
-    ? 'Grammar Only'
+    ? 'Tier 0 Local'
     : !aiSettings?.enabled
       ? 'AI Off'
       : aiHealth?.ok && aiHealth.modelAvailable !== false
@@ -222,28 +397,91 @@ export function SidePanelApp() {
           ? 'Model Missing'
           : 'AI Offline';
 
+  const guardItems: GuardAlertItem[] = useMemo(() => {
+    const items: GuardAlertItem[] = [];
+    if (tier0.secrets.length > 0) {
+      items.push({
+        id: 'secrets-guard',
+        kind: 'secret',
+        severity: 'danger',
+        title: redactSecrets ? 'Secrets will redact locally' : 'Secrets Guard blocked AI',
+        detail: `${tier0.secrets.length} credential or PII span${tier0.secrets.length === 1 ? '' : 's'} detected in draft.`,
+        actionLabel: redactSecrets ? undefined : 'Enable redact',
+        onAction: redactSecrets
+          ? undefined
+          : () => {
+              setRedactSecrets(true);
+              void chrome.runtime.sendMessage({ kind: 'setRedactSecrets', enabled: true });
+            },
+      });
+    }
+    for (const w of fullTier0.guardWarnings) {
+      const taskForGuard = w.suggestedTask;
+      items.push({
+        id: `${w.kind}-${w.start}`,
+        kind:
+          w.kind === 'bluf_wall_of_text' || w.kind === 'bluf_buried_ask'
+            ? 'bluf'
+            : w.kind === 'crutch_word'
+              ? 'crutch'
+              : 'regret',
+        severity: w.severity === 'warn' ? 'warn' : 'info',
+        title: w.title,
+        detail: w.message,
+        actionLabel: taskForGuard && aiReady ? w.actionLabel : undefined,
+        onAction: taskForGuard && aiReady ? () => void runRewrite(taskForGuard) : undefined,
+      });
+    }
+    for (const c of fullTier0.consistencyWarnings) {
+      items.push({
+        id: `${c.kind}-${c.start}`,
+        kind: 'consistency',
+        severity: 'info',
+        title: 'Document consistency',
+        detail: c.message,
+      });
+    }
+    for (const s of tier0.surfaceLints.slice(0, 3)) {
+      items.push({
+        id: `surface-${s.span.start}-${s.problem_text}`,
+        kind: 'surface',
+        severity: 'warn',
+        title: profile.label,
+        detail: s.message_html.replace(/<[^>]+>/g, ''),
+      });
+    }
+    return items;
+  }, [
+    tier0.secrets.length,
+    tier0.surfaceLints,
+    redactSecrets,
+    fullTier0.guardWarnings,
+    fullTier0.consistencyWarnings,
+    aiReady,
+    profile.label,
+    runRewrite,
+  ]);
+
+  const readability = useMemo(() => (text.trim() ? computeReadabilityMetrics(text) : null), [text]);
+  const gradeTarget = getSurfaceGradeTarget(surfaceId);
+
   return (
     <div data-theme={theme} className="lexel-root min-h-screen p-4 flex flex-col gap-3">
       <header
-        className="flex items-center justify-between gap-2 pb-2 border-b"
+        className="flex items-center justify-between gap-2 pb-2.5 border-b"
         style={{ borderColor: 'var(--lx-border)' }}
       >
         <div className="flex items-center gap-2">
           <NibIcon className="w-5 h-5" />
-          <h1 className="text-sm font-semibold m-0">Lexel Workbench</h1>
+          <h1 className="text-[14px] font-semibold tracking-tight m-0">Lexel Workbench</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <StatusPill state={aiState} label={aiLabel} />
           <button
             type="button"
             onClick={() => void chrome.runtime.openOptionsPage()}
-            aria-label="Open Lexel Desktop bridge"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-[6px] border"
-            style={{
-              backgroundColor: 'var(--lx-muted)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
+            aria-label="Open Lexel settings and diagnostics"
+            className="lx-pressable lx-btn-secondary inline-flex h-8 w-8 items-center justify-center"
           >
             <SlidersIcon className="w-4 h-4" />
           </button>
@@ -251,588 +489,534 @@ export function SidePanelApp() {
         </div>
       </header>
 
-      {!connected ? (
-        <div
-          className="rounded-[8px] border p-2.5 flex flex-col gap-2 text-xs"
-          style={{
-            backgroundColor: 'var(--lx-card)',
-            borderColor: 'var(--lx-border)',
-            color: 'var(--lx-fg-muted)',
-          }}
-        >
-          <div className="leading-snug">
-            <strong style={{ color: 'var(--lx-fg)' }}>Grammar &amp; Anti-Slop Ready.</strong>{' '}
-            Download and connect <strong>Lexel Desktop</strong> to configure settings and run the
-            local AI model.
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void handleRefreshHealth()}
-              className="rounded-[6px] border px-2.5 py-1 text-[11px] font-semibold"
-              style={{
-                backgroundColor: 'var(--lx-accent)',
-                borderColor: 'var(--lx-border)',
-                color: 'var(--lx-on-accent)',
-              }}
-            >
-              Connect to Lexel Desktop
-            </button>
-            <button
-              type="button"
-              onClick={() => void chrome.runtime.openOptionsPage()}
-              className="rounded-[6px] border px-2.5 py-1 text-[11px] font-medium"
-              style={{
-                backgroundColor: 'var(--lx-muted)',
-                borderColor: 'var(--lx-border)',
-                color: 'var(--lx-fg)',
-              }}
-            >
-              Get Lexel Desktop
-            </button>
-          </div>
-        </div>
-      ) : aiSettings && !aiSettings.enabled ? (
-        <div
-          className="rounded-[8px] border p-2.5 flex items-center justify-between gap-2 text-xs"
-          style={{
-            backgroundColor: 'var(--lx-card)',
-            borderColor: 'var(--lx-border)',
-            color: 'var(--lx-fg-muted)',
-          }}
-        >
-          <span>
-            Local AI is disabled in <strong>Lexel Desktop</strong>. Enable it in Desktop to run AI
-            rewrites.
-          </span>
-          <button
-            type="button"
-            onClick={() => void handleRefreshHealth()}
-            className="rounded-[6px] border px-2.5 py-1 text-[11px] font-medium shrink-0"
-            style={{
-              backgroundColor: 'var(--lx-muted)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
-          >
-            Sync Now
-          </button>
-        </div>
-      ) : aiHealth && (!aiHealth.ok || aiHealth.modelAvailable === false) ? (
-        <div
-          className="rounded-[8px] border p-2.5 flex flex-col gap-2 text-xs"
-          style={{
-            backgroundColor: 'var(--lx-warn-bg)',
-            borderColor: 'var(--lx-warn)',
-            color: 'var(--lx-warn)',
-          }}
-        >
-          <div className="leading-snug break-words">
-            {aiHealth.error ?? 'Download your GGUF model in Lexel Desktop -> AI & Extension Sync.'}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void handleRefreshHealth()}
-              className="rounded-[6px] border px-2 py-1 text-[11px] font-medium"
-              style={{
-                backgroundColor: 'var(--lx-muted)',
-                borderColor: 'var(--lx-border)',
-                color: 'var(--lx-fg)',
-              }}
-            >
-              Sync with Desktop
-            </button>
-            <button
-              type="button"
-              onClick={() => void chrome.runtime.openOptionsPage()}
-              className="rounded-[6px] border px-2 py-1 text-[11px]"
-              style={{
-                backgroundColor: 'var(--lx-bg)',
-                borderColor: 'var(--lx-border)',
-                color: 'var(--lx-fg-muted)',
-              }}
-            >
-              Desktop Bridge Info
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <SurfaceBadge
-          label={profile.label}
-          subcontext={subcontext}
-          charCount={text.length}
-          maxChars={profile.maxChars}
-        />
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void handlePullFromPage()}
-            className="rounded-[6px] border px-2.5 py-1 text-xs font-medium"
-            style={{
-              backgroundColor: 'var(--lx-muted)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
-          >
-            Pull from active box
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setText('');
-              setResult(null);
-              setError(null);
-            }}
-            className="rounded-[6px] px-2 py-1 text-xs"
-            style={{ color: 'var(--lx-fg-muted)' }}
-          >
-            Clear
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-          <span>Surface</span>
-          <select
-            value={surfaceId}
-            onChange={(e) => setSurfaceId(e.target.value as SurfaceId)}
-            className="rounded-[6px] border px-2 py-1.5 text-xs"
-            style={{
-              backgroundColor: 'var(--lx-card)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
-          >
-            {allSurfaces.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="flex flex-col gap-1 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-          <span>Action</span>
-          <select
-            value={task}
-            onChange={(e) => setTask(e.target.value as AiTaskId)}
-            className="rounded-[6px] border px-2 py-1.5 text-xs"
-            style={{
-              backgroundColor: 'var(--lx-card)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
-          >
-            {TASK_OPTIONS.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <label className="flex flex-col gap-1 text-xs">
-        <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-          Draft text
-        </span>
-        <textarea
-          rows={6}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Write or paste text to check and rewrite locally..."
-          className="w-full rounded-[8px] border p-2.5 text-xs leading-relaxed resize-y"
-          style={{
-            backgroundColor: 'var(--lx-card)',
-            borderColor: 'var(--lx-border)',
-            color: 'var(--lx-fg)',
-          }}
-        />
-      </label>
-
-      {task === 'reply_draft' ? (
-        <label className="flex flex-col gap-1 text-xs">
-          <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-            Parent post or comment context (optional)
-          </span>
-          <textarea
-            rows={3}
-            value={threadContext}
-            onChange={(e) => setThreadContext(e.target.value)}
-            placeholder="Paste the post or comment you are replying to..."
-            className="w-full rounded-[8px] border p-2 text-xs resize-y"
-            style={{
-              backgroundColor: 'var(--lx-card)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
+      <main className="flex flex-col gap-3 flex-1">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <PrivacyProofBadge
+            localOnly={true}
+            blockedSecretsCount={secretBlocks}
+            redactEnabled={redactSecrets}
+            compact
           />
-        </label>
-      ) : null}
-
-      {tier0.secretLints.length > 0 ||
-      tier0.slopLints.length > 0 ||
-      tier0.surfaceLints.length > 0 ? (
-        <div
-          className="rounded-[8px] border p-2.5 flex flex-col gap-1.5 text-xs"
-          style={{
-            backgroundColor:
-              tier0.secretLints.length > 0 ? 'var(--lx-danger-bg)' : 'var(--lx-warn-bg)',
-            borderColor: tier0.secretLints.length > 0 ? 'var(--lx-danger)' : 'var(--lx-warn)',
-          }}
-        >
-          <div
-            className="font-semibold"
-            style={{ color: tier0.secretLints.length > 0 ? 'var(--lx-danger)' : 'var(--lx-warn)' }}
+          <label
+            className="inline-flex items-center gap-1.5 text-[11px] lexel-mono"
+            style={{ color: 'var(--lx-fg-muted)' }}
+            title="Compare Direct and Ultra-Short rewrites side by side"
           >
-            Writing Checks (
-            {tier0.secretLints.length + tier0.slopLints.length + tier0.surfaceLints.length})
-          </div>
-          {[...tier0.secretLints, ...tier0.slopLints, ...tier0.surfaceLints].map((lint) => (
-            <div
-              key={`${lint.lint_kind_pretty}-${lint.span.start}-${lint.span.end}-${lint.problem_text}`}
-              className="text-[11px]"
-              style={{ color: 'var(--lx-fg)' }}
-            >
-              <span className="lexel-mono font-medium">[{lint.lint_kind_pretty}]</span>{' '}
-              {lint.message_html}
-            </div>
-          ))}
+            <input
+              type="checkbox"
+              checked={twoTakes}
+              onChange={(e) => setTwoTakes(e.target.checked)}
+            />
+            <span>2 takes</span>
+          </label>
         </div>
-      ) : null}
 
-      {text.trim()
-        ? (() => {
-            const stats = computeReadabilityMetrics(text);
-            const target = getSurfaceGradeTarget(surfaceId);
-            const inRange =
-              stats.fleschKincaidGrade >= target.minGrade &&
-              stats.fleschKincaidGrade <= target.maxGrade;
-            return (
-              <div
-                className="rounded-[8px] border p-2.5 grid grid-cols-3 gap-2 text-[11px] lexel-mono"
-                style={{
-                  backgroundColor: 'var(--lx-card)',
-                  borderColor: 'var(--lx-border)',
-                  color: 'var(--lx-fg-muted)',
-                }}
-              >
-                <div>
-                  <div className="text-[10px] uppercase">Words</div>
-                  <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
-                    {stats.words}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase">Grade Goal</div>
-                  <div
-                    className="text-xs font-semibold"
-                    style={{ color: inRange ? 'var(--lx-signal)' : 'var(--lx-warn)' }}
-                  >
-                    G{stats.fleschKincaidGrade.toFixed(1)} ({target.minGrade}-{target.maxGrade})
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase">Read / Speak</div>
-                  <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
-                    {stats.readingTimeSec}s / {stats.speakingTimeSec}s
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase">Hedging</div>
-                  <div
-                    className="text-xs font-semibold"
-                    style={{ color: stats.hedgingPercent > 4 ? 'var(--lx-warn)' : 'var(--lx-fg)' }}
-                  >
-                    {stats.hedgingCount} ({stats.hedgingPercent}%)
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase">Variety</div>
-                  <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
-                    {stats.sentenceVarietyScore}/100
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase">Long Sent.</div>
-                  <div
-                    className="text-xs font-semibold"
-                    style={{ color: stats.longSentences > 0 ? 'var(--lx-warn)' : 'var(--lx-fg)' }}
-                  >
-                    {stats.longSentences}
-                  </div>
-                </div>
-              </div>
-            );
-          })()
-        : null}
-
-      <div className="flex flex-wrap gap-1.5">
-        <button
-          type="button"
-          onClick={async () => {
-            if (!text.trim()) return;
-            const res = (await chrome.runtime.sendMessage({
-              kind: 'fixSafeIssues',
-              text,
-              surfaceId,
-            })) as { result?: { text: string; fixesApplied: number } };
-            if (res.result && res.result.fixesApplied > 0) {
-              setUndoText(text);
-              setText(res.result.text);
-              setError(null);
-            } else {
-              setError('No safe deterministic slop, em dash, emoji, or hashtag fixes needed.');
-            }
-          }}
-          className="rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
-          style={{
-            backgroundColor: 'var(--lx-card)',
-            borderColor: 'var(--lx-signal)',
-            color: 'var(--lx-signal)',
-          }}
-        >
-          Fix Safe Slop
-        </button>
-        <button
-          type="button"
-          onClick={async () => {
-            if (!text.trim()) return;
-            const res = (await chrome.runtime.sendMessage({
-              kind: 'fixAllSafe',
-              text,
-              surfaceId,
-            })) as { result?: { text: string; fixesApplied: number } };
-            if (res.result && res.result.fixesApplied > 0 && res.result.text !== text) {
-              setUndoText(text);
-              setText(res.result.text);
-              setError(null);
-            } else {
-              setError('No deterministic slop, typography, or safe grammar fixes needed.');
-            }
-          }}
-          className="rounded-[6px] border px-2.5 py-1.5 text-xs font-semibold"
-          style={{
-            backgroundColor: 'var(--lx-muted)',
-            borderColor: 'var(--lx-border)',
-            color: 'var(--lx-fg)',
-          }}
-        >
-          Fix All Safe
-        </button>
-        <button
-          type="button"
-          onClick={async () => {
-            if (!text.trim()) return;
-            const res = (await chrome.runtime.sendMessage({
-              kind: 'toTitleCase',
-              text,
-            })) as { text?: string };
-            if (res.text && res.text !== text) {
-              setUndoText(text);
-              setText(res.text);
-            }
-          }}
-          className="rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
-          style={{
-            backgroundColor: 'var(--lx-muted)',
-            borderColor: 'var(--lx-border)',
-            color: 'var(--lx-fg)',
-          }}
-        >
-          Title Case
-        </button>
-        <button
-          type="button"
-          onClick={async () => {
-            if (!text.trim()) return;
-            const res = (await chrome.runtime.sendMessage({
-              kind: 'toSentenceCase',
-              text,
-            })) as { text?: string };
-            if (res.text && res.text !== text) {
-              setUndoText(text);
-              setText(res.text);
-            }
-          }}
-          className="rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
-          style={{
-            backgroundColor: 'var(--lx-muted)',
-            borderColor: 'var(--lx-border)',
-            color: 'var(--lx-fg)',
-          }}
-        >
-          Sentence Case
-        </button>
-        <button
-          type="button"
-          onClick={async () => {
-            if (!text.trim()) return;
-            const res = (await chrome.runtime.sendMessage({
-              kind: 'normalizeTypography',
-              text,
-            })) as { result?: { text: string; fixesApplied: number } };
-            if (res.result && res.result.text !== text) {
-              setUndoText(text);
-              setText(res.result.text);
-              setError(null);
-            } else {
-              setError('Quotes and spacing are already normalized.');
-            }
-          }}
-          className="rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
-          style={{
-            backgroundColor: 'var(--lx-muted)',
-            borderColor: 'var(--lx-border)',
-            color: 'var(--lx-fg)',
-          }}
-        >
-          Clean Quotes
-        </button>
-        {undoText != null ? (
-          <button
-            type="button"
-            onClick={() => {
-              setText(undoText);
-              setUndoText(null);
+        {!connected ? (
+          <div
+            className="rounded-[8px] border p-3 flex flex-col gap-2 text-xs"
+            style={{
+              backgroundColor: 'var(--lx-card)',
+              borderColor: 'var(--lx-border)',
+              color: 'var(--lx-fg-muted)',
             }}
-            className="rounded-[6px] border px-2.5 py-1.5 text-xs font-medium"
+          >
+            <div className="leading-snug">
+              <strong style={{ color: 'var(--lx-fg)' }}>Tier 0 checks are running locally.</strong>{' '}
+              Connect <strong>Lexel Desktop</strong> to stream local AI rewrites and sync profiles.
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handleRefreshHealth()}
+                className="lx-pressable lx-btn-primary px-2.5 py-1 text-[11px] font-semibold"
+              >
+                Connect Desktop
+              </button>
+              <button
+                type="button"
+                onClick={() => void chrome.runtime.openOptionsPage()}
+                className="lx-pressable lx-btn-secondary px-2.5 py-1 text-[11px] font-medium"
+              >
+                Install Bridge
+              </button>
+            </div>
+          </div>
+        ) : aiHealth && (!aiHealth.ok || aiHealth.modelAvailable === false) ? (
+          <div
+            className="rounded-[8px] border p-2.5 flex flex-col gap-2 text-xs"
             style={{
               backgroundColor: 'var(--lx-warn-bg)',
               borderColor: 'var(--lx-warn)',
               color: 'var(--lx-warn)',
             }}
           >
-            Undo
-          </button>
-        ) : null}
-      </div>
-
-      <div
-        className="rounded-[8px] border p-2.5 flex flex-col gap-2"
-        style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
-      >
-        <form
-          className="flex gap-1.5"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const q = synonymWord.trim();
-            if (!q) return;
-            setSynonymStatus('Searching...');
-            void chrome.runtime
-              .sendMessage({ kind: 'lookupSynonyms', word: q })
-              .then((res: unknown) => {
-                const payload = res as { ok?: boolean; synonyms?: string[]; error?: string };
-                if (payload.ok) {
-                  const list = payload.synonyms ?? [];
-                  setSynonyms(list);
-                  setSynonymStatus(list.length === 0 ? `No synonyms found for "${q}".` : null);
-                } else {
-                  setSynonyms([]);
-                  setSynonymStatus(payload.error ?? 'Daemon offline.');
-                }
-              });
-          }}
-        >
-          <input
-            type="text"
-            value={synonymWord}
-            onChange={(e) => setSynonymWord(e.target.value)}
-            placeholder="Offline thesaurus lookup..."
-            aria-label="Look up word synonyms"
-            className="flex-1 rounded-[6px] border px-2.5 py-1 text-xs"
-            style={{
-              backgroundColor: 'var(--lx-bg)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
-          />
-          <button
-            type="submit"
-            className="rounded-[6px] border px-2.5 py-1 text-xs font-medium"
-            style={{
-              backgroundColor: 'var(--lx-muted)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
-          >
-            Synonyms
-          </button>
-        </form>
-        {synonymStatus ? (
-          <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
-            {synonymStatus}
+            <div className="leading-snug break-words">
+              {aiHealth.error ?? 'Download a local GGUF model in Lexel Desktop.'}
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void handleRefreshHealth()}
+                className="lx-pressable lx-btn-secondary px-2.5 py-1 text-[11px] font-medium"
+              >
+                Sync Now
+              </button>
+              <button
+                type="button"
+                onClick={() => void chrome.runtime.openOptionsPage()}
+                className="lx-pressable lx-btn-secondary px-2.5 py-1 text-[11px] font-medium"
+              >
+                Run Doctor
+              </button>
+            </div>
           </div>
         ) : null}
-        {synonyms.length > 0 ? (
-          <div className="flex flex-wrap gap-1.5">
-            {synonyms.map((syn) => (
+
+        <section
+          aria-label="Draft editor"
+          className="rounded-[8px] border p-3 flex flex-col gap-2.5"
+          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <SurfaceBadge
+              label={profile.label}
+              subcontext={subcontext}
+              charCount={text.length}
+              maxChars={profile.maxChars}
+            />
+            <div className="flex flex-wrap items-center gap-1.5">
               <button
-                key={syn}
                 type="button"
-                onClick={() => void navigator.clipboard.writeText(syn)}
-                className="rounded-[4px] border px-2 py-0.5 text-[11px] lexel-mono"
-                style={{
-                  backgroundColor: 'var(--lx-bg)',
-                  borderColor: 'var(--lx-border)',
-                  color: 'var(--lx-signal)',
-                }}
-                title="Copy synonym"
+                onClick={() => void handlePullFromPage()}
+                className="lx-pressable lx-btn-secondary px-2 py-1 text-[11px] font-medium"
               >
-                {syn}
+                Pull box
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleExtractSmartContext()}
+                className="lx-pressable lx-btn-secondary px-2 py-1 text-[11px] font-medium"
+                title="Read only the parent comment or PR diff hunk on this tab"
+              >
+                Extract context
+              </button>
+              {text ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setText('');
+                    setResult(null);
+                    setError(null);
+                  }}
+                  className="lx-pressable lx-btn-ghost px-2 py-1 text-[11px]"
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <label
+            className="flex flex-col gap-1 text-[11px]"
+            style={{ color: 'var(--lx-fg-muted)' }}
+          >
+            <span>Target surface</span>
+            <select
+              value={surfaceId}
+              onChange={(e) => setSurfaceId(e.target.value as SurfaceId)}
+              className="rounded-[6px] border px-2.5 py-1.5 text-xs"
+              style={{
+                backgroundColor: 'var(--lx-bg)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            >
+              {allSurfaces.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+              Draft text
+            </span>
+            <textarea
+              rows={6}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Write or pull text from the active tab to inspect slop, guards, and local rewrites..."
+              className="w-full rounded-[6px] border p-2.5 text-[13px] leading-relaxed resize-y"
+              style={{
+                backgroundColor: 'var(--lx-bg)',
+                borderColor: 'var(--lx-border)',
+                color: 'var(--lx-fg)',
+              }}
+            />
+          </label>
+
+          {threadContext || activeTask === 'reply_draft' ? (
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <label htmlFor="lexel-thread-context" style={{ color: 'var(--lx-fg-muted)' }}>
+                  {threadSourceHint
+                    ? `Scoped context: ${threadSourceHint}`
+                    : 'Parent comment or PR diff hunk (optional, capped at ~300 tokens)'}
+                </label>
+                {threadContext ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setThreadContext('');
+                      setThreadSourceHint(null);
+                    }}
+                    className="lx-pressable lx-btn-ghost px-1.5 py-0.5 text-[11px]"
+                  >
+                    Clear context
+                  </button>
+                ) : null}
+              </div>
+              <textarea
+                id="lexel-thread-context"
+                rows={3}
+                value={threadContext}
+                onChange={(e) => setThreadContext(e.target.value)}
+                placeholder="Click Extract context above or paste the parent comment/PR hunk..."
+                className="w-full rounded-[6px] border p-2 text-xs leading-relaxed resize-y"
+                style={{
+                  backgroundColor: 'var(--lx-surface)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              />
+            </div>
+          ) : null}
+        </section>
+
+        <SlopMeter
+          score={fullTier0.slopMeter.score}
+          breakdown={{
+            clicheCount: fullTier0.slopMeter.clicheCount,
+            emDashCount: fullTier0.slopMeter.emDashCount,
+            fillerOpenerCount: fullTier0.slopMeter.fillerOpenerCount,
+            flatRhythm: fullTier0.slopMeter.rhythmFlatness >= 75,
+          }}
+          wordCount={readability?.words ?? 0}
+          onDeSlop={aiReady ? () => void runRewrite('deslop') : () => void handleFixSafeSlop()}
+          busy={loading}
+          compact
+        />
+
+        {text.trim() ? (
+          <GuardAlerts
+            items={guardItems}
+            emptyMessage="No BLUF, Regret Shield, consistency, or secret warnings."
+            compact
+          />
+        ) : null}
+
+        <section
+          aria-label="Local AI rewrite controls"
+          className="rounded-[8px] border p-3 flex flex-col gap-2.5"
+          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-xs font-semibold m-0">Tone &amp; Rewrite</h2>
+            <span className="text-[11px] lexel-mono" style={{ color: 'var(--lx-fg-muted)' }}>
+              1-click local stream
+            </span>
+          </div>
+
+          <TonePills
+            value={activeTask as TonePillId}
+            pills={DEFAULT_TONE_PILLS}
+            onSelect={(id) => void runRewrite(id as AiTaskId)}
+            disabled={loading}
+            compact
+          />
+
+          <div className="flex flex-wrap gap-1.5">
+            {WORKFLOW_PILLS.map((pill) => (
+              <button
+                key={pill.id}
+                type="button"
+                disabled={loading}
+                title={pill.hint}
+                onClick={() => void runRewrite(pill.id as AiTaskId)}
+                className="lx-pressable lx-btn-secondary px-2 py-1 text-[11px] font-medium"
+              >
+                {pill.label}
               </button>
             ))}
           </div>
+
+          <div
+            role="toolbar"
+            aria-label="Zero-AI deterministic fixes"
+            className="flex flex-wrap gap-1.5 pt-2 border-t"
+            style={{ borderColor: 'var(--lx-border)' }}
+          >
+            <button
+              type="button"
+              onClick={() => void handleFixSafeSlop()}
+              className="lx-pressable rounded-[6px] border px-2 py-1 text-[11px] font-semibold"
+              style={{
+                backgroundColor: 'var(--lx-bg)',
+                borderColor: 'var(--lx-signal)',
+                color: 'var(--lx-signal)',
+              }}
+            >
+              Fix Safe Slop
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleFixAllSafe()}
+              className="lx-pressable lx-btn-secondary px-2 py-1 text-[11px] font-medium"
+            >
+              Fix All Safe
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!text.trim()) return;
+                const res = (await chrome.runtime.sendMessage({ kind: 'toTitleCase', text })) as {
+                  text?: string;
+                };
+                if (res?.text && res.text !== text) {
+                  setUndoEntry({ previousText: text, message: 'Converted to Title Case.' });
+                  setText(res.text);
+                }
+              }}
+              className="lx-pressable lx-btn-secondary px-2 py-1 text-[11px] font-medium"
+            >
+              Title Case
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!text.trim()) return;
+                const res = (await chrome.runtime.sendMessage({
+                  kind: 'toSentenceCase',
+                  text,
+                })) as { text?: string };
+                if (res?.text && res.text !== text) {
+                  setUndoEntry({ previousText: text, message: 'Converted to Sentence Case.' });
+                  setText(res.text);
+                }
+              }}
+              className="lx-pressable lx-btn-secondary px-2 py-1 text-[11px] font-medium"
+            >
+              Sentence Case
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!text.trim()) return;
+                const res = (await chrome.runtime.sendMessage({
+                  kind: 'normalizeTypography',
+                  text,
+                })) as { result?: { text: string; fixesApplied: number } };
+                if (res?.result && res.result.text !== text) {
+                  setUndoEntry({ previousText: text, message: 'Normalized quotes and spacing.' });
+                  setText(res.result.text);
+                  setError(null);
+                } else {
+                  setError('Quotes and spacing are already clean.');
+                }
+              }}
+              className="lx-pressable lx-btn-secondary px-2 py-1 text-[11px] font-medium"
+            >
+              Clean Quotes
+            </button>
+          </div>
+        </section>
+
+        {loading ? (
+          <StreamingTextView
+            text={streamingText}
+            active={loading}
+            statusLabel={`Streaming ${profile.label} rewrite`}
+            onCancel={() => {
+              abortRef.current?.abort();
+              setLoading(false);
+              setStreamingText('');
+            }}
+          />
         ) : null}
-      </div>
 
-      <button
-        type="button"
-        disabled={loading}
-        onClick={() => void handleRewrite()}
-        className="w-full rounded-[6px] px-3 py-2 text-xs font-semibold"
-        style={{
-          backgroundColor: 'var(--lx-accent)',
-          color: 'var(--lx-on-accent)',
-        }}
-      >
-        {loading ? 'Generating locally...' : 'Rewrite with Local AI'}
-      </button>
+        {error ? (
+          <div
+            role="alert"
+            className="rounded-[6px] border p-2.5 text-xs"
+            style={{
+              backgroundColor: 'var(--lx-danger-bg)',
+              borderColor: 'var(--lx-danger)',
+              color: 'var(--lx-danger)',
+            }}
+          >
+            {error}
+          </div>
+        ) : null}
 
-      {error ? (
-        <div
-          className="rounded-[6px] border p-2.5 text-xs"
-          style={{
-            backgroundColor: 'var(--lx-danger-bg)',
-            borderColor: 'var(--lx-danger)',
-            color: 'var(--lx-danger)',
-          }}
+        {result && !loading ? (
+          <RewriteDiffCard
+            original={result.original}
+            suggestion={result.suggestion}
+            gates={result.gates}
+            modelName={result.model}
+            latencyMs={result.latencyMs}
+            fastPath={result.fastPath}
+            retried={result.retried}
+            failedConstraints={result.failedConstraints}
+            redactedCount={result.redactedCount}
+            restoredCleanly={result.restoredCleanly}
+            candidates={result.candidates}
+            enableHunkDiff
+            compact
+            onApplyComposed={(composed, meta) => void handleApplyComposed(composed, meta)}
+            onCopy={() => {
+              void navigator.clipboard.writeText(result.suggestion);
+              setCopied(true);
+            }}
+            onCopyComposed={(composed) => {
+              void navigator.clipboard.writeText(composed);
+              setCopied(true);
+            }}
+            onRetry={() => void runRewrite(activeTask)}
+            onReject={() => setResult(null)}
+            copied={copied}
+          />
+        ) : null}
+
+        <details
+          className="rounded-[8px] border p-3 text-xs"
+          style={{ backgroundColor: 'var(--lx-card)', borderColor: 'var(--lx-border)' }}
         >
-          {error}
-        </div>
-      ) : null}
+          <summary className="font-semibold">Readability &amp; Offline Thesaurus</summary>
+          <div className="mt-3 flex flex-col gap-3">
+            {readability ? (
+              <div
+                className="grid grid-cols-3 gap-2 text-[11px] lexel-mono lx-tab-nums"
+                style={{ color: 'var(--lx-fg-muted)' }}
+              >
+                <div>
+                  <div className="text-[10px] uppercase">Words</div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
+                    {readability.words}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase">Grade Goal</div>
+                  <div
+                    className="text-xs font-semibold"
+                    style={{
+                      color:
+                        readability.fleschKincaidGrade >= gradeTarget.minGrade &&
+                        readability.fleschKincaidGrade <= gradeTarget.maxGrade
+                          ? 'var(--lx-signal)'
+                          : 'var(--lx-warn)',
+                    }}
+                  >
+                    G{readability.fleschKincaidGrade.toFixed(1)} ({gradeTarget.minGrade}-
+                    {gradeTarget.maxGrade})
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase">Read / Speak</div>
+                  <div className="text-xs font-semibold" style={{ color: 'var(--lx-fg)' }}>
+                    {readability.readingTimeSec}s / {readability.speakingTimeSec}s
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="m-0 text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                Enter draft text above to inspect readability and pacing.
+              </p>
+            )}
 
-      {result ? (
-        <RewriteDiffCard
-          original={result.original}
-          suggestion={result.suggestion}
-          gates={result.gates}
-          modelName={result.model}
-          latencyMs={result.latencyMs}
-          onApply={() => void handleApplyToPage()}
-          onCopy={() => {
-            void navigator.clipboard.writeText(result.suggestion);
-            setCopied(true);
-          }}
-          onRetry={() => void handleRewrite()}
-          onReject={() => setResult(null)}
-          copied={copied}
-        />
-      ) : null}
+            <form
+              className="flex gap-1.5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const q = synonymWord.trim();
+                if (!q) return;
+                setSynonymStatus('Searching local dictionary...');
+                void chrome.runtime
+                  .sendMessage({ kind: 'lookupSynonyms', word: q })
+                  .then((res: unknown) => {
+                    const payload = res as { ok?: boolean; synonyms?: string[]; error?: string };
+                    if (payload?.ok) {
+                      const list = payload.synonyms ?? [];
+                      setSynonyms(list);
+                      setSynonymStatus(list.length === 0 ? `No synonyms found for "${q}".` : null);
+                    } else {
+                      setSynonyms([]);
+                      setSynonymStatus(payload?.error ?? 'Start Lexel Desktop for synonyms.');
+                    }
+                  });
+              }}
+            >
+              <input
+                type="text"
+                value={synonymWord}
+                onChange={(e) => setSynonymWord(e.target.value)}
+                placeholder="Offline thesaurus lookup..."
+                aria-label="Look up word synonyms"
+                className="flex-1 rounded-[6px] border px-2.5 py-1 text-xs"
+                style={{
+                  backgroundColor: 'var(--lx-bg)',
+                  borderColor: 'var(--lx-border)',
+                  color: 'var(--lx-fg)',
+                }}
+              />
+              <button type="submit" className="lx-pressable lx-btn-secondary px-2.5 py-1 text-xs">
+                Synonyms
+              </button>
+            </form>
+            {synonymStatus ? (
+              <div className="text-[11px]" style={{ color: 'var(--lx-fg-muted)' }}>
+                {synonymStatus}
+              </div>
+            ) : null}
+            {synonyms.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {synonyms.map((syn) => (
+                  <button
+                    key={syn}
+                    type="button"
+                    onClick={() => void navigator.clipboard.writeText(syn)}
+                    className="lx-pressable rounded-[4px] border px-2 py-0.5 text-[11px] lexel-mono"
+                    style={{
+                      backgroundColor: 'var(--lx-bg)',
+                      borderColor: 'var(--lx-border)',
+                      color: 'var(--lx-signal)',
+                    }}
+                    title="Copy synonym"
+                  >
+                    {syn}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </details>
+      </main>
+
+      <UndoToast
+        open={undoEntry != null}
+        message={undoEntry?.message ?? ''}
+        durationMs={10_000}
+        undoLabel="Revert to original"
+        onUndo={() => {
+          if (undoEntry) {
+            setText(undoEntry.previousText);
+          }
+          setUndoEntry(null);
+        }}
+        onDismiss={() => setUndoEntry(null)}
+      />
     </div>
   );
 }
