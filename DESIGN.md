@@ -35,3 +35,6 @@ Both themes are first-class and verified for >= 4.5:1 WCAG AA contrast:
 - Zero decorative emojis, zero generic sparkle/magic icons, zero purple-blue gradients.
 - Honest empty, loading, and error states with next actions.
 - Full keyboard accessibility (`Tab`, `ArrowUp`/`ArrowDown`, `Enter`, `Escape`) with visible focus rings.
+
+## 5. Brand Mark
+The official Lexel mark is the multicolor nib, swirl, and spark artwork in [`assets/brand/`](assets/brand/README.md). It is the only approved gradient element. UI surfaces stay monochrome with the Proofreader Cobalt accent, and the mark is not a template for UI gradients. Use the sizes and clear-space rules in the brand asset guide.

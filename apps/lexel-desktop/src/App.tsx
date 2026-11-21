@@ -1,7 +1,7 @@
 import {
   type AiHealthState,
   InsightsIcon,
-  NibIcon,
+  LexelLogo,
   PrivacyProofBadge,
   ShieldIcon,
   SlidersIcon,
@@ -288,7 +288,7 @@ export function App() {
       >
         <div className="flex flex-wrap items-center gap-2.5">
           <div className="flex items-center gap-2">
-            <NibIcon className="h-4 w-4" />
+            <LexelLogo className="h-6 w-auto" />
             <span className="text-[14px] font-semibold tracking-[-0.015em]">Lexel</span>
           </div>
           <StatusPill state={aiState} label={aiLabel} />

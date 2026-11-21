@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/brand/lexel-logo.svg" width="180" alt="Lexel logo">
+</p>
+
 # Lexel
 
 Lexel is an open-source, 100% local grammar checker, anti-slop filter, and context-aware writing assistant licensed under Apache-2.0.

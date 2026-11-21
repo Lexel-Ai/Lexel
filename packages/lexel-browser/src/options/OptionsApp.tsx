@@ -4,13 +4,14 @@ import {
   CloseIcon,
   DoctorHealthCard,
   type DoctorReportData,
-  NibIcon,
+  LexelLogo,
   PrivacyProofBadge,
   RefreshIcon,
   StatusPill,
   ThemeToggle,
 } from 'lexel-ui';
 import { useCallback, useEffect, useState } from 'react';
+import { LEXEL_LOGO_SRC } from '../shared/brand';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import type { AiSettings, SurfaceProfile } from '../shared/types';
 
@@ -230,7 +231,7 @@ export function OptionsApp() {
           style={{ borderColor: 'var(--lx-border)' }}
         >
           <div className="flex items-center gap-3 min-w-0 flex-1">
-            <NibIcon className="w-6 h-6 shrink-0" />
+            <LexelLogo className="h-8 w-auto shrink-0" src={LEXEL_LOGO_SRC} />
             <div className="min-w-0">
               <h1 className="text-lg font-semibold tracking-tight m-0">
                 Lexel Browser Bridge &amp; Local Controls

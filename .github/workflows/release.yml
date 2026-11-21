@@ -60,7 +60,7 @@ jobs:
           )
           (
             cd packages/lexel-vscode
-            zip -qr "${GITHUB_WORKSPACE}/release-artifacts/lexel-vscode.zip" package.json dist
+            zip -qr "${GITHUB_WORKSPACE}/release-artifacts/lexel-vscode.zip" package.json icon.png dist
           )
           ls -lh release-artifacts
 

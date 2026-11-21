@@ -4,6 +4,7 @@ export * from './components/EditableSurfaceCard';
 export * from './components/GuardAlerts';
 export * from './components/HunkDiffView';
 export * from './components/Icons';
+export * from './components/LexelLogo';
 export * from './components/PrivacyProofBadge';
 export * from './components/RewriteDiffCard';
 export * from './components/SlopMeter';

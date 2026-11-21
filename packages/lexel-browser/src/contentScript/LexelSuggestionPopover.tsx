@@ -1,7 +1,8 @@
 import { SuggestionKind } from 'harper.js';
-import { CheckIcon, CloseIcon, NibIcon, SlidersIcon } from 'lexel-ui';
+import { CheckIcon, CloseIcon, LexelLogo, SlidersIcon } from 'lexel-ui';
 import type { IgnorableLintBox, UnpackedSuggestion } from 'lint-framework';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { LEXEL_LOGO_SRC } from '../shared/brand';
 import type { ActiveLintPopup } from './LexelLintController';
 
 export interface SafeMessageSegment {
@@ -281,7 +282,7 @@ export function LexelSuggestionPopover({
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
-          <NibIcon className="w-3.5 h-3.5 shrink-0" />
+          <LexelLogo className="h-4 w-auto shrink-0" src={LEXEL_LOGO_SRC} />
           <span
             className="inline-flex items-center rounded-[4px] border px-1.5 py-0.5 text-[11px] font-semibold lexel-mono shrink-0"
             style={{

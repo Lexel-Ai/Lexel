@@ -5,6 +5,7 @@
   "version": "0.1.0",
   "publisher": "lexel-ai",
   "license": "Apache-2.0",
+  "icon": "icon.png",
   "private": true,
   "engines": {
     "vscode": "^1.90.0"

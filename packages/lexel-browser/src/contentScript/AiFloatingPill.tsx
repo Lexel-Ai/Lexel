@@ -3,7 +3,7 @@ import {
   DEFAULT_TONE_PILLS,
   type GuardAlertItem,
   GuardAlerts,
-  NibIcon,
+  LexelLogo,
   PanelIcon,
   PrivacyProofBadge,
   type RewriteApplyMeta,
@@ -19,6 +19,7 @@ import {
   UndoToast,
 } from 'lexel-ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LEXEL_LOGO_SRC } from '../shared/brand';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { getSurfaceProfile } from '../shared/surfaceDetector';
 import { analyzeFullTier0 } from '../shared/tier0Engine';
@@ -519,7 +520,7 @@ export function AiFloatingPill({
                 fontWeight: 500,
               }}
             >
-              <NibIcon className="w-3.5 h-3.5" />
+              <LexelLogo className="h-4 w-auto" src={LEXEL_LOGO_SRC} />
               <span>Lexel</span>
               <span
                 className="lexel-mono"
@@ -581,7 +582,7 @@ export function AiFloatingPill({
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-                  <NibIcon className="w-4 h-4 shrink-0" />
+                  <LexelLogo className="h-5 w-auto shrink-0" src={LEXEL_LOGO_SRC} />
                   <SurfaceBadge
                     label={context.label}
                     subcontext={context.subcontext}

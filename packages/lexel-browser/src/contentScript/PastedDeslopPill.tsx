@@ -1,5 +1,6 @@
-import { CloseIcon, NibIcon } from 'lexel-ui';
+import { CloseIcon, LexelLogo } from 'lexel-ui';
 import { useEffect, useState } from 'react';
+import { LEXEL_LOGO_SRC } from '../shared/brand';
 import type { PastedAiCheck } from '../shared/types';
 import type { ActiveFieldHandle } from './AiFloatingPill';
 
@@ -92,7 +93,7 @@ export function PastedDeslopPill({
         maxWidth: 'calc(100vw - 24px)',
       }}
     >
-      <NibIcon className="w-3.5 h-3.5 shrink-0" />
+      <LexelLogo className="h-4 w-auto shrink-0" src={LEXEL_LOGO_SRC} />
       <span
         className="lexel-mono lx-tab-nums text-[11px]"
         style={{ color: 'var(--lx-warn)' }}

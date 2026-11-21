@@ -55,7 +55,7 @@ mv "${ROOT_DIR}/packages/lexel-browser/lexel-firefox.zip" "${OUT_DIR}/lexel-fire
 )
 (
   cd "${ROOT_DIR}/packages/lexel-vscode"
-  zip -qr "${OUT_DIR}/lexel-vscode.zip" package.json dist
+  zip -qr "${OUT_DIR}/lexel-vscode.zip" package.json icon.png dist
 )
 
 if [[ "${WITH_DESKTOP}" -eq 1 ]]; then

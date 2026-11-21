@@ -5,7 +5,7 @@ import {
   type GuardAlertItem,
   GuardAlerts,
   getSurfaceGradeTarget,
-  NibIcon,
+  LexelLogo,
   PrivacyProofBadge,
   type RewriteApplyMeta,
   RewriteDiffCard,
@@ -22,6 +22,7 @@ import {
 } from 'lexel-ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ProtocolClient from '../contentScript/ProtocolClient';
+import { LEXEL_LOGO_SRC } from '../shared/brand';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { getSurfaceProfile, listSurfaceProfiles } from '../shared/surfaceDetector';
 import { scopeThreadContextLocally } from '../shared/threadContext';
@@ -472,7 +473,7 @@ export function SidePanelApp() {
         style={{ borderColor: 'var(--lx-border)' }}
       >
         <div className="flex items-center gap-2">
-          <NibIcon className="w-5 h-5" />
+          <LexelLogo className="h-6 w-auto" src={LEXEL_LOGO_SRC} />
           <h1 className="text-[14px] font-semibold tracking-tight m-0">Lexel Workbench</h1>
         </div>
         <div className="flex items-center gap-1.5">

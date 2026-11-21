@@ -92,6 +92,7 @@ export default defineManifest({
     {
       matches: ['<all_urls>'],
       resources: [
+        'lexel-logo.svg',
         'wasm/harper_wasm_bg.wasm',
         'wasm/lexel_wasm_bg.wasm',
         'google-docs-bridge.js',

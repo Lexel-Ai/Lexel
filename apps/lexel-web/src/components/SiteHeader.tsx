@@ -1,6 +1,6 @@
 'use client';
 
-import { MoonIcon, NibIcon, SunIcon } from 'lexel-ui';
+import { LexelLogo, MoonIcon, SunIcon } from 'lexel-ui';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
@@ -113,16 +113,7 @@ export function SiteHeader() {
           style={{ color: 'var(--lx-fg)' }}
           aria-current={pathname === '/' ? 'page' : undefined}
         >
-          <span
-            className="inline-flex h-8 w-8 items-center justify-center rounded-[6px] border"
-            style={{
-              backgroundColor: 'var(--lx-surface)',
-              borderColor: 'var(--lx-border)',
-              color: 'var(--lx-fg)',
-            }}
-          >
-            <NibIcon className="h-4 w-4" />
-          </span>
+          <LexelLogo className="h-8 w-auto" />
           <span>Lexel</span>
         </Link>
 

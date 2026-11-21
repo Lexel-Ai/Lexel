@@ -1,7 +1,7 @@
 import type { Dialect } from 'harper.js';
 import {
   type AiHealthState,
-  NibIcon,
+  LexelLogo,
   PanelIcon,
   PrivacyProofBadge,
   RefreshIcon,
@@ -12,6 +12,7 @@ import {
   ThemeToggle,
 } from 'lexel-ui';
 import { useCallback, useEffect, useState } from 'react';
+import { LEXEL_LOGO_SRC } from '../shared/brand';
 import type { LocalAiHealth } from '../shared/localAiClient';
 import { detectSurfaceFromLocation } from '../shared/surfaceDetector';
 import type {
@@ -220,7 +221,7 @@ export function PopupApp() {
         style={{ borderColor: 'var(--lx-border)' }}
       >
         <div className="flex items-center gap-2">
-          <NibIcon className="w-5 h-5" />
+          <LexelLogo className="h-6 w-auto" src={LEXEL_LOGO_SRC} />
           <h1 className="text-[15px] font-semibold tracking-tight m-0">Lexel</h1>
         </div>
         <div className="flex items-center gap-1.5">

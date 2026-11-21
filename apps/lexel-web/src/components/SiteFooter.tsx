@@ -1,6 +1,6 @@
 'use client';
 
-import { NibIcon } from 'lexel-ui';
+import { LexelLogo } from 'lexel-ui';
 import Link from 'next/link';
 import { LICENSE_URL, RELEASES_URL, REPO_URL, SECURITY_URL } from '@/lib/siteData';
 
@@ -19,7 +19,7 @@ export function SiteFooter() {
             className="flex items-center gap-2 text-sm font-semibold"
             style={{ color: 'var(--lx-fg)' }}
           >
-            <NibIcon className="h-4 w-4" />
+            <LexelLogo className="h-6 w-auto" />
             <span>Lexel</span>
           </div>
           <p className="text-sm" style={{ color: 'var(--lx-fg-muted)' }}>
